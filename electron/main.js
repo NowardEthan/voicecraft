@@ -1,0 +1,609 @@
+const { app, BrowserWindow, ipcMain, desktopCapturer, Tray, Menu, nativeImage, shell, session } = require('electron')
+const path = require('path')
+const os = require('os')
+const fs = require('fs')
+const http = require('http')
+const { pathToFileURL } = require('url')
+
+let mainWindow
+let tray = null
+let audioServiceProc = null
+
+const isDev = !app.isPackaged
+
+// Dev and the installed app must not share Cache/GPUCache — a leftover
+// tray instance + `npm run dev` both lock AppData\Roaming\voicecraft and
+// Chromium then prints "Unable to move the cache: Acesso negado (0x5)"
+// and "Gpu Cache Creation failed: -2".
+if (isDev) {
+  app.setPath('userData', path.join(app.getPath('appData'), 'voicecraft-dev'))
+}
+
+function ensureCacheDirs() {
+  const root = app.getPath('userData')
+  const cacheDir = path.join(root, 'Cache')
+  try { fs.mkdirSync(cacheDir, { recursive: true }) } catch {}
+  try { app.setPath('cache', cacheDir) } catch {}
+  app.commandLine.appendSwitch('disk-cache-dir', cacheDir)
+  // Shader disk cache is what throws gpu_disk_cache.cc — GPU still works,
+  // it just compiles in memory instead of fighting a locked GPUCache folder.
+  app.commandLine.appendSwitch('disable-gpu-shader-disk-cache')
+}
+ensureCacheDirs()
+
+if (app.isPackaged) {
+  const gotLock = app.requestSingleInstanceLock()
+  if (!gotLock) {
+    app.quit()
+    process.exit(0)
+  }
+  app.on('second-instance', () => {
+    if (!mainWindow) return
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+  })
+}
+
+// Resolve the path to the audio-service binary. Tries a few common build
+// outputs (Release/Debug, app.asar sibling) so we don't hard-code one.
+function resolveAudioServiceBinary() {
+  const candidates = []
+  const roots = [
+    path.join(__dirname, '..', 'audio-service', 'build'),
+    path.join(__dirname, '..', '..', 'audio-service', 'build'),
+    path.join(app.getAppPath(), 'audio-service', 'build'),
+  ]
+  for (const root of roots) {
+    candidates.push(path.join(root, 'Release', process.platform === 'win32' ? 'voicecraft-audio.exe' : 'voicecraft-audio'))
+    candidates.push(path.join(root, 'Debug', process.platform === 'win32' ? 'voicecraft-audio.exe' : 'voicecraft-audio'))
+    candidates.push(path.join(root, process.platform === 'win32' ? 'voicecraft-audio.exe' : 'voicecraft-audio'))
+  }
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p
+  }
+  return null
+}
+
+// ---------- Settings persistence ----------
+// Plain JSON in userData — synchronous reads/writes are fine for tiny files
+// like this, and avoids an async dance with the renderer on every change.
+const settingsPath = path.join(app.getPath('userData'), 'settings.json')
+const DEFAULT_SETTINGS = {
+  // Input devices (resolved to deviceId via enumerateDevices)
+  microphoneId: null,
+  // DSP
+  dspLevel: 'off',
+  // Screen share — 720p/30 is enough for voice rooms and much cheaper
+  screenQuality: '720p',
+  screenFramerate: 30,
+  screenWithAudio: false,
+  // GPU acceleration (must be applied BEFORE app.whenReady — see below)
+  gpuAcceleration: true,
+  // UI
+  startMinimized: false,
+}
+
+// Read settings synchronously at module load so we can apply switches
+// (like disableHardwareAcceleration) BEFORE app.whenReady.
+const earlySettings = (() => {
+  try {
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(fs.readFileSync(settingsPath, 'utf8')) }
+  } catch {
+    return { ...DEFAULT_SETTINGS }
+  }
+})()
+
+// GPU: if user disabled, switch Chromium off. Otherwise append extra
+// switches that tune Chromium's GPU pipeline for desktop apps.
+// MUST be called before app.whenReady() — that's why this runs at module load.
+if (!earlySettings.gpuAcceleration) {
+  app.disableHardwareAcceleration()
+  console.log('[app] hardware acceleration disabled by user setting')
+}
+// GPU rasterization helps the room UI. Do NOT uncap the compositor
+// (disable-frame-rate-limit / disable-gpu-vsync): the UI then paints
+// at hundreds of FPS, fights screen-capture for the GPU, and the app
+// stutters. Capture FPS is set by getUserMedia constraints, not vsync.
+app.commandLine.appendSwitch('enable-gpu-rasterization')
+// Avoid enable-zero-copy by default — it can raise GPU/RAM pressure on weak PCs.
+
+function loadSettings() {
+  try {
+    const raw = fs.readFileSync(settingsPath, 'utf8')
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) }
+  } catch {
+    return { ...DEFAULT_SETTINGS }
+  }
+}
+
+function saveSettings(next) {
+  try {
+    const merged = { ...loadSettings(), ...next }
+    fs.writeFileSync(settingsPath, JSON.stringify(merged, null, 2))
+    return merged
+  } catch (err) {
+    console.error('[settings] save failed:', err)
+    return null
+  }
+}
+
+// ---------- File logging ----------
+// Writes to both the DevTools console and a rolling file in userData.
+// Useful for debugging audio issues after the fact.
+const logPath = path.join(app.getPath('userData'), 'voicecraft.log')
+function log(level, msg) {
+  const line = `[${new Date().toISOString()}] [${level}] ${msg}\n`
+  try { fs.appendFileSync(logPath, line) } catch {}
+  if (level === 'error') console.error(msg)
+  else console.log(msg)
+}
+
+// Expose for the renderer so it can request a flush before crash reports.
+ipcMain.handle('app:log', (_e, level, msg) => log(level, msg))
+
+ipcMain.handle('settings:get', () => loadSettings())
+ipcMain.handle('settings:set', (_e, patch) => saveSettings(patch || {}))
+
+// ---------- System info IPC ----------
+ipcMain.handle('get-local-ip', () => {
+  const interfaces = os.networkInterfaces()
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address
+      }
+    }
+  }
+  return '127.0.0.1'
+})
+
+ipcMain.handle('get-hostname', () => os.hostname())
+
+ipcMain.handle('app:get-paths', () => ({
+  userData: app.getPath('userData'),
+  log: logPath,
+}))
+
+// ---------- Audio service (C++ child process) ----------
+// Spawns the C++ audio service, pipes float32 PCM frames from stdout to the
+// renderer via IPC, and listens for commands/status on stdin/stderr.
+function startAudioService() {
+  if (audioServiceProc) return { ok: true, alreadyRunning: true }
+  const bin = resolveAudioServiceBinary()
+  if (!bin) return { ok: false, error: 'binário não encontrado — compile audio-service primeiro (ver audio-service/README.md)' }
+
+  try {
+    audioServiceProc = require('child_process').spawn(bin, [], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    })
+  } catch (err) {
+    audioServiceProc = null
+    return { ok: false, error: String(err?.message || err) }
+  }
+
+  // Stop the service if the renderer's webContents is gone or being torn down,
+  // so we don't accumulate frames in a queue that will be flushed to a
+  // disposed frame (which is what triggers "Render frame was disposed").
+  const wc = mainWindow && mainWindow.webContents
+  if (!wc || wc.isDestroyed()) {
+    stopAudioService()
+    return { ok: false, error: 'webContents indisponível ou destruído' }
+  }
+  wc.once('destroyed', () => {
+    log('info', '[audio] renderer destroyed, stopping service')
+    stopAudioService()
+  })
+
+  let leftover = Buffer.alloc(0)
+
+  audioServiceProc.stdout.on('data', (chunk) => {
+    leftover = Buffer.concat([leftover, chunk])
+    // Frames: [uint32 LE size_in_samples][size * float32 samples]
+    while (leftover.length >= 4) {
+      const frames = leftover.readUInt32LE(0)
+      const bytes = frames * 4
+      if (leftover.length < 4 + bytes) break
+      const payload = leftover.subarray(4, 4 + bytes)
+      leftover = leftover.subarray(4 + bytes)
+      // Render frames can be disposed mid-reload — guard the IPC send so
+      // the main process doesn't spam the console with "Render frame was
+      // disposed" errors during HMR.
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        const wc = mainWindow.webContents
+        if (wc && !wc.isDestroyed()) {
+          try {
+            wc.send('audio:frame', payload)
+          } catch (err) {
+            // Swallow — renderer just disposed, nothing to do.
+          }
+        }
+      }
+    }
+  })
+
+  audioServiceProc.stderr.on('data', (data) => {
+    for (const line of data.toString().split(/\r?\n/)) {
+      if (!line.trim()) continue
+      try {
+        const msg = JSON.parse(line)
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          const wc = mainWindow.webContents
+          if (wc && !wc.isDestroyed()) {
+            try { wc.send('audio:status', msg) } catch {}
+          }
+        }
+      } catch {
+        // Ignore non-JSON lines
+      }
+    }
+  })
+
+  audioServiceProc.on('exit', (code, signal) => {
+    audioServiceProc = null
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      const wc = mainWindow.webContents
+      if (wc && !wc.isDestroyed()) {
+        try { wc.send('audio:status', { type: 'exited', code, signal }) } catch {}
+      }
+    }
+  })
+
+  // Initial command: list devices (renderer will react and start capture).
+  sendAudioCommand({ type: 'list-devices' })
+
+  return { ok: true }
+}
+
+function stopAudioService() {
+  if (!audioServiceProc) return
+  try { sendAudioCommand({ type: 'shutdown' }) } catch {}
+  try { audioServiceProc.kill() } catch {}
+  audioServiceProc = null
+}
+
+function sendAudioCommand(obj) {
+  if (!audioServiceProc || !audioServiceProc.stdin || audioServiceProc.stdin.writable === false) return
+  try {
+    audioServiceProc.stdin.write(JSON.stringify(obj) + '\n')
+  } catch (err) {
+    console.error('[audio] sendCommand failed:', err)
+  }
+}
+
+ipcMain.handle('audio-service:start', () => startAudioService())
+ipcMain.handle('audio-service:stop', () => { stopAudioService(); return { ok: true } })
+ipcMain.handle('audio-service:available', () => ({ available: !!resolveAudioServiceBinary() }))
+ipcMain.handle('audio-service:send', (_e, obj) => { sendAudioCommand(obj); return { ok: true } })
+
+app.on('before-quit', () => stopAudioService())
+
+// ---------- Google OAuth via the system browser ----------
+const OAUTH_MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.json': 'application/json',
+  '.woff2': 'font/woff2',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+}
+
+let oauthServer = null
+
+function oauthSend(res, status, body, headers = {}) {
+  res.writeHead(status, {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    ...headers,
+  })
+  res.end(body)
+}
+
+function oauthReadJson(req) {
+  return new Promise((resolve, reject) => {
+    let raw = ''
+    req.on('data', (chunk) => {
+      raw += chunk
+      if (raw.length > 32_000) {
+        reject(new Error('payload too large'))
+        req.destroy()
+      }
+    })
+    req.on('end', () => {
+      try { resolve(raw ? JSON.parse(raw) : {}) }
+      catch (err) { reject(err) }
+    })
+    req.on('error', reject)
+  })
+}
+
+function oauthServeDist(req, res, distDir) {
+  const url = new URL(req.url, 'http://localhost')
+  let rel = decodeURIComponent(url.pathname)
+  if (rel === '/' || rel === '') rel = '/index.html'
+  const file = path.normalize(path.join(distDir, rel))
+  if (!file.startsWith(path.normalize(distDir))) {
+    oauthSend(res, 403, 'forbidden')
+    return
+  }
+  fs.readFile(file, (err, data) => {
+    if (err) {
+      fs.readFile(path.join(distDir, 'index.html'), (fallbackErr, html) => {
+        if (fallbackErr) oauthSend(res, 404, 'not found')
+        else oauthSend(res, 200, html, { 'Content-Type': 'text/html; charset=utf-8' })
+      })
+      return
+    }
+    oauthSend(res, 200, data, { 'Content-Type': OAUTH_MIME[path.extname(file)] || 'application/octet-stream' })
+  })
+}
+
+function ensureOAuthServer({ onResult, distDir }) {
+  if (oauthServer) return Promise.resolve(oauthServer.address().port)
+  return new Promise((resolve, reject) => {
+    const next = http.createServer(async (req, res) => {
+      const url = new URL(req.url, 'http://localhost')
+      if (req.method === 'OPTIONS') {
+        oauthSend(res, 204, '')
+        return
+      }
+      if (url.pathname === '/oauth/done') {
+        try {
+          const payload = req.method === 'POST'
+            ? await oauthReadJson(req)
+            : {
+                idToken: url.searchParams.get('idToken'),
+                error: url.searchParams.get('error'),
+                code: url.searchParams.get('code'),
+              }
+          onResult(payload)
+          if (req.method === 'GET') {
+            oauthSend(res, 200, '<!doctype html><meta charset="utf-8"><title>VoiceCraft</title><body style="margin:0;background:#07080c;color:#f6f7f9;font-family:Inter,system-ui,sans-serif;display:grid;place-items:center;height:100vh"><p>Pode voltar ao VoiceCraft.</p></body>', { 'Content-Type': 'text/html; charset=utf-8' })
+          } else {
+            oauthSend(res, 200, JSON.stringify({ ok: true }), { 'Content-Type': 'application/json' })
+          }
+        } catch {
+          oauthSend(res, 400, JSON.stringify({ ok: false }), { 'Content-Type': 'application/json' })
+        }
+        return
+      }
+      if (distDir) oauthServeDist(req, res, distDir)
+      else oauthSend(res, 404, 'not found')
+    })
+    next.once('error', reject)
+    next.listen(0, '127.0.0.1', () => {
+      oauthServer = next
+      resolve(next.address().port)
+    })
+  })
+}
+
+function stopOAuthServer() {
+  if (!oauthServer) return
+  try { oauthServer.close() } catch { /* already closed */ }
+  oauthServer = null
+}
+
+async function startGoogleAuth({ onResult, devServerUrl, distDir }) {
+  const port = await ensureOAuthServer({ onResult, distDir: devServerUrl ? null : distDir })
+  const callback = `http://127.0.0.1:${port}/oauth/done`
+  const origin = (devServerUrl || `http://127.0.0.1:${port}`).replace(/\/$/, '')
+  const url = `${origin}/?vcAuth=google&cb=${encodeURIComponent(callback)}`
+  await shell.openExternal(url)
+  return { ok: true, port }
+}
+
+function notifyGoogleAuth(payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+    const wc = mainWindow.webContents
+    if (wc && !wc.isDestroyed()) {
+      try { wc.send('auth:google-result', payload) } catch {}
+    }
+  }
+}
+
+ipcMain.handle('auth:google-start', async () => {
+  return startGoogleAuth({
+    onResult: notifyGoogleAuth,
+    devServerUrl: process.env.VITE_DEV_SERVER_URL || null,
+    distDir: path.join(app.getAppPath(), 'dist'),
+  })
+})
+
+ipcMain.handle('auth:google-cancel', () => {
+  stopOAuthServer()
+  return { ok: true }
+})
+
+ipcMain.handle('desktop-capturer:get-sources', async (_event, opts) => {
+  const sources = await desktopCapturer.getSources({
+    types: opts?.types || ['screen', 'window'],
+    thumbnailSize: opts?.thumbnailSize || { width: 160, height: 90 },
+    fetchWindowIcons: false,
+  })
+  return sources.map(s => ({
+    id: s.id,
+    name: s.name,
+    isScreen: s.id.startsWith('screen:'),
+    thumbnail: s.thumbnail?.toDataURL?.() || null,
+  }))
+})
+
+// ---------- Signaling server (in-process dynamic import) ----------
+async function startSignalingServer() {
+  try {
+    const serverPath = path.join(__dirname, '..', 'server', 'signaling-server.mjs')
+    const serverUrl = pathToFileURL(serverPath).href
+    log('info', '[signaling] importing ' + serverUrl)
+    await import(serverUrl)
+    log('info', '[signaling] started')
+  } catch (err) {
+    log('error', '[signaling] failed: ' + (err?.message || err))
+  }
+}
+
+// ---------- Window ----------
+function createWindow() {
+  const settings = loadSettings()
+  // In `npm run dev`, always show the window. startMinimized + detached
+  // DevTools looks like "only DevTools opened" because the app stays hidden.
+  const startHidden = !isDev && !!settings.startMinimized
+  mainWindow = new BrowserWindow({
+    width: 900,
+    height: 700,
+    minWidth: 600,
+    minHeight: 500,
+    backgroundColor: '#1E1F22',
+    show: !startHidden,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+    frame: true,
+    titleBarStyle: 'default',
+  })
+
+  mainWindow.once('ready-to-show', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    if (isDev || !settings.startMinimized) {
+      mainWindow.show()
+      mainWindow.focus()
+    }
+  })
+
+  if (process.env.VITE_DEV_SERVER_URL) {
+    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)
+    // Open after load so DevTools doesn't race the protocol (Autofill.enable
+    // / setAddresses -32601 is Chromium noise, not our code).
+    mainWindow.webContents.once('did-finish-load', () => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.show()
+        mainWindow.focus()
+        if (!mainWindow.webContents.isDevToolsOpened()) {
+          mainWindow.webContents.openDevTools({ mode: 'detach' })
+        }
+      }
+    })
+  } else {
+    mainWindow.loadFile(path.join(app.getAppPath(), 'dist', 'index.html'))
+  }
+
+  // Never navigate the app window to an image/file URL (e.g. a broken
+  // <a download> on Firebase). Keep the SPA alive and open externals outside.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const allowed =
+      (process.env.VITE_DEV_SERVER_URL && url.startsWith(process.env.VITE_DEV_SERVER_URL)) ||
+      url.startsWith('file://')
+    if (!allowed) {
+      event.preventDefault()
+      shell.openExternal(url).catch(() => {})
+    }
+  })
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url).catch(() => {})
+    return { action: 'deny' }
+  })
+
+  // Packaged: hide to tray. Dev: actually quit so the next `npm run` is
+  // not blocked by a zombie process holding Cache/GPUCache.
+  mainWindow.on('close', (e) => {
+    if (isDev) {
+      app.isQuiting = true
+      return
+    }
+    if (!app.isQuiting) {
+      e.preventDefault()
+      mainWindow.hide()
+    }
+  })
+}
+
+// ---------- System tray ----------
+function buildTrayIcon() {
+  // A 16x16 transparent PNG with a colored square drawn via nativeImage
+  // would be ideal, but to avoid bundling a binary we just draw something
+  // simple via base64.
+  const png = nativeImage.createFromBuffer(Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAOUlEQVR42mNk+M9QzwAEjDAGABCRAv8HfwdQYg4GjcUB0QYGBiDRA0mDiIMYBoDkH8X/BxAaaAaj+gIAAEUYBXsfvRdGAAAAAElFTkSuQmCC',
+    'base64'))
+  return png.isEmpty() ? nativeImage.createEmpty() : png
+}
+
+function createTray() {
+  if (tray) return
+  tray = new Tray(buildTrayIcon())
+  tray.setToolTip('VoiceCraft')
+  rebuildTrayMenu()
+  tray.on('click', () => {
+    if (!mainWindow) return
+    if (mainWindow.isVisible()) mainWindow.hide()
+    else { mainWindow.show(); mainWindow.focus() }
+  })
+}
+
+function rebuildTrayMenu() {
+  if (!tray) return
+  const menu = Menu.buildFromTemplate([
+    { label: mainWindow?.isVisible() ? 'Ocultar' : 'Mostrar', click: () => {
+      if (!mainWindow) return
+      if (mainWindow.isVisible()) mainWindow.hide()
+      else mainWindow.show()
+    }},
+    { type: 'separator' },
+    { label: 'Sair do VoiceCraft', click: () => {
+      app.isQuiting = true
+      app.quit()
+    }},
+  ])
+  tray.setContextMenu(menu)
+}
+
+app.whenReady().then(() => {
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(permission === 'media' || permission === 'display-capture' || permission === 'fullscreen')
+  })
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) => {
+    return permission === 'media' || permission === 'display-capture' || permission === 'fullscreen'
+  })
+
+  // Realtime now lives on Firebase. The old WS signaling server is leftover
+  // and must not bind :5185 here — a second instance would crash the app
+  // with EADDRINUSE.
+  createWindow()
+  createTray()
+
+  // Re-build the tray menu whenever the window visibility flips.
+  if (mainWindow) {
+    mainWindow.on('show', rebuildTrayMenu)
+    mainWindow.on('hide', rebuildTrayMenu)
+  }
+})
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    app.quit()
+  }
+})
+
+app.on('activate', () => {
+  if (BrowserWindow.getAllWindows().length === 0) {
+    createWindow()
+  }
+})
+
+// On quit, drop the tray icon so it doesn't linger in the system tray.
+app.on('before-quit', () => {
+  app.isQuiting = true
+  stopOAuthServer()
+  if (tray) { tray.destroy(); tray = null }
+})
+
+log('info', `[app] VoiceCraft started (userData=${app.getPath('userData')})`)

@@ -1,0 +1,12 @@
+node_modules/
+dist/
+dist-electron/
+release/
+data/
+keys/
+.env
+.env.local
+*.log
+.DS_Store
+.claude/
+audio-service/build/

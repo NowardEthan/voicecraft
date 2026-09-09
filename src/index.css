@@ -1,0 +1,1362 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* === Design System tokens (DESIGN_SYSTEM.md §9.1) ==================== */
+/* Single source of truth for surfaces, borders, text and the Space's
+   accent. All UI code should read these via var(--…) — never hex.       */
+:root {
+  --vc-bg-canvas:  #0d0f14;
+  --vc-bg-rail:    #111318;
+  --vc-bg-panel:   #15171d;
+  --vc-surface-1:  #191c23;
+  --vc-surface-2:  #20242d;
+  --vc-border:     #2a303a;
+  --vc-text-strong:#f6f7f9;
+  --vc-text:       #d9dce3;
+  --vc-text-muted: #8d95a3;
+  --vc-positive:   #32c48d;
+  --vc-warning:    #f5b942;
+  --vc-danger:     #f0445e;
+
+  /* --space-accent is overridden inline per-Space by spaceTokens.js.
+     Default = #ff3f6c (DESIGN_SYSTEM §2.1).                            */
+  --space-accent:      #ff3f6c;
+  --space-on-accent:   #ffffff;
+  --space-accent-soft: rgba(255, 63, 108, 0.14);
+  /* Glow ceiling for "speaking" state — max 24% (DESIGN_SYSTEM §5.2). */
+  --space-accent-glow-24: rgba(255, 63, 108, 0.24);
+
+  --radius-input: 12px;
+  --radius-card:  16px;
+  --radius-modal: 20px;
+
+  /* Focus ring (DESIGN_SYSTEM §8.1 + §9.1) — 2px outline + 2px offset. */
+  --focus-ring: 0 0 0 2px var(--vc-bg-canvas), 0 0 0 4px var(--space-accent);
+
+  /* Legacy alias — kept briefly so the SettingsModal / SourcePicker
+     can still read --accent without a full refactor. Safe to drop later. */
+  --accent: var(--space-accent);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  height: 100dvh;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--vc-bg-canvas);
+  color: var(--vc-text);
+  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color-scheme: dark;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  letter-spacing: -0.011em;
+}
+
+/* === Focus rings (DESIGN_SYSTEM §8.1) ====================================
+   Visible 2 px outline + 2 px offset on every interactive element that
+   receives keyboard focus. Uses --space-accent so it follows the active
+   Space's identity (the SpaceContextPanel inline-style overrides the var
+   on the panel itself; everything else picks up the default token).       */
+*:focus {
+  outline: none;
+}
+*:focus-visible {
+  outline: 2px solid var(--space-accent, var(--vc-positive));
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+/* Inputs and textareas keep their own borders; the outline still shows.    */
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--space-accent, var(--vc-positive));
+  outline-offset: 1px;
+  border-radius: 8px;
+}
+/* Screen-reader-only helper for the aria-live announcer (VoiceRoom / room). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* === Scrollbar minimalista === */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 100px;
+  transition: background 200ms ease-out;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* legacy --accent-hover / --accent-pressed removido; use --space-accent */
+
+/* === Reduced motion (DESIGN_SYSTEM §8.2) =============================
+   When the OS asks us to calm down, kill pulse animations and large
+   transitions. Instant state changes stay instant.                    */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* === Speaking pulse (DESIGN_SYSTEM §5.2) ============================
+   2px outer ring with --space-accent + 24% glow. Used by VoiceRoom
+   participant cards to mark who is talking right now.                 */
+@keyframes vc-speaking-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 2px var(--space-accent),
+                0 0 16px var(--space-accent-glow-24);
+  }
+  50% {
+    box-shadow: 0 0 0 2px var(--space-accent),
+                0 0 28px var(--space-accent-glow-24);
+  }
+}
+.vc-speaking-pulse { animation: vc-speaking-pulse 0.8s ease-in-out infinite; }
+
+/* === Waveform bars for VoiceRoom "speaking" indicator (DESIGN_SYSTEM §5.2) === */
+@keyframes vc-wave-bar {
+  0%, 100% { transform: scaleY(0.25); }
+  50%      { transform: scaleY(1); }
+}
+.vc-wave-bar {
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--space-accent);
+  transform-origin: center;
+  animation: vc-wave-bar 0.9s ease-in-out infinite;
+}
+.vc-wave-bar:nth-child(1) { animation-delay: 0s; }
+.vc-wave-bar:nth-child(2) { animation-delay: 0.1s; }
+.vc-wave-bar:nth-child(3) { animation-delay: 0.2s; }
+.vc-wave-bar:nth-child(4) { animation-delay: 0.3s; }
+.vc-wave-bar:nth-child(5) { animation-delay: 0.4s; }
+
+/* === Glass morphism === */
+.glass {
+  background: rgba(28, 28, 30, 0.72);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.glass-strong {
+  background: rgba(22, 22, 23, 0.88);
+  backdrop-filter: saturate(180%) blur(40px);
+  -webkit-backdrop-filter: saturate(180%) blur(40px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* === Botões Apple === */
+.btn-apple {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 22px;
+  border-radius: 980px;
+  background: var(--accent);
+  color: white;
+  font-weight: 500;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  border: none;
+  cursor: pointer;
+  transition: all 200ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-apple::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(255,255,255,0.15) 0%, transparent 50%);
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+.btn-apple:hover::before {
+  opacity: 1;
+}
+
+.btn-apple:hover {
+  background: var(--space-accent);
+  opacity: 0.85;
+  transform: scale(1.02);
+}
+
+.btn-apple:active {
+  background: var(--space-accent);
+  opacity: 0.7;
+  transform: scale(0.98);
+}
+
+.btn-apple:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.btn-apple:disabled::before {
+  display: none;
+}
+
+.btn-apple-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 22px;
+  border-radius: 980px;
+  background: rgba(255, 255, 255, 0.08);
+  color: white;
+  font-weight: 500;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+  transition: all 200ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.btn-apple-secondary:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.btn-apple-secondary:active {
+  background: rgba(255, 255, 255, 0.06);
+  transform: scale(0.98);
+}
+
+/* === Input Apple === */
+.input-apple {
+  width: 100%;
+  padding: 14px 18px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  color: white;
+  font-size: 17px;
+  letter-spacing: 0.4em;
+  text-align: center;
+  font-family: 'SF Mono', 'JetBrains Mono', 'Menlo', monospace;
+  outline: none;
+  transition: all 200ms ease-out;
+}
+
+.input-apple::placeholder {
+  color: rgba(255, 255, 255, 0.3);
+  letter-spacing: normal;
+  font-family: 'Inter', sans-serif;
+}
+
+.input-apple:focus {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px rgba(10, 132, 255, 0.16);
+}
+
+/* === Cards Apple === */
+.card-apple {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 18px;
+  padding: 20px;
+  transition: all 200ms ease-out;
+}
+
+.card-apple:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* ============================================
+   MOTION SYSTEM - Premium Animations
+   ============================================ */
+
+/* === Base Transitions === */
+.transition-smooth {
+  transition: all 300ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.transition-bounce {
+  transition: all 400ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.transition-spring {
+  transition: all 500ms cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+/* === Fade Animations === */
+@keyframes fadein {
+  from { opacity: 0.3; }
+  to { opacity: 1; }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in-down {
+  from {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in-scale {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 400ms cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 500ms cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+.animate-fade-in-down {
+  animation: fade-in-down 400ms cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+.animate-fade-in-scale {
+  animation: fade-in-scale 400ms cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+/* Directional fade-in: used by App.jsx to animate the SpaceContextPanel
+   (left side) and PeoplePanel (right side) wrappers on mount. These were
+   previously handled by framer-motion's AnimatePresence, but the JS
+   machinery was triggering re-renders on every Space switch. CSS keyframes
+   are GPU-accelerated and zero-JS. */
+@keyframes fade-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes fade-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-fade-in-left {
+  animation: fade-in-left 360ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-fade-in-right {
+  animation: fade-in-right 360ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* === Slide Animations === */
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slide-down {
+  from {
+    opacity: 0;
+    transform: translateY(-24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slide-left {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slide-right {
+  from {
+    opacity: 0;
+    transform: translateX(-24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up 500ms cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+.animate-slide-down {
+  animation: slide-down 500ms cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+.animate-slide-left {
+  animation: slide-left 500ms cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+.animate-slide-right {
+  animation: slide-right 500ms cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+/* === Scale Animations === */
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes scale-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+
+@keyframes pop-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  70% {
+    transform: scale(1.05);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-scale-in {
+  animation: scale-in 400ms cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+.animate-modal-in {
+  animation: scale-in 300ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+.animate-scale-out {
+  animation: scale-out 300ms cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+.animate-pop-in {
+  animation: pop-in 500ms cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+/* === Pulse Animations === */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-ring {
+  0% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+
+.pulse-ring {
+  animation: pulse-ring 2s cubic-bezier(0.25, 0.46, 0.45, 0.94) infinite;
+}
+
+/* === Glow Animations === */
+@keyframes glow-pulse {
+  0%, 100% {
+    box-shadow: 0 0 20px rgba(10, 132, 255, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 40px rgba(10, 132, 255, 0.5);
+  }
+}
+
+.animate-glow-pulse {
+  animation: glow-pulse 2s ease-in-out infinite;
+}
+
+/* === Breathing / Ambient Animations === */
+@keyframes breathe {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.02);
+    opacity: 0.8;
+  }
+}
+
+.animate-breathe {
+  animation: breathe 4s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+/* === Sound Wave Animation (for call) === */
+@keyframes sound-wave {
+  0%, 100% {
+    height: 4px;
+  }
+  50% {
+    height: 16px;
+  }
+}
+
+.sound-wave-bar {
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  animation: sound-wave 0.8s ease-in-out infinite;
+}
+
+.sound-wave-bar:nth-child(1) { animation-delay: 0s; }
+.sound-wave-bar:nth-child(2) { animation-delay: 0.1s; }
+.sound-wave-bar:nth-child(3) { animation-delay: 0.2s; }
+.sound-wave-bar:nth-child(4) { animation-delay: 0.3s; }
+.sound-wave-bar:nth-child(5) { animation-delay: 0.4s; }
+
+/* === Ripple Effect === */
+@keyframes ripple {
+  0% {
+    transform: scale(0);
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(4);
+    opacity: 0;
+  }
+}
+
+.ripple {
+  position: relative;
+  overflow: hidden;
+}
+
+.ripple::after {
+  content: '';
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  top: 50%;
+  left: 50%;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  transform: translate(-50%, -50%) scale(0);
+  animation: ripple 600ms linear;
+  pointer-events: none;
+}
+
+/* === Shimmer Loading === */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 0%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.04) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+/* === Spin === */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin-slow {
+  animation: spin 3s linear infinite;
+}
+
+/* === Attention Pulse === */
+@keyframes attention {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(10, 132, 255, 0.4);
+  }
+  50% {
+    transform: scale(1.05);
+    box-shadow: 0 0 0 8px rgba(10, 132, 255, 0);
+  }
+}
+
+.animate-attention {
+  animation: attention 2s ease-out infinite;
+}
+
+@keyframes vc-jump-highlight {
+  0% {
+    background-color: color-mix(in srgb, var(--space-accent) 0%, transparent);
+    box-shadow: 0 0 0 0 transparent;
+    transform: scale(1);
+  }
+  14% {
+    background-color: color-mix(in srgb, var(--space-accent) 32%, transparent);
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--space-accent) 60%, transparent),
+      0 10px 32px -10px var(--space-accent-glow-40, rgba(255, 63, 108, 0.4));
+    transform: scale(1.012);
+  }
+  38% {
+    background-color: color-mix(in srgb, var(--space-accent) 18%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--space-accent) 28%, transparent);
+    transform: scale(1);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: none;
+    transform: scale(1);
+  }
+}
+
+.vc-msg-highlight {
+  animation: vc-jump-highlight 2.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes vc-react-pop {
+  0% {
+    transform: scale(0.55);
+    background-color: color-mix(in srgb, var(--space-accent) 42%, #1a1c22);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--space-accent) 55%, transparent);
+  }
+  45% {
+    transform: scale(1.22);
+    background-color: color-mix(in srgb, var(--space-accent) 28%, #1a1c22);
+    box-shadow:
+      0 0 0 6px color-mix(in srgb, var(--space-accent) 0%, transparent),
+      0 8px 22px -8px var(--space-accent-glow-40, rgba(255, 63, 108, 0.45));
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+@keyframes vc-react-emoji {
+  0% { transform: scale(0.4) rotate(-18deg); }
+  50% { transform: scale(1.35) rotate(8deg); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+
+@keyframes vc-react-burst {
+  0% {
+    opacity: 1;
+    transform: translate(-50%, -40%) scale(0.7);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -140%) scale(1.5);
+  }
+}
+
+.vc-react-pop {
+  animation: vc-react-pop 480ms cubic-bezier(0.22, 1.4, 0.36, 1) both;
+}
+
+.vc-react-pop .vc-react-face {
+  display: inline-block;
+  animation: vc-react-emoji 480ms cubic-bezier(0.22, 1.4, 0.36, 1) both;
+}
+
+.vc-react-burst {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  pointer-events: none;
+  font-size: 18px;
+  line-height: 1;
+  animation: vc-react-burst 620ms ease-out both;
+}
+
+/* === Stagger Animation Delays === */
+.stagger-1 { animation-delay: 50ms; }
+.stagger-2 { animation-delay: 100ms; }
+.stagger-3 { animation-delay: 150ms; }
+.stagger-4 { animation-delay: 200ms; }
+.stagger-5 { animation-delay: 250ms; }
+.stagger-6 { animation-delay: 300ms; }
+
+/* === Interactive Hover Effects === */
+.hover-lift {
+  transition: transform 200ms ease, box-shadow 200ms ease;
+}
+
+.hover-lift:hover {
+  transform: translateY(-2px);
+}
+
+.hover-scale {
+  transition: transform 200ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.hover-scale:hover {
+  transform: scale(1.02);
+}
+
+.hover-glow {
+  transition: box-shadow 300ms ease;
+}
+
+.hover-glow:hover {
+  box-shadow: 0 0 24px rgba(10, 132, 255, 0.25);
+}
+
+/* === Modal Overlay === */
+.modal-overlay {
+  animation: fade-in 200ms ease-out forwards;
+}
+
+.modal-content {
+  animation: scale-in 300ms cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+/* === Page Transition Container === */
+.page-enter {
+  animation: fade-in-up 400ms cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+
+.page-exit {
+  animation: fade-out 200ms ease-out forwards;
+}
+
+@keyframes fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+/* === Control Button Hover === */
+.control-btn {
+  transition: all 200ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.control-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  transform: scale(1.05);
+}
+
+.control-btn:active {
+  transform: scale(0.95);
+}
+
+/* === Sidebar Transition === */
+.sidebar-transition {
+  transition: width 350ms cubic-bezier(0.25, 0.46, 0.45, 0.94),
+              opacity 300ms ease;
+}
+
+/* === Video Container === */
+.video-container {
+  transition: all 400ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.video-container:hover .video-controls {
+  opacity: 1;
+}
+
+.video-controls {
+  opacity: 0;
+  transition: opacity 300ms ease;
+}
+
+/* === Connection Status Animation === */
+@keyframes connection-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(1.2);
+  }
+}
+
+.connection-indicator {
+  animation: connection-pulse 2s ease-in-out infinite;
+}
+
+/* === Orb Background Effect === */
+@keyframes orb-drift {
+  0%, 100% {
+    transform: translate(0, 0) scale(1);
+  }
+  33% {
+    transform: translate(30px, -30px) scale(1.1);
+  }
+  66% {
+    transform: translate(-20px, 20px) scale(0.9);
+  }
+}
+
+.orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.3;
+  animation: orb-drift 20s ease-in-out infinite;
+}
+
+/* === Profile card theme FX ============================================== */
+@keyframes vc-card-sheen {
+  0% { transform: translateX(-120%) skewX(-18deg); opacity: 0; }
+  20% { opacity: 0.55; }
+  45% { opacity: 0.15; }
+  100% { transform: translateX(220%) skewX(-18deg); opacity: 0; }
+}
+@keyframes vc-card-glow-breathe {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.9; }
+}
+@keyframes vc-card-avatar-glow {
+  0%, 100% { filter: none; opacity: 1; box-shadow: 0 0 0 4px #0e1016, 0 8px 22px var(--vc-avatar-glow, rgba(255,63,108,0.4)); }
+  50% { filter: none; opacity: 1; box-shadow: 0 0 0 4px #0e1016, 0 10px 32px var(--vc-avatar-glow, rgba(255,63,108,0.7)), 0 0 28px var(--vc-avatar-glow, rgba(255,63,108,0.35)); }
+}
+@keyframes vc-card-shell-glow {
+  0%, 100% { filter: drop-shadow(0 0 12px var(--vc-card-glow, rgba(255,63,108,0.25))); }
+  50% { filter: drop-shadow(0 0 22px var(--vc-card-glow, rgba(255,63,108,0.45))); }
+}
+@keyframes vc-card-star-twinkle {
+  0%, 100% { opacity: 0.15; transform: scale(0.7); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+@keyframes vc-card-spark-rise {
+  0% { transform: translateY(110%) scale(0.6); opacity: 0; }
+  15% { opacity: 1; }
+  100% { transform: translateY(-140%) scale(1); opacity: 0; }
+}
+@keyframes vc-card-petal-fall {
+  0% { transform: translateY(-20%) rotate(var(--petal-rot, -20deg)) translateX(0); opacity: 0; }
+  10% { opacity: 0.9; }
+  100% { transform: translateY(130%) rotate(calc(var(--petal-rot, -20deg) + 80deg)) translateX(18px); opacity: 0; }
+}
+@keyframes vc-card-dust-drift {
+  0%, 100% { transform: translate(0, 0); opacity: 0.2; }
+  50% { transform: translate(8px, -10px); opacity: 0.7; }
+}
+@keyframes vc-card-wave-drift {
+  0%, 100% { transform: translateX(-8%) scaleY(1); opacity: 0.35; }
+  50% { transform: translateX(10%) scaleY(1.15); opacity: 0.7; }
+}
+@keyframes vc-card-scan {
+  0% { top: -20%; opacity: 0; }
+  10% { opacity: 0.7; }
+  100% { top: 120%; opacity: 0; }
+}
+@keyframes vc-card-wash-shift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+@keyframes vc-card-border-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+@keyframes vc-card-orb-float {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(12%, -18%) scale(1.12); }
+}
+
+.vc-card-fx { z-index: 0; contain: layout paint; }
+.vc-card-fx__base {
+  position: absolute;
+  inset: 0;
+  opacity: 0.55;
+  pointer-events: none;
+}
+.vc-card-fx--default .vc-card-fx__base {
+  background: radial-gradient(ellipse at 20% 0%, rgba(255,63,108,0.35), transparent 55%);
+}
+.vc-card-fx--lunar .vc-card-fx__base {
+  background: radial-gradient(ellipse at 80% 10%, rgba(167,139,250,0.4), transparent 50%),
+    radial-gradient(ellipse at 10% 80%, rgba(76,29,149,0.35), transparent 55%);
+}
+.vc-card-fx--nebula .vc-card-fx__base {
+  background: radial-gradient(ellipse at 30% 20%, rgba(244,114,182,0.4), transparent 45%),
+    radial-gradient(ellipse at 80% 70%, rgba(139,92,246,0.4), transparent 50%);
+}
+.vc-card-fx--ember .vc-card-fx__base {
+  background: radial-gradient(ellipse at 50% 100%, rgba(249,115,22,0.45), transparent 55%);
+}
+.vc-card-fx--aurora .vc-card-fx__base {
+  background: linear-gradient(180deg, rgba(16,185,129,0.2), transparent 40%, rgba(56,189,248,0.15));
+}
+.vc-card-fx--void .vc-card-fx__base {
+  background: radial-gradient(ellipse at center, transparent 20%, rgba(2,6,23,0.75) 100%);
+}
+.vc-card-fx--sakura .vc-card-fx__base {
+  background: radial-gradient(ellipse at 50% 0%, rgba(251,113,133,0.35), transparent 50%);
+}
+.vc-card-fx--cyber .vc-card-fx__base {
+  background: linear-gradient(135deg, rgba(6,182,212,0.22), transparent 40%, rgba(168,85,247,0.2));
+}
+
+.vc-card-fx__wash {
+  position: absolute;
+  inset: -30%;
+  background-size: 200% 200%;
+  animation: vc-card-wash-shift 7s ease-in-out infinite;
+  opacity: 0.7;
+  pointer-events: none;
+}
+.vc-card-fx--default .vc-card-fx__wash {
+  background: linear-gradient(120deg, rgba(255,63,108,0.25), transparent 40%, rgba(255,90,130,0.15));
+}
+.vc-card-fx--lunar .vc-card-fx__wash {
+  background: linear-gradient(120deg, rgba(167,139,250,0.28), transparent 40%, rgba(196,181,253,0.2));
+}
+.vc-card-fx--nebula .vc-card-fx__wash {
+  background: linear-gradient(120deg, rgba(244,114,182,0.3), transparent 35%, rgba(139,92,246,0.28));
+}
+.vc-card-fx--ember .vc-card-fx__wash {
+  background: linear-gradient(120deg, rgba(249,115,22,0.3), transparent 40%, rgba(220,38,38,0.22));
+}
+.vc-card-fx--aurora .vc-card-fx__wash {
+  background: linear-gradient(100deg, rgba(16,185,129,0.25), transparent 40%, rgba(56,189,248,0.22));
+}
+.vc-card-fx--void .vc-card-fx__wash {
+  background: linear-gradient(120deg, rgba(100,116,139,0.15), transparent 50%, rgba(15,23,42,0.3));
+}
+.vc-card-fx--sakura .vc-card-fx__wash {
+  background: linear-gradient(120deg, rgba(251,113,133,0.28), transparent 40%, rgba(244,114,182,0.2));
+}
+.vc-card-fx--cyber .vc-card-fx__wash {
+  background: linear-gradient(120deg, rgba(34,211,238,0.28), transparent 40%, rgba(168,85,247,0.25));
+}
+
+.vc-card-fx__sheen {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 45%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.28), transparent);
+  animation: vc-card-sheen 4.2s ease-in-out infinite;
+}
+.vc-card-fx__sheen--magenta {
+  background: linear-gradient(90deg, transparent, rgba(244,114,182,0.35), transparent);
+  animation-duration: 3.4s;
+}
+
+.vc-card-fx__star {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 8px rgba(255,255,255,0.95);
+  animation: vc-card-star-twinkle 2s ease-in-out infinite;
+}
+.vc-card-fx__star--lg {
+  width: 3px;
+  height: 3px;
+  box-shadow: 0 0 12px #fff, 0 0 20px rgba(196,181,253,0.8);
+}
+
+.vc-card-fx__moon {
+  position: absolute;
+  right: 10%;
+  top: 8%;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #f5f3ff, #c4b5fd 55%, #7c3aed);
+  box-shadow: 0 0 24px rgba(196,181,253,0.7);
+  animation: vc-card-orb-float 8s ease-in-out infinite;
+}
+.vc-card-fx--nameplate .vc-card-fx__moon {
+  width: 14px;
+  height: 14px;
+  right: 8%;
+  top: 18%;
+}
+.vc-card-fx__beam {
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 55%;
+  height: 70%;
+  background: linear-gradient(210deg, rgba(196,181,253,0.35), transparent 60%);
+  animation: vc-card-glow-breathe 4s ease-in-out infinite;
+}
+
+.vc-card-fx__orb {
+  position: absolute;
+  border-radius: 50%;
+  opacity: 0.7;
+  animation: vc-card-orb-float 6s ease-in-out infinite;
+  pointer-events: none;
+}
+.vc-card-fx__orb--moon {
+  width: 60%;
+  height: 75%;
+  right: -12%;
+  top: -25%;
+  background: radial-gradient(circle, rgba(196,181,253,0.45), transparent 70%);
+}
+.vc-card-fx__orb--a {
+  width: 50%;
+  height: 60%;
+  left: -8%;
+  top: -12%;
+  background: radial-gradient(circle, rgba(244,114,182,0.55), transparent 70%);
+}
+.vc-card-fx__orb--b {
+  width: 45%;
+  height: 55%;
+  right: -10%;
+  bottom: -18%;
+  background: radial-gradient(circle, rgba(139,92,246,0.5), transparent 70%);
+  animation-delay: 1.2s;
+}
+.vc-card-fx__orb--c {
+  width: 35%;
+  height: 40%;
+  left: 35%;
+  top: 30%;
+  background: radial-gradient(circle, rgba(56,189,248,0.35), transparent 70%);
+  animation-delay: 2s;
+}
+
+.vc-card-fx__spark {
+  position: absolute;
+  bottom: -4%;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #fb923c;
+  box-shadow: 0 0 10px #f97316, 0 0 18px #ea580c;
+  animation: vc-card-spark-rise 2.2s ease-out infinite;
+}
+.vc-card-fx__spark--big {
+  width: 6px;
+  height: 6px;
+  background: #fdba74;
+  box-shadow: 0 0 14px #fb923c, 0 0 24px #f97316;
+}
+.vc-card-fx__heat {
+  position: absolute;
+  inset: 45% 0 0;
+  background: linear-gradient(to top, rgba(249,115,22,0.5), transparent);
+  animation: vc-card-glow-breathe 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+.vc-card-fx__heat--top {
+  inset: 0 0 55%;
+  background: linear-gradient(to bottom, rgba(220,38,38,0.25), transparent);
+  animation-delay: 0.6s;
+}
+
+.vc-card-fx__wave {
+  position: absolute;
+  left: -25%;
+  right: -25%;
+  height: 48%;
+  border-radius: 40%;
+  opacity: 0.65;
+  animation: vc-card-wave-drift 4.5s ease-in-out infinite;
+  pointer-events: none;
+}
+.vc-card-fx__wave--1 {
+  top: 5%;
+  background: linear-gradient(90deg, transparent, rgba(52,211,153,0.55), rgba(14,165,233,0.4), transparent);
+}
+.vc-card-fx__wave--2 {
+  top: 28%;
+  animation-delay: 0.7s;
+  background: linear-gradient(90deg, transparent, rgba(45,212,191,0.45), rgba(56,189,248,0.4), transparent);
+}
+.vc-card-fx__wave--3 {
+  top: 48%;
+  animation-delay: 1.4s;
+  background: linear-gradient(90deg, transparent, rgba(74,222,128,0.4), transparent);
+}
+.vc-card-fx__wave--4 {
+  top: 65%;
+  animation-delay: 2s;
+  background: linear-gradient(90deg, transparent, rgba(34,211,238,0.35), rgba(52,211,153,0.3), transparent);
+}
+
+.vc-card-fx__dust {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: rgba(226,232,240,0.9);
+  box-shadow: 0 0 6px rgba(255,255,255,0.5);
+  animation: vc-card-dust-drift 5s ease-in-out infinite;
+}
+.vc-card-fx__vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at center, transparent 15%, rgba(2,6,23,0.75) 100%);
+  animation: vc-card-border-pulse 3.5s ease-in-out infinite;
+}
+.vc-card-fx__void-rift {
+  position: absolute;
+  left: 20%;
+  right: 20%;
+  top: 35%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(148,163,184,0.7), transparent);
+  box-shadow: 0 0 20px rgba(148,163,184,0.5);
+  animation: vc-card-glow-breathe 2.8s ease-in-out infinite;
+}
+
+.vc-card-fx__mist {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 50% 100%, rgba(253,164,175,0.35), transparent 55%);
+  animation: vc-card-glow-breathe 3.2s ease-in-out infinite;
+}
+.vc-card-fx__petal {
+  position: absolute;
+  top: -14%;
+  width: 10px;
+  height: 12px;
+  border-radius: 70% 0 70% 0;
+  background: linear-gradient(135deg, #fecdd3, #fb7185 60%, #e11d48);
+  opacity: 0.9;
+  box-shadow: 0 0 8px rgba(251,113,133,0.5);
+  animation: vc-card-petal-fall 4.2s linear infinite;
+}
+.vc-card-fx__petal--lg {
+  width: 14px;
+  height: 16px;
+}
+.vc-card-fx--nameplate .vc-card-fx__petal,
+.vc-card-fx--thumb .vc-card-fx__petal {
+  width: 6px;
+  height: 7px;
+}
+
+.vc-card-fx__grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(34,211,238,0.2) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34,211,238,0.2) 1px, transparent 1px);
+  background-size: 12px 12px;
+  opacity: 0.55;
+  mask-image: linear-gradient(to bottom, rgba(0,0,0,0.9), transparent 85%);
+  animation: vc-card-wash-shift 10s linear infinite;
+}
+.vc-card-fx__scan {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 32%;
+  background: linear-gradient(to bottom, transparent, rgba(34,211,238,0.45), transparent);
+  animation: vc-card-scan 2.4s linear infinite;
+}
+.vc-card-fx__glitch {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(34,211,238,0.06) 2px,
+    rgba(34,211,238,0.06) 3px
+  );
+  animation: vc-card-border-pulse 1.4s steps(3) infinite;
+}
+.vc-card-fx__corner {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #22d3ee;
+  box-shadow: 0 0 8px rgba(34,211,238,0.6);
+}
+.vc-card-fx__corner--tl {
+  top: 6px;
+  left: 6px;
+  border-right: 0;
+  border-bottom: 0;
+}
+.vc-card-fx__corner--br {
+  bottom: 6px;
+  right: 6px;
+  border-left: 0;
+  border-top: 0;
+}
+.vc-card-fx__bit {
+  position: absolute;
+  font-size: 8px;
+  font-family: ui-monospace, monospace;
+  color: rgba(34,211,238,0.7);
+  animation: vc-card-star-twinkle 1.6s ease-in-out infinite;
+  letter-spacing: 0.05em;
+}
+
+.vc-card-fx__pulse-ring {
+  position: absolute;
+  inset: -20%;
+  background: radial-gradient(circle at 30% 30%, rgba(255,63,108,0.4), transparent 50%);
+  animation: vc-card-glow-breathe 2.8s ease-in-out infinite;
+  pointer-events: none;
+}
+.vc-card-fx__pulse-ring--2 {
+  inset: -10%;
+  background: radial-gradient(circle at 70% 80%, rgba(255,63,108,0.25), transparent 45%);
+  animation-delay: 1s;
+}
+
+.vc-card-fx--nameplate .vc-card-fx__base { opacity: 0.7; }
+.vc-card-fx--nameplate .vc-card-fx__wash { opacity: 0.55; }
+.vc-card-fx--thumb .vc-card-fx__base,
+.vc-card-fx--thumb .vc-card-fx__wash { opacity: 0.85; }
+
+.vc-card-shell--glow { animation: none; }
+.vc-card-avatar-ring {
+  animation: vc-card-avatar-glow 2.8s ease-in-out infinite;
+  will-change: box-shadow;
+}
+.vc-theme-thumb-bg {
+  background-size: 200% 200% !important;
+  animation: vc-card-wash-shift 5s ease-in-out infinite;
+}
+
+/* === prefers-reduced-motion (DESIGN_SYSTEM §8.2) =========================
+   When the user opts out of motion we collapse all animations to ~10ms so
+   state changes still register but no decorative motion plays. The pulse
+   "está falando" ring in VoiceRoomView is the most important one to honor
+   because it can otherwise flicker/distract. Components also receive a
+   `useReducedMotion()` signal for any JS-driven animation gating.        */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
