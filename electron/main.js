@@ -628,6 +628,47 @@ function resolveAppIcon() {
   return undefined
 }
 
+function resolveWindowIconPng() {
+  const candidates = [
+    process.resourcesPath ? path.join(process.resourcesPath, 'app-icon.png') : null,
+    path.join(__dirname, '..', 'public', 'app-icon.png'),
+    path.join(__dirname, '..', 'dist', 'app-icon.png'),
+    path.join(app.getAppPath(), 'dist', 'app-icon.png'),
+    path.join(__dirname, '..', 'public', 'brand', 'app-icon', 'voicecraft-app-icon-256.png'),
+    path.join(app.getAppPath(), 'dist', 'brand', 'app-icon', 'voicecraft-app-icon-256.png'),
+  ].filter(Boolean)
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return p
+    } catch {}
+  }
+  return null
+}
+
+/** Windows taskbar uses AppUserModelId + app details — setIcon alone is not enough. */
+function applyWindowsTaskbarIcon(win, icoPath, pngPath) {
+  if (process.platform !== 'win32' || !win || win.isDestroyed()) return
+  try {
+    win.setAppDetails({
+      appId: 'com.voicecraft.app',
+      relaunchDisplayName: 'VoiceCraft',
+      ...(icoPath ? { appIconPath: icoPath, appIconIndex: 0 } : {}),
+    })
+  } catch {}
+  const trySet = (filePath) => {
+    if (!filePath) return false
+    try {
+      const img = nativeImage.createFromPath(filePath)
+      if (img.isEmpty()) return false
+      win.setIcon(img)
+      return true
+    } catch {
+      return false
+    }
+  }
+  if (!trySet(pngPath)) trySet(icoPath)
+}
+
 function resolveTrayPng() {
   const candidates = [
     path.join(__dirname, '..', 'public', 'brand', 'app-icon', 'voicecraft-app-icon-32.png'),
@@ -651,6 +692,7 @@ function createWindow() {
   // DevTools looks like "only DevTools opened" because the app stays hidden.
   const startHidden = !isDev && !!settings.startMinimized
   const appIcon = resolveAppIcon()
+  const appIconPng = resolveWindowIconPng()
   mainWindow = new BrowserWindow({
     width: 900,
     height: 700,
@@ -671,22 +713,14 @@ function createWindow() {
     ...(appIcon ? { icon: appIcon } : {}),
   })
 
-  // Taskbar icon: set explicitly (and prefer nativeImage) — path-only icon
-  // inside asar is unreliable on Windows.
-  if (appIcon) {
-    try {
-      const img = nativeImage.createFromPath(appIcon)
-      if (!img.isEmpty()) mainWindow.setIcon(img)
-    } catch {
-      try { mainWindow.setIcon(appIcon) } catch {}
-    }
-  }
+  applyWindowsTaskbarIcon(mainWindow, appIcon, appIconPng)
 
   // No File / Edit / View menu — custom title bar owns chrome.
   Menu.setApplicationMenu(null)
 
   mainWindow.once('ready-to-show', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return
+    applyWindowsTaskbarIcon(mainWindow, appIcon, appIconPng)
     if (isDev || !settings.startMinimized) {
       mainWindow.show()
       mainWindow.focus()

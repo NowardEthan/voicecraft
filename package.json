@@ -1,6 +1,6 @@
 {
   "name": "voicecraft",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "P2P voice/video chat for LAN",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -68,6 +68,10 @@
       {
         "from": "public/icon.ico",
         "to": "icon.ico"
+      },
+      {
+        "from": "public/app-icon.png",
+        "to": "app-icon.png"
       }
     ],
     "win": {
