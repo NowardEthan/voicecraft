@@ -54,6 +54,11 @@ html, body, #root {
   overflow: hidden;
 }
 
+/* Touch-friendly scroll areas in Electron / mobile */
+.overscroll-contain {
+  -webkit-overflow-scrolling: touch;
+}
+
 body {
   background: var(--vc-bg-canvas);
   color: var(--vc-text);
@@ -77,6 +82,13 @@ body {
   outline: 2px solid var(--space-accent, var(--vc-positive));
   outline-offset: 2px;
   border-radius: 6px;
+}
+
+/* Frameless Electron title bar — keep interactive children clickable */
+.vc-titlebar button,
+.vc-titlebar a,
+.vc-titlebar input {
+  -webkit-app-region: no-drag;
 }
 /* Inputs and textareas keep their own borders; the outline still shows.    */
 input:focus-visible,
@@ -163,6 +175,48 @@ select:focus-visible {
 }
 .vc-wave-bar:nth-child(1) { animation-delay: 0s; }
 .vc-wave-bar:nth-child(2) { animation-delay: 0.1s; }
+
+/* Settings modal — accent volume slider */
+.vc-volume-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    #ff3f6c 0%,
+    #ff3f6c var(--vc-vol, 80%),
+    rgba(255, 255, 255, 0.12) var(--vc-vol, 80%),
+    rgba(255, 255, 255, 0.12) 100%
+  );
+  outline: none;
+  cursor: pointer;
+}
+.vc-volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid #ff3f6c;
+  box-shadow: 0 0 0 3px rgba(255, 63, 108, 0.25);
+  cursor: pointer;
+}
+.vc-volume-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid #ff3f6c;
+  box-shadow: 0 0 0 3px rgba(255, 63, 108, 0.25);
+  cursor: pointer;
+}
+.vc-volume-slider::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+}
 .vc-wave-bar:nth-child(3) { animation-delay: 0.2s; }
 .vc-wave-bar:nth-child(4) { animation-delay: 0.3s; }
 .vc-wave-bar:nth-child(5) { animation-delay: 0.4s; }
@@ -180,6 +234,14 @@ select:focus-visible {
   backdrop-filter: saturate(180%) blur(40px);
   -webkit-backdrop-filter: saturate(180%) blur(40px);
   border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Sidebar voice-connected leave control (CSS vars + opacity can't use /N) */
+.vc-voice-leave {
+  background: rgba(240, 68, 94, 0.12);
+}
+.vc-voice-leave:hover {
+  background: rgba(240, 68, 94, 0.22);
 }
 
 /* === Botões Apple === */
@@ -696,6 +758,32 @@ select:focus-visible {
 
 .animate-spin-slow {
   animation: spin 3s linear infinite;
+}
+
+/* Discord-style brand avatar loader */
+@keyframes vc-brand-loader {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.88;
+    filter: drop-shadow(0 0 0 transparent);
+  }
+  50% {
+    transform: scale(1.07);
+    opacity: 1;
+    filter: drop-shadow(0 0 18px rgba(255, 63, 108, 0.35));
+  }
+}
+
+.vc-brand-loader__icon {
+  animation: vc-brand-loader 1.35s ease-in-out infinite;
+  will-change: transform, opacity, filter;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vc-brand-loader__icon {
+    animation: none;
+    opacity: 1;
+  }
 }
 
 /* === Attention Pulse === */

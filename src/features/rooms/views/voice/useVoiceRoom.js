@@ -101,6 +101,20 @@ export function useVoiceRoom({ room, currentUserId, currentUserName, members = [
   const cameraSenderRef = useRef(null)
   const screenSenderRef = useRef(null)
   const pendingVideoFromRef = useRef({ camera: null, screen: null })
+  const remoteAudiosRef = useRef(new Set())
+
+  const applyOutputToAudio = useCallback((audio) => {
+    if (!audio) return
+    const vol = Math.max(0, Math.min(100, Number(settings?.outputVolume ?? 80))) / 100
+    audio.volume = isDeafened ? 0 : vol
+    if (typeof audio.setSinkId === 'function') {
+      audio.setSinkId(settings?.speakerId || '').catch(() => {})
+    }
+  }, [settings?.outputVolume, settings?.speakerId, isDeafened])
+
+  useEffect(() => {
+    remoteAudiosRef.current.forEach((audio) => applyOutputToAudio(audio))
+  }, [applyOutputToAudio])
 
   // -------------------------------------------------------------------
   // Real activity feed — wire to signaling peer-joined / peer-left /
@@ -292,6 +306,13 @@ export function useVoiceRoom({ room, currentUserId, currentUserName, members = [
         if (event.track?.kind === 'audio') {
           const audio = new Audio()
           audio.srcObject = event.streams?.[0] || new MediaStream([event.track])
+          remoteAudiosRef.current.add(audio)
+          applyOutputToAudio(audio)
+          event.track.addEventListener('ended', () => {
+            remoteAudiosRef.current.delete(audio)
+            try { audio.pause() } catch {}
+            audio.srcObject = null
+          })
           audio.play().catch(() => {})
         }
       }

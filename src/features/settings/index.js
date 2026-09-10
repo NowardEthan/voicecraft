@@ -3,4 +3,6 @@
 // is the source of truth — components read it directly instead of
 // receiving settings through props.
 export { default as SettingsModal } from './components/SettingsModal'
-export { useSettings } from './hooks/useSettings'
+export { default as UpdateToast } from './components/UpdateToast'
+export { useSettings, SETTINGS_DEFAULTS } from './hooks/useSettings'
+

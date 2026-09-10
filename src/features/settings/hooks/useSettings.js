@@ -1,7 +1,9 @@
 import { useEffect, useState, useCallback } from 'react'
 
-const DEFAULTS = {
+export const SETTINGS_DEFAULTS = {
   microphoneId: null,
+  speakerId: null,
+  outputVolume: 80,
   dspLevel: 'off',
   screenQuality: '720p',
   screenFramerate: 30,
@@ -25,23 +27,23 @@ const DEFAULTS = {
 export function useSettings() {
   const isElectron = typeof window !== 'undefined' && !!window.electronAPI
 
-  const [settings, setSettings] = useState(DEFAULTS)
+  const [settings, setSettings] = useState(SETTINGS_DEFAULTS)
   const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      let initial = DEFAULTS
+      let initial = SETTINGS_DEFAULTS
       if (isElectron) {
         try { initial = await window.electronAPI.getSettings() } catch {}
       } else if (typeof localStorage !== 'undefined') {
         try {
           const raw = localStorage.getItem('voicecraft:settings')
-          if (raw) initial = { ...DEFAULTS, ...JSON.parse(raw) }
+          if (raw) initial = { ...SETTINGS_DEFAULTS, ...JSON.parse(raw) }
         } catch {}
       }
       if (!cancelled) {
-        setSettings({ ...DEFAULTS, ...initial })
+        setSettings({ ...SETTINGS_DEFAULTS, ...initial })
         setLoaded(true)
       }
     })()
@@ -55,7 +57,7 @@ export function useSettings() {
     } else if (typeof localStorage !== 'undefined') {
       try {
         const current = JSON.parse(localStorage.getItem('voicecraft:settings') || '{}')
-        localStorage.setItem('voicecraft:settings', JSON.stringify({ ...DEFAULTS, ...current, ...patch }))
+        localStorage.setItem('voicecraft:settings', JSON.stringify({ ...SETTINGS_DEFAULTS, ...current, ...patch }))
       } catch {}
     }
   }, [isElectron])

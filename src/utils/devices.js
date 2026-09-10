@@ -17,6 +17,22 @@ export async function enumerateMics() {
 }
 
 /**
+ * enumerateSpeakers — audio output devices (headphones / speakers).
+ * Labels may be empty until permission was granted at least once.
+ */
+export async function enumerateSpeakers() {
+  if (!navigator.mediaDevices?.enumerateDevices) return []
+  const all = await navigator.mediaDevices.enumerateDevices()
+  return all
+    .filter((d) => d.kind === 'audiooutput')
+    .map((d) => ({
+      deviceId: d.deviceId,
+      label: d.label || `Saída (${d.deviceId.slice(0, 6)}…)`,
+      groupId: d.groupId,
+    }))
+}
+
+/**
  * Subscribe to device-change events (e.g. user plugs/unplugs a USB mic).
  * Returns an unsubscribe function.
  */

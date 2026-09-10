@@ -10,6 +10,7 @@ import {
   Music, Heart, Shield, UserRound,
 } from 'lucide-react'
 import { EASE_OUT, EASE_SPRING_SOFT } from '../../../shared/motion/presets'
+import { BrandMark } from '../../../shared/ui/BrandMark'
 import {
   authErrorMessage,
   createAccountWithEmail,
@@ -130,7 +131,7 @@ export default function LoginScreen() {
       }
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden text-strong bg-[#07080c]">
+    <div className="relative h-full w-full overflow-hidden text-strong bg-[#07080c]">
       <div className="pointer-events-none absolute inset-0">
         <motion.div
           className="absolute -left-[12%] -top-[20%] w-[70%] h-[80%] rounded-full bg-[#5a1028]/45 blur-[90px]"
@@ -168,9 +169,12 @@ export default function LoginScreen() {
 
       <div className="relative z-10 h-full overflow-y-auto grid grid-cols-1 lg:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)] gap-6 lg:gap-10 px-5 sm:px-10 lg:px-16 py-6 sm:py-8 lg:py-12">
         <section className="hidden lg:flex flex-col justify-between min-h-0 py-6">
-          <motion.p {...enter(0.05)} className="text-[11px] font-semibold tracking-[0.22em] text-accent uppercase">
-            VoiceCraft + Lunar
-          </motion.p>
+          <motion.div {...enter(0.05)} className="flex items-center gap-3">
+            <BrandMark size={28} decorative className="drop-shadow-[0_0_16px_var(--space-accent-glow-24)]" />
+            <p className="text-[11px] font-semibold tracking-[0.22em] text-accent uppercase">
+              VoiceCraft + Lunar
+            </p>
+          </motion.div>
           <div className="max-w-[540px]">
             <motion.h1 {...enter(0.12, 22)} className="text-[44px] xl:text-[52px] font-bold leading-[1.05] tracking-tight">
               Sua voz. Seu espaço.{' '}
@@ -215,19 +219,22 @@ export default function LoginScreen() {
             className="w-full max-w-[420px] rounded-[28px] border border-white/[0.08] bg-[#14161c]/80 backdrop-blur-2xl shadow-[0_30px_80px_-24px_rgba(0,0,0,0.75)] px-6 sm:px-8 py-7"
           >
             <div className="lg:hidden mb-5">
-              <p className="text-[10px] font-semibold tracking-[0.2em] text-accent uppercase">VoiceCraft + Lunar</p>
-              <h1 className="text-[26px] font-bold tracking-tight mt-1.5">
+              <div className="flex items-center gap-2.5 mb-2">
+                <BrandMark size={22} decorative />
+                <p className="text-[10px] font-semibold tracking-[0.2em] text-accent uppercase">VoiceCraft + Lunar</p>
+              </div>
+              <h1 className="text-[26px] font-bold tracking-tight">
                 Sua voz. Seu espaço. <span className="text-accent">Sua conta.</span>
               </h1>
             </div>
 
             <div className="flex items-center justify-center gap-3 mb-4">
               <motion.span
-                className="w-10 h-10 rounded-xl bg-accent flex items-center justify-center text-on-accent shadow-[0_8px_20px_-8px_var(--space-accent-glow-24)]"
+                className="flex items-center justify-center drop-shadow-[0_8px_20px_-8px_var(--space-accent-glow-24)]"
                 animate={reduce ? undefined : { y: [0, -3, 0] }}
                 transition={{ duration: 2.8, repeat: Infinity, ease: 'easeInOut' }}
               >
-                <Mic2 size={18} />
+                <BrandMark size={40} decorative />
               </motion.span>
               <span className="text-muted text-[15px] font-medium">+</span>
               <motion.span

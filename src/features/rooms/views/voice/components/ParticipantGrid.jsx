@@ -109,8 +109,8 @@ export function ParticipantGrid({
         : 'Câmera')
       : undefined
     return (
-      <div className="flex-1 min-h-0 flex gap-3 px-4 sm:px-5 pt-1 pb-24">
-        <div className="flex-1 min-w-0 min-h-0">
+      <div className="@container flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col @[640px]:flex-row gap-3 px-3 sm:px-5 pt-1 pb-24">
+        <div className="flex-1 min-w-0 min-h-[40%] @[640px]:min-h-0">
           <ScreenShareStage
             stream={stageStream}
             isSelf={stageSelf}
@@ -122,8 +122,12 @@ export function ParticipantGrid({
             onStop={stageIsCamera ? undefined : onStopShare}
           />
         </div>
-        <aside className="w-[168px] sm:w-[196px] shrink-0 h-full overflow-y-auto space-y-2.5 pr-0.5">
-          {participants.map(renderCard)}
+        <aside className="flex @[640px]:flex-col gap-2.5 overflow-x-auto @[640px]:overflow-y-auto @[640px]:overflow-x-visible shrink-0 @[640px]:w-[168px] @[720px]:w-[196px] @[640px]:h-full pb-1 @[640px]:pb-0 @[640px]:pr-0.5">
+          {participants.map((p) => (
+            <div key={p.userId || p.id} className="w-[140px] shrink-0 @[640px]:w-auto">
+              {renderCard(p)}
+            </div>
+          ))}
         </aside>
       </div>
     )
@@ -231,7 +235,7 @@ export function ParticipantGrid({
                 : sizeBucket === 'medium' ? 4
                 : 4
   return (
-    <div className="@container flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6">
+    <div className="@container flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 sm:px-6 lg:px-8 py-4 sm:py-6 pb-24">
       {screenStream && (
         <div className="mb-4 max-w-4xl mx-auto aspect-video">
           <ScreenShareStage

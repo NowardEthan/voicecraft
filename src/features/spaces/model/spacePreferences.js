@@ -74,6 +74,29 @@ export function hasLeftSpace(spaceId) {
   return !!spaceId && readLeftSet().has(spaceId)
 }
 
+const RECENT_KEY = 'voicecraft:recentSpaces'
+const RECENT_MAX = 12
+
+/** Most-recently-visited Space ids (local only). */
+export function getRecentSpaceIds() {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(RECENT_KEY)
+    const arr = raw ? JSON.parse(raw) : []
+    return Array.isArray(arr) ? arr.filter(Boolean) : []
+  } catch {
+    return []
+  }
+}
+
+export function markSpaceVisited(spaceId) {
+  if (!spaceId || typeof window === 'undefined') return
+  try {
+    const next = [spaceId, ...getRecentSpaceIds().filter((id) => id !== spaceId)].slice(0, RECENT_MAX)
+    window.localStorage.setItem(RECENT_KEY, JSON.stringify(next))
+  } catch { /* ignore */ }
+}
+
 /**
  * Rail entry. An explicit leave always wins until the user rejoins —
  * otherwise a leftover `joined: true` in memory keeps the Space visible

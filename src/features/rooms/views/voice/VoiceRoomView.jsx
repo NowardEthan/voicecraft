@@ -7,7 +7,6 @@ import { VoiceRoomHeader } from './components/VoiceRoomHeader'
 import { ParticipantGrid } from './components/ParticipantGrid'
 import { VoiceControlDock } from './components/VoiceControlDock'
 import { ScreenSharePicker } from './components/ScreenSharePicker'
-import { RoomActivitySidebar } from './components/RoomActivitySidebar'
 import { PermissionDeniedState } from './components/PermissionDeniedState'
 import { resolveSpaceCover, spaceTokens } from '../../../spaces'
 import { SpaceCoverLayer } from '../../../spaces/components/SpaceCoverLayer'
@@ -26,9 +25,6 @@ export default function VoiceRoomView({
   onLeave,
   onInvite,
   onStatusChange,
-  rightSidebarOpen = true,
-  sidebarOverlay = false,
-  onRightSidebarClose,
 }) {
   void signaling
   const reducedMotion = useReducedMotion()
@@ -46,6 +42,13 @@ export default function VoiceRoomView({
     if (stored) sig.sendMemberStatus?.(stored)
   }, [sig, room?.id])
 
+  const handleStatusChange = (next) => {
+    const value = String(next || '').trim().slice(0, 40)
+    setSelfStatus(value)
+    setLocalMemberStatus(value)
+    sig.sendMemberStatus?.(value)
+  }
+
   const participants = useMemo(() => {
     if (!room) return []
     const inRoom = members
@@ -62,7 +65,11 @@ export default function VoiceRoomView({
         isCreator: space?.createdBy === m.userId,
         status: m.userId === currentUserId ? selfStatus : (m.status || m.statusText || ''),
       }))
+    // Already listed — never inject a second self row.
     if (inRoom.some(m => m.userId === currentUserId)) return inRoom
+    // Only synthesize self when we have entered this room (caller is here)
+    // but presence hasn't caught up yet. Skip if currentUserId is unknown.
+    if (!currentUserId) return inRoom
     const self = members.find(m => m.userId === currentUserId)
     return [
       {
@@ -93,7 +100,6 @@ export default function VoiceRoomView({
     activeDeviceId,
     selfSpeaking,
     remoteSpeaking,
-    activity,
     handleToggleMute,
     handleToggleDeafen,
     handlePickDevice,
@@ -101,7 +107,6 @@ export default function VoiceRoomView({
     handleToggleCamera,
     handlePickShareSource,
     handleCancelSharePicker,
-    sendThought,
     screenSharing,
     screenStream,
     remoteScreenStream,
@@ -123,13 +128,6 @@ export default function VoiceRoomView({
   void _unusedLeave
 
   const atmosphere = roomCover || spaceCover
-
-  const handleStatusChange = (next) => {
-    const value = String(next || '').trim().slice(0, 40)
-    setSelfStatus(value)
-    setLocalMemberStatus(value)
-    sig.sendMemberStatus?.(value)
-  }
 
   if (!room) return null
 
@@ -268,38 +266,6 @@ export default function VoiceRoomView({
         onPick={handlePickShareSource}
         onClose={handleCancelSharePicker}
       />
-
-      {rightSidebarOpen && sidebarOverlay && (
-        <button
-          type="button"
-          aria-label="Fechar atividades"
-          className="absolute inset-0 z-20 bg-black/45"
-          onClick={onRightSidebarClose}
-        />
-      )}
-      {rightSidebarOpen && (
-        <div
-          className={
-            sidebarOverlay
-              ? 'absolute right-0 top-0 z-30 h-full w-[min(280px,88vw)] shadow-2xl'
-              : 'relative z-10 w-[min(280px,30vw)] min-w-[220px] max-w-[280px] shrink-0 h-full'
-          }
-        >
-          <RoomActivitySidebar
-            participants={participants}
-            currentUserId={currentUserId}
-            selfSpeaking={selfSpeaking}
-            remoteSpeaking={remoteSpeaking}
-            selfMuted={isMuted}
-            activity={activity}
-            onClose={onRightSidebarClose}
-            onInvite={onInvite}
-            onSendThought={sendThought}
-            selfStatus={selfStatus}
-            onStatusChange={handleStatusChange}
-          />
-        </div>
-      )}
     </div>
   )
 }

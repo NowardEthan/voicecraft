@@ -35,7 +35,7 @@ export function ModalShell({
   children,
   labelledBy,
   describedBy,
-  maxWidth = 'md',           // 'sm' | 'md' | 'lg' | 'xl' | '2xl'
+  maxWidth = 'md',           // 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl' | '4xl'
   panelClassName = '',
   contentClassName = '',
   closeOnBackdrop = true,
@@ -72,6 +72,8 @@ export function ModalShell({
     lg: 'max-w-lg',
     xl: 'max-w-xl',
     '2xl': 'max-w-2xl',
+    '3xl': 'max-w-3xl',
+    '4xl': 'max-w-4xl',
   }[maxWidth] || 'max-w-md'
 
   const overlayStyle = variant === 'coral'

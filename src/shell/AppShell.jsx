@@ -15,13 +15,16 @@ import { useCurrentSpace, useSpacesList, isSpaceInRail, spaceTokens, ensureFullS
 import { parseSpaceInvite } from '../features/spaces/model/spaceInvite'
 import { useRoomActions } from '../features/rooms'
 import { useProfilePopover } from '../features/people'
-import { useSettings } from '../features/settings'
+import { useSettings, UpdateToast } from '../features/settings'
 import { useAccountProfile } from '../features/account'
+import { NotificationsProvider } from '../features/notifications'
+import NotificationBell from '../features/notifications/NotificationBell'
 import { useSignaling } from '../shared/connection/useSignaling'
 import { flashToast } from '../shared/utils/toast'
 import { getLocalIP, getHostname } from '../shared/utils/network'
 import { useViewport } from '../shared/hooks/useViewport'
 import { signOutAccount } from '../features/auth'
+import { BrandLoader } from '../shared/ui/BrandMark'
 
 const VoiceRoomView = lazy(() => import('../features/rooms/views/voice/VoiceRoomView'))
 const ConversationRoom = lazy(() => import('../components/views/TextRoomView'))
@@ -41,11 +44,8 @@ const PANEL_COLLAPSED_KEY = 'voicecraft:panelCollapsed'
 
 function ViewLoader() {
   return (
-    <div className="flex-1 flex items-center justify-center bg-canvas">
-      <div className="flex flex-col items-center gap-3 animate-fade-in">
-        <div className="w-10 h-10 rounded-full border-2 border-line border-t-accent animate-spin" />
-        <span className="text-[12px] text-muted">carregando…</span>
-      </div>
+    <div className="flex-1 flex items-center justify-center bg-canvas animate-fade-in">
+      <BrandLoader size={56} label="carregando…" />
     </div>
   )
 }
@@ -75,7 +75,7 @@ export default function AppShell({ account }) {
   // Rooms
   const {
     selectedRoom, currentRoom, transitioning,
-    selectRoom, closeTextRoom, leaveCall, createRoom, updateRoom, deleteRoom,
+    selectRoom, closeTextRoom, leaveCall, focusVoiceRoom, createRoom, updateRoom, deleteRoom,
     creatingRoom, setSelectedRoom,
   } = useRoomActions()
 
@@ -93,12 +93,15 @@ export default function AppShell({ account }) {
 
   // UI state
   const [activeView, setActiveView] = useState('overview')
+  // When set to overview/events, main area shows that page even if a call is live.
+  // null = follow room focus (text / voice UI).
+  const [spaceSurface, setSpaceSurface] = useState(null)
   const [showSettingsModal, setShowSettingsModal] = useState(false)
   const [roomEditor, setRoomEditor] = useState(null)
   const [showSpaceCreator, setShowSpaceCreator] = useState(false)
   const [showSpaceHub, setShowSpaceHub] = useState(false)
   const [inviteRoom, setInviteRoom] = useState(null)
-  const { isMobile, overlayNav, overlayPeople } = useViewport()
+  const { compactRail, overlayNav, overlayPeople } = useViewport()
   const [panelCollapsed, setPanelCollapsed] = useState(() => {
     if (typeof window === 'undefined') return false
     if (window.innerWidth < 1100) return true
@@ -114,7 +117,11 @@ export default function AppShell({ account }) {
   const [hostname, setHostname] = useState('')
 
   // Reset contextual view when Space changes
-  useEffect(() => { setActiveView('overview'); setSelectedRoom(null) }, [currentSpace?.id, setSelectedRoom])
+  useEffect(() => {
+    setActiveView('overview')
+    setSpaceSurface(null)
+    setSelectedRoom(null)
+  }, [currentSpace?.id, setSelectedRoom])
 
   // Network info
   useEffect(() => {
@@ -170,6 +177,7 @@ export default function AppShell({ account }) {
     if (currentRoom) leaveCall()
     setSelectedRoom(null)
     setActiveView('overview')
+    setSpaceSurface(null)
     const preview = spaceId ? spaces.find((s) => s.id === spaceId) : null
     await selectSpace(spaceId, preview ? { preview } : undefined)
   }, [currentRoom, leaveCall, selectSpace, setSelectedRoom, spaces])
@@ -233,6 +241,46 @@ export default function AppShell({ account }) {
   const panelVisible = !!currentSpace && !panelCollapsed
 
   // Peer context for VoiceRoomView
+  const browsingTextWhileInVoice = !!(
+    currentRoom
+    && selectedRoom
+    && selectedRoom.type !== 'voice'
+    && selectedRoom.id !== currentRoom.id
+  )
+  const browsingSpacePage = spaceSurface === 'overview' || spaceSurface === 'events'
+  const showVoiceFullscreen = !!(currentRoom && !browsingTextWhileInVoice && !browsingSpacePage)
+  const showTextRoom = !!(
+    selectedRoom
+    && selectedRoom.type !== 'voice'
+    && !browsingSpacePage
+    && (browsingTextWhileInVoice || !currentRoom)
+  )
+  const showSpacePage = !showVoiceFullscreen && !showTextRoom
+
+  const openSpaceView = useCallback((view) => {
+    setActiveView(view)
+    setSpaceSurface(view)
+    closeTextRoom()
+  }, [closeTextRoom])
+
+  const openRoomFocus = useCallback((room) => {
+    setSpaceSurface(null)
+    setActiveView('room')
+    selectRoom(room)
+  }, [selectRoom])
+
+  const returnToVoice = useCallback(() => {
+    setSpaceSurface(null)
+    setActiveView('room')
+    focusVoiceRoom()
+  }, [focusVoiceRoom])
+
+  const leaveTextToOverview = useCallback(() => {
+    closeTextRoom()
+    setActiveView('overview')
+    setSpaceSurface(null)
+  }, [closeTextRoom])
+
   const peer = useMemo(() => currentRoom && currentSpace ? {
     id: currentRoom.id,
     name: currentRoom.name,
@@ -242,11 +290,41 @@ export default function AppShell({ account }) {
     isCreator: currentRoom.createdBy === currentUserId,
   } : null, [currentRoom, currentSpace, currentUserId])
 
+  const [pendingNotifRoom, setPendingNotifRoom] = useState(null)
+
+  const handleOpenNotifTarget = useCallback(async ({ spaceId, roomId }) => {
+    if (!spaceId) return
+    if (roomId) setPendingNotifRoom({ spaceId, roomId })
+    if (currentSpace?.id !== spaceId) {
+      await handleSelectSpace(spaceId)
+    } else if (roomId) {
+      const found = (currentSpace.rooms || []).find((r) => r.id === roomId)
+      if (found) {
+        openRoomFocus(found)
+        setPendingNotifRoom(null)
+      }
+    }
+  }, [currentSpace, handleSelectSpace, openRoomFocus])
+
+  useEffect(() => {
+    if (!pendingNotifRoom || currentSpace?.id !== pendingNotifRoom.spaceId) return
+    const found = (currentSpace.rooms || []).find((r) => r.id === pendingNotifRoom.roomId)
+    if (!found) return
+    openRoomFocus(found)
+    setPendingNotifRoom(null)
+  }, [pendingNotifRoom, currentSpace, openRoomFocus])
+
   return (
+    <NotificationsProvider
+      userId={currentUserId}
+      spaces={visibleSpaces}
+      currentSpaceId={currentSpace?.id || null}
+      currentRoomId={selectedRoom?.id || currentRoom?.id || null}
+    >
     <div className="flex h-full min-h-0 bg-canvas overflow-hidden text-strong" style={rootTokens}>
       {/* Panel 1: Spaces rail */}
       <SpacesRail
-        compact={isMobile}
+        compact={compactRail}
         spaces={visibleSpaces}
         currentSpaceId={currentSpace?.id || null}
         switchingSpaceId={switchingSpaceId}
@@ -257,10 +335,13 @@ export default function AppShell({ account }) {
         accountOpen={showAccount}
         accountPhoto={accountProfile.profile.photoURL}
         accountName={accountProfile.profile.displayName}
+        notificationBell={
+          <NotificationBell placement="rail" onOpenTarget={handleOpenNotifTarget} />
+        }
       />
 
-      <div className="relative flex-1 min-w-0 flex">
-      <div className={`flex flex-1 min-w-0 ${showAccount ? 'invisible pointer-events-none absolute inset-0' : ''}`}>
+      <div className="relative flex-1 min-w-0 min-h-0 flex">
+      <div className={`flex flex-1 min-w-0 min-h-0 ${showAccount ? 'invisible pointer-events-none absolute inset-0' : ''}`}>
 
       {/* Panel 2: Space contextual panel — docked on wide screens,
           overlay drawer when the window (or phone) is too narrow. */}
@@ -285,11 +366,11 @@ export default function AppShell({ account }) {
             space={currentSpace}
             activeView={activeView}
             onChangeView={(view) => {
-              setActiveView(view)
+              openSpaceView(view)
               if (overlayNav) setPanelCollapsed(true)
             }}
             onSelectRoom={(room) => {
-              selectRoom(room)
+              openRoomFocus(room)
               if (overlayNav) setPanelCollapsed(true)
             }}
             onCreateRoom={() => setRoomEditor({ mode: 'create' })}
@@ -308,6 +389,9 @@ export default function AppShell({ account }) {
             onInvite={handleOpenInvite}
             onOpenSettings={() => setShowSettingsModal(true)}
             optimisticFirstRoom={optimisticFirstRoom}
+            voiceRoom={currentRoom}
+            onFocusVoice={returnToVoice}
+            onLeaveCall={leaveCall}
           />
         </div>
       )}
@@ -325,15 +409,13 @@ export default function AppShell({ account }) {
         </button>
       )}
 
-      {/* Floating re-open button for the right sidebar. When inside a
-          voice room, it re-opens the in-room activity sidebar; when
-          outside, it re-opens the generic PeoplePanel. */}
+      {/* Floating re-open button for the People panel. */}
       {!showAccount && peoplePanelCollapsed && currentSpace && (
         <button
           type="button"
           onClick={() => setPeoplePanelCollapsed(false)}
-          aria-label="Abrir painel lateral"
-          title="Abrir painel lateral"
+          aria-label="Abrir painel de pessoas"
+          title="Abrir painel de pessoas"
           className="absolute right-2 sm:right-3 top-2 sm:top-3 z-30 w-9 h-9 rounded-lg flex items-center justify-center bg-surface1/95 backdrop-blur border border-line text-ink/85 hover:text-strong hover:border-accent/40 transition-all shadow-lg"
         >
           <PanelRightOpen size={15} strokeWidth={1.75} />
@@ -347,7 +429,7 @@ export default function AppShell({ account }) {
 
       {/* Panel 3: Main area */}
       <main
-        className={`relative flex-1 min-w-0 flex flex-col bg-canvas overflow-hidden transition-opacity duration-200 ${
+        className={`relative flex-1 min-w-0 min-h-0 flex flex-col bg-canvas overflow-hidden transition-opacity duration-200 ${
           transitioning ? 'opacity-60' : 'opacity-100'
         }`}
       >
@@ -375,15 +457,16 @@ export default function AppShell({ account }) {
           </div>
         )}
 
-        <AnimatePresence mode="wait">
-          {currentRoom ? (
+        <AnimatePresence mode="sync">
+          {currentRoom && (
             <motion.div
-              key="voice"
+              key={`voice-${currentRoom.id}`}
               initial={{ opacity: 0, scale: 0.98 }}
-              animate={{ opacity: 1, scale: 1 }}
+              animate={{ opacity: showVoiceFullscreen ? 1 : 0, scale: 1 }}
               exit={{ opacity: 0, scale: 0.99 }}
               transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
-              className="absolute inset-0"
+              className={showVoiceFullscreen ? 'absolute inset-0' : 'absolute inset-0 invisible pointer-events-none'}
+              aria-hidden={!showVoiceFullscreen}
             >
               <ErrorBoundary key={currentRoom.id}>
                 <Suspense fallback={<ViewLoader />}>
@@ -398,22 +481,20 @@ export default function AppShell({ account }) {
                     onLeave={leaveCall}
                     onInvite={handleOpenInvite}
                     onStatusChange={setVoiceStatus}
-                    rightSidebarOpen={!peoplePanelCollapsed}
-                    sidebarOverlay={overlayPeople}
-                    onRightSidebarClose={() => setPeoplePanelCollapsed(true)}
-                    onRightSidebarOpen={() => setPeoplePanelCollapsed(false)}
                   />
                 </Suspense>
               </ErrorBoundary>
             </motion.div>
-          ) : selectedRoom && selectedRoom.type !== 'voice' ? (
+          )}
+
+          {showTextRoom && (
             <motion.div
               key={`conversation-${selectedRoom.id}`}
               initial={{ opacity: 0, x: 18 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -10 }}
               transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
-              className="absolute inset-0 flex flex-col min-h-0"
+              className="absolute inset-0 flex flex-col min-h-0 z-[1]"
             >
               <ErrorBoundary key={selectedRoom.id}>
                 <Suspense fallback={<ViewLoader />}>
@@ -424,20 +505,23 @@ export default function AppShell({ account }) {
                     currentUserId={currentUserId}
                     currentUserName={currentUserName}
                     members={spaceMembers}
-                    onClose={closeTextRoom}
+                    onClose={leaveTextToOverview}
                     onInvite={handleOpenInvite}
+                    voiceActive={!!currentRoom}
                   />
                 </Suspense>
               </ErrorBoundary>
             </motion.div>
-          ) : (
+          )}
+
+          {showSpacePage && (
             <motion.div
               key={`${activeView}-${currentSpace?.id || 'none'}`}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -4 }}
               transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-              className="absolute inset-0"
+              className="absolute inset-0 min-h-0 flex flex-col overflow-hidden z-[1]"
             >
               {activeView === 'events' && currentSpace ? (
                 <Suspense fallback={<ViewLoader />}>
@@ -451,11 +535,25 @@ export default function AppShell({ account }) {
                 <SpaceHome
                   space={currentSpace}
                   members={spaceMembers}
+                  spaces={visibleSpaces}
+                  accountName={accountProfile.profile.displayName}
+                  accountPhoto={accountProfile.profile.photoURL}
                   currentUserId={currentUserId}
                   currentUserName={currentUserName}
-                  onSelectRoom={selectRoom}
+                  onSelectRoom={openRoomFocus}
+                  onSelectSpace={handleSelectSpace}
                   onCreateRoom={() => setRoomEditor({ mode: 'create' })}
                   onCreateSpace={() => setShowSpaceCreator(true)}
+                  onOpenHub={() => setShowSpaceHub(true)}
+                  onOpenAccount={() => {
+                    setShowAccount(true)
+                    setAccountPage('profile')
+                  }}
+                  onOpenNotifTarget={handleOpenNotifTarget}
+                  onInvite={handleOpenInvite}
+                  onOpenEvents={() => openSpaceView('events')}
+                  onEditSpace={editSpace}
+                  isCreator={isCreator}
                   connected={connStatus === 'connected'}
                   hostname={hostname}
                   optimisticFirstRoom={optimisticFirstRoom}
@@ -466,12 +564,8 @@ export default function AppShell({ account }) {
         </AnimatePresence>
       </main>
 
-      {/* Panel 3.5: People (right). Suppressed when a voice room is open
-          because the VoiceRoomView renders its own `RoomActivitySidebar`
-          that takes this slot — having both would duplicate the same
-          list of people. For text rooms, the generic PeoplePanel is
-          still useful (the TextRoomView doesn't render its own). */}
-      {!peoplePanelCollapsed && !currentRoom && currentSpace && overlayPeople && (
+      {/* Panel 3.5: People (right) — same panel for voice and text. */}
+      {!peoplePanelCollapsed && currentSpace && overlayPeople && (
         <button
           type="button"
           aria-label="Fechar painel de pessoas"
@@ -479,7 +573,7 @@ export default function AppShell({ account }) {
           onClick={() => setPeoplePanelCollapsed(true)}
         />
       )}
-      {currentSpace && !peoplePanelCollapsed && !currentRoom && (
+      {currentSpace && !peoplePanelCollapsed && (
         <div
           key="people-panel"
           className={
@@ -581,6 +675,8 @@ export default function AppShell({ account }) {
         )}
       </AnimatePresence>
 
+      <UpdateToast />
+
       <Suspense fallback={null}>
         <ProfilePopover
           open={profile.open && !!profile.data?.member}
@@ -603,5 +699,6 @@ export default function AppShell({ account }) {
         />
       </Suspense>
     </div>
+    </NotificationsProvider>
   )
 }

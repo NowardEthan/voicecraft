@@ -1,41 +1,55 @@
 /**
- * SpaceHome — main-area landing page. Two faces:
- *
- *   1. No Space selected: rich welcome page (DESIGN_SYSTEM §7.1).
- *      Mic illustration, big "Bem-vindo ao VoiceCraft", "Criar meu primeiro
- *      Space" CTA, and a 3-step "Como funciona" walkthrough.
- *
- *   2. Space selected, no room: full-width Visão geral (DESIGN_SYSTEM §7.1).
- *      Space identity hero, "Acontecendo agora" featured cards, all rooms
- *      in a 2-column grid, and the people-online grid.
- *
- * Replaces the dead `MainPlaceholder` and the old `WelcomeView` from App.jsx.
- * Shares `RoomCard` / `SectionTitle` with the panel tab.
+ * SpaceHome — main-area landing page.
+ *   1. No Space + has Spaces: personal HomeView (mockup)
+ *   2. No Space + empty: welcome / first-run
+ *   3. Space selected: live dashboard (SpaceOverview)
  */
-import { useMemo } from 'react'
 import {
-  Plus, Users, Sparkles, Radio, MessageCircle, Mic,
-  Paintbrush, UserPlus, ArrowRight, Coffee,
+  Plus, Mic, Paintbrush, UserPlus, ArrowRight, Radio,
 } from 'lucide-react'
-import { RoomCard, SectionTitle } from './RoomCard'
-import EmptyState from '../../shared/ui/EmptyState'
-import { groupByPurpose } from '../../features/rooms'
-import { greetingFor, colorFromId, initialsOf, spaceTokens } from '../../features/spaces'
+import { spaceTokens } from '../../features/spaces'
 import SpaceOverview from './SpaceOverview'
+import HomeView from './HomeView'
 
 export default function SpaceHome({
   space,
   members = [],
+  spaces = [],
+  accountName,
+  accountPhoto,
   currentUserId,
   currentUserName,
   onSelectRoom,
+  onSelectSpace,
   onCreateRoom,
   onCreateSpace,
+  onOpenHub,
+  onOpenAccount,
+  onOpenNotifTarget,
+  onInvite,
+  onOpenEvents,
+  onEditSpace,
+  isCreator,
   connected,
   hostname,
   optimisticFirstRoom,
 }) {
   if (!space) {
+    if ((spaces || []).length > 0) {
+      return (
+        <HomeView
+          spaces={spaces}
+          accountName={accountName || currentUserName}
+          accountPhoto={accountPhoto}
+          onSelectSpace={onSelectSpace}
+          onCreateSpace={onCreateSpace}
+          onOpenHub={onOpenHub}
+          onOpenAccount={onOpenAccount}
+          onOpenNotifTarget={onOpenNotifTarget}
+          connected={connected}
+        />
+      )
+    }
     return (
       <WelcomeScreen
         onCreateSpace={onCreateSpace}
@@ -52,6 +66,10 @@ export default function SpaceHome({
       currentUserName={currentUserName}
       onSelectRoom={onSelectRoom}
       onCreateRoom={onCreateRoom}
+      onInvite={onInvite}
+      onOpenEvents={onOpenEvents}
+      onEditSpace={onEditSpace}
+      isCreator={isCreator}
       optimisticFirstRoom={optimisticFirstRoom}
     />
   )
@@ -63,7 +81,8 @@ export default function SpaceHome({
 // ======================================================================
 function WelcomeScreen({ onCreateSpace, connected, hostname }) {
   return (
-    <div className="flex-1 flex items-center justify-center p-6 sm:p-10 relative overflow-hidden bg-canvas">
+    <div className="h-full min-h-0 overflow-y-auto overscroll-contain bg-canvas">
+      <div className="relative min-h-full flex items-center justify-center p-5 sm:p-10 overflow-x-hidden">
       {/* Soft accent glow — uses tokens, never magic colors */}
       <div
         aria-hidden
@@ -76,7 +95,7 @@ function WelcomeScreen({ onCreateSpace, connected, hostname }) {
         style={{ background: 'var(--space-accent)', bottom: '5%', right: '8%' }}
       />
 
-      <div className="relative z-10 w-full max-w-2xl">
+      <div className="relative z-10 w-full max-w-2xl py-6">
         {/* Mic illustration */}
         <div className="flex justify-center mb-7">
           <MicIllustration />
@@ -87,7 +106,7 @@ function WelcomeScreen({ onCreateSpace, connected, hostname }) {
           <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-accent mb-3">
             Bem-vindo(a)
           </p>
-          <h1 className="text-[44px] sm:text-[52px] font-bold text-strong tracking-tight leading-[1.05]">
+          <h1 className="text-[34px] sm:text-[52px] font-bold text-strong tracking-tight leading-[1.05]">
             Bem-vindo ao{' '}
             <span className="bg-gradient-to-r from-accent to-[#ff8aa3] bg-clip-text text-transparent">
               VoiceCraft
@@ -153,7 +172,7 @@ function WelcomeScreen({ onCreateSpace, connected, hostname }) {
         </section>
 
         {/* Footer */}
-        <footer className="mt-14 pt-5 border-t border-line flex items-center justify-between text-[11.5px]">
+        <footer className="mt-10 sm:mt-14 pt-5 border-t border-line flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-[11.5px]">
           <p className="text-muted">
             Mais que um chat. Uma casa para a sua voz.
           </p>
@@ -170,6 +189,7 @@ function WelcomeScreen({ onCreateSpace, connected, hostname }) {
           />
           {connected ? (hostname || 'Conectado') : 'Conectando ao servidor…'}
         </div>
+      </div>
       </div>
     </div>
   )
@@ -290,13 +310,15 @@ function OverviewMain({
   currentUserName,
   onSelectRoom,
   onCreateRoom,
+  onInvite,
+  onOpenEvents,
+  onEditSpace,
+  isCreator,
   optimisticFirstRoom,
 }) {
-  // Delegate to the new SpaceOverview — same composition as the sidebar
-  // version but rendered in the main column with wider horizontal padding.
   return (
-    <div className="flex-1 overflow-y-auto bg-canvas" style={spaceTokens(space)}>
-      <div className="max-w-5xl mx-auto px-6 sm:px-10 py-6 sm:py-8">
+    <div className="h-full min-h-0 overflow-y-auto overscroll-contain bg-canvas" style={spaceTokens(space)}>
+      <div className="max-w-6xl mx-auto w-full px-3 sm:px-6 md:px-10 pt-12 sm:pt-6 md:pt-8 pb-6 sm:pb-8">
         <SpaceOverview
           space={space}
           members={members}
@@ -304,28 +326,13 @@ function OverviewMain({
           currentUserName={currentUserName}
           onSelectRoom={onSelectRoom}
           onCreateRoom={onCreateRoom}
+          onInvite={onInvite}
+          onOpenEvents={onOpenEvents}
+          onEditSpace={onEditSpace}
+          isCreator={isCreator}
           optimisticFirstRoom={optimisticFirstRoom}
         />
       </div>
     </div>
-  )
-}
-
-// ----------------------------------------------------------------------
-// Stat — small inline stat with icon.
-// ----------------------------------------------------------------------
-function Stat({ icon: Icon, label, tone = 'muted' }) {
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <Icon
-        size={12}
-        strokeWidth={1.75}
-        className={tone === 'positive' ? 'text-positive' : 'text-muted'}
-        aria-hidden
-      />
-      <span className={tone === 'positive' ? 'text-positive' : 'text-muted'}>
-        {label}
-      </span>
-    </span>
   )
 }

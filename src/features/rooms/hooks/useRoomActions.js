@@ -52,30 +52,47 @@ export function useRoomActions() {
     return off
   }, [sig])
 
+  const currentRoomRef = useRef(currentRoom)
+  currentRoomRef.current = currentRoom
+  const selectedRoomRef = useRef(selectedRoom)
+  selectedRoomRef.current = selectedRoom
+
   const selectRoom = useCallback((room) => {
     if (!room) {
       setSelectedRoom(null)
       return
     }
-    if (selectedRoom?.id === room.id) return
     // The optimistic first-room placeholder uses a synthetic id
-    // ('__optimistic__') that the server doesn't know about. The real
-    // room id arrives within ~100ms via roomChangedCallback('created');
-    // until then we ignore the click instead of sending enterRoom with
-    // a fake id (which the server rejects with "room não encontrada").
+    // ('__optimistic__') that the server doesn't know about.
     if (!room.id || room.id === '__optimistic__') return
-    setSelectedRoom(room)
+
+    const voice = currentRoomRef.current
+
+    // Voice room: join call (or return UI focus to the call you're already in).
     if (room.type === 'voice') {
+      setSelectedRoom(null)
+      if (voice?.id === room.id) return
       setTransitioning(true)
       sig.enterRoom?.(room.id)
-    } else {
+      return
+    }
+
+    // Text room: focus UI only. Never leave an active voice call.
+    if (selectedRoom?.id === room.id) return
+    setSelectedRoom(room)
+    if (!voice) {
       sig.enterRoom?.(room.id)
     }
   }, [selectedRoom, sig])
 
   const closeTextRoom = useCallback(() => {
     setSelectedRoom(null)
-  }, [])
+    // If we were only in a text room (not a voice call), leave that room membership.
+    const voice = currentRoomRef.current
+    if (!voice && sig.roomId) {
+      sig.leaveRoom?.()
+    }
+  }, [sig])
 
   const leaveCall = useCallback(() => {
     setTransitioning(true)
@@ -83,8 +100,18 @@ export function useRoomActions() {
     setTimeout(() => {
       setCurrentRoom(null)
       setTransitioning(false)
+      // Still browsing a text room? Join it now that the call ended.
+      const text = selectedRoomRef.current
+      if (text?.id && text.type !== 'voice') {
+        sig.enterRoom?.(text.id)
+      }
     }, 200)
   }, [sig])
+
+  /** Return to the voice room UI without re-joining. */
+  const focusVoiceRoom = useCallback(() => {
+    setSelectedRoom(null)
+  }, [])
 
   const createRoom = useCallback(async (purposeKey, nameArg) => {
     const purpose = typeof purposeKey === 'string' ? purposeKey : 'conversation'
@@ -140,6 +167,7 @@ export function useRoomActions() {
     selectRoom,
     closeTextRoom,
     leaveCall,
+    focusVoiceRoom,
     createRoom,
     updateRoom,
     deleteRoom,

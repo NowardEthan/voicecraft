@@ -15,8 +15,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getSharedSignaling } from '../../../shared/connection/useSignaling'
 import { flashToast } from '../../../shared/utils/toast'
 import { serializeSpaceIcon } from '../model/spaceIcons'
-import { markSpaceJoined, markSpaceLeft } from '../model/spacePreferences'
-import { clearSpaceCover } from '../model/spaceCover'
+import { markSpaceJoined, markSpaceLeft, markSpaceVisited } from '../model/spacePreferences'
+import { clearSpaceCover, setSpaceCover } from '../model/spaceCover'
 
 // Map a UI purpose key to the backend's binary 'voice' | 'text' discriminator.
 // All non-voice purposes ride on type='text' plus an explicit `purpose` field.
@@ -25,14 +25,18 @@ function backendTypeForPurpose(purposeKey) {
 }
 
 function enrichMembers(members, space) {
-  return (members || []).map(m => {
+  const seen = new Set()
+  const out = []
+  for (const m of members || []) {
     const isString = typeof m === 'string'
     const uid = isString ? m : m.userId
+    if (!uid || seen.has(uid)) continue
+    seen.add(uid)
     const loc = (isString ? null : m.location) || null
     const roomName = loc?.roomId && space?.rooms
       ? space.rooms.find(r => r.id === loc.roomId)?.name
       : null
-    return {
+    out.push({
       userId: uid,
       displayName: isString ? null : m.displayName,
       photoURL: isString ? '' : (m.photoURL || ''),
@@ -49,14 +53,16 @@ function enrichMembers(members, space) {
       location: loc,
       roomName,
       status: isString ? null : (m.status || m.statusText || null),
-    }
-  })
+    })
+  }
+  return out
 }
 
 function applySelfProfile(members, self) {
-  if (!self?.uid) return members
+  const selfId = self?.uid
+  if (!selfId) return members
   return members.map((m) => {
-    if (m.userId !== self.uid) return m
+    if (m.userId !== selfId) return m
     return {
       ...m,
       displayName: self.displayName || m.displayName,
@@ -126,7 +132,9 @@ export function useCurrentSpace(selfProfile = null) {
       })
     })
     const offLeft    = sig.onMemberLeft((msg) => {
-      setSpaceMembers(prev => prev.map(m => m.userId === msg.userId ? { ...m, online: false } : m))
+      setSpaceMembers(prev => prev.map(m => m.userId === msg.userId
+        ? { ...m, online: false, location: null, roomName: null }
+        : m))
     })
     const offStatus  = sig.onMemberStatus((msg) => {
       setSpaceMembers(prev => prev.map(m => m.userId === msg.userId
@@ -135,15 +143,21 @@ export function useCurrentSpace(selfProfile = null) {
     })
     const offPresence = sig.onPresenceChanged?.((info) => {
       const map = info?.presence || {}
+      const mapKeys = Object.keys(map)
+      // Empty snapshot during RTDB reconnect must not wipe everyone's status.
+      if (mapKeys.length === 0) return
       setSpaceMembers((prev) => prev.map((m) => {
         const p = map[m.userId]
-        if (!p) return { ...m, online: false }
+        if (!p) {
+          // Absent from a non-empty map → they have no live presence node.
+          return { ...m, online: false, location: null, roomName: null }
+        }
         return {
           ...m,
           online: !!p.online,
           location: p.online
             ? { spaceId: info.spaceId, roomId: p.roomId || null }
-            : (m.location?.roomId ? null : m.location),
+            : null,
           roomName: p.online && p.roomId
             ? (currentSpaceRef.current?.rooms || []).find((r) => r.id === p.roomId)?.name || m.roomName
             : null,
@@ -238,6 +252,7 @@ export function useCurrentSpace(selfProfile = null) {
       if (pendingSpaceTokenRef.current !== spaceId) return
       pendingSpaceTokenRef.current = 0
       markSpaceJoined(spaceId)
+      markSpaceVisited(spaceId)
       setCurrentSpace(full)
       setSpaceMembers(enrichMembers(full.members || [], full))
       setOptimisticFirstRoom(null)
@@ -271,12 +286,34 @@ export function useCurrentSpace(selfProfile = null) {
     return id
   }, [sig, currentSpace?.id])
 
-  const editSpace = useCallback((updates) => {
+  const editSpace = useCallback(async (updates) => {
     if (!currentSpace) return
     const next = { ...updates }
     if (next.icon != null) next.icon = serializeSpaceIcon(next.icon)
-    sig.updateSpace?.(currentSpace.id, next)
-    setCurrentSpace(prev => prev ? { ...prev, ...next } : prev)
+    try {
+      const applied = await sig.updateSpace?.(currentSpace.id, next)
+      const merged = { ...next, ...(applied || {}) }
+      // If Storage upload failed/returned null, keep the data-URL locally.
+      if (
+        typeof updates.cover === 'string'
+        && updates.cover.startsWith('data:image/')
+        && !merged.cover
+      ) {
+        setSpaceCover(currentSpace.id, updates.cover)
+        merged.cover = updates.cover
+      } else if (typeof merged.cover === 'string' && /^https?:\/\//.test(merged.cover)) {
+        clearSpaceCover(currentSpace.id)
+      }
+      setCurrentSpace((prev) => (prev ? { ...prev, ...merged } : prev))
+      return merged
+    } catch (err) {
+      // Still apply identity fields locally; keep cover in localStorage.
+      if (typeof updates.cover === 'string' && updates.cover.startsWith('data:image/')) {
+        setSpaceCover(currentSpace.id, updates.cover)
+      }
+      setCurrentSpace((prev) => (prev ? { ...prev, ...next } : prev))
+      throw err
+    }
   }, [currentSpace, sig])
 
   const createSpace = useCallback(async ({ name, description, icon, color, cover, coverFit, themeId, firstRoom }) => {

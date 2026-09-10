@@ -32,6 +32,7 @@ import {
   attachUserPresence,
   attachSpacePresence,
   listenSpacePresence,
+  isPresenceLastFresh,
 } from '../firebase/presence'
 
 const ONLINE_MS = 45_000
@@ -136,6 +137,11 @@ function toRoomView(id, data = {}) {
     purpose: data.purpose || (data.type === 'voice' ? 'voice' : 'conversation'),
     createdBy: data.createdBy || null,
     createdAt: data.createdAt || Date.now(),
+    lastMessageAt: data.lastMessageAt || null,
+    lastMessageId: data.lastMessageId || null,
+    lastMessagePreview: data.lastMessagePreview || '',
+    lastAuthorId: data.lastAuthorId || null,
+    lastAuthorName: data.lastAuthorName || '',
   }
 }
 
@@ -148,6 +154,7 @@ function toSpaceSummary(id, data = {}, joined = true) {
     id,
     name: data.name || 'sem nome',
     description: data.description || '',
+    slogan: data.slogan || '',
     icon: data.icon || 'ph:users-three:outline',
     color: data.color || '#E74C3C',
     cover: data.cover || null,
@@ -246,16 +253,36 @@ export class SignalingClient {
     }
   }
 
-  _loadDisplayName() {
+  _loadDisplayName(uid = null) {
     try {
-      const cached = localStorage.getItem('voicecraft:displayName')
-      if (cached) return cached
+      const keyed = uid ? localStorage.getItem(`voicecraft:displayName:${uid}`) : null
+      if (keyed) return keyed
+      // Legacy global key — only adopt once, then migrate under this uid.
+      const legacy = localStorage.getItem('voicecraft:displayName')
+      if (legacy && uid) {
+        localStorage.setItem(`voicecraft:displayName:${uid}`, legacy)
+        try { localStorage.removeItem('voicecraft:displayName') } catch {}
+        return legacy
+      }
+      if (legacy && !uid) return legacy
       const name = friendlyName()
-      localStorage.setItem('voicecraft:displayName', name)
+      if (uid) localStorage.setItem(`voicecraft:displayName:${uid}`, name)
+      else localStorage.setItem('voicecraft:displayName', name)
       return name
     } catch {
       return friendlyName()
     }
+  }
+
+  _storeDisplayName(name) {
+    try {
+      if (this.userId) {
+        localStorage.setItem(`voicecraft:displayName:${this.userId}`, name)
+        try { localStorage.removeItem('voicecraft:displayName') } catch {}
+      } else {
+        localStorage.setItem('voicecraft:displayName', name)
+      }
+    } catch { /* ignore */ }
   }
 
   _clear(list) {
@@ -298,7 +325,7 @@ export class SignalingClient {
         throw new Error('Entre na sua conta para continuar.')
       }
       this.userId = user.uid
-      this.displayName = user.displayName || this._loadDisplayName()
+      this.displayName = user.displayName || this._loadDisplayName(user.uid)
       if (!user.displayName && this.displayName) {
         try { await updateProfile(user, { displayName: this.displayName }) } catch {}
       }
@@ -374,8 +401,16 @@ export class SignalingClient {
   }
 
   _bindSpacePresence(spaceId) {
+    if (this._presenceFreshTimer) {
+      clearInterval(this._presenceFreshTimer)
+      this._presenceFreshTimer = null
+    }
     if (this._spacePresenceOff) {
-      try { this._spacePresenceOff() } catch {}
+      try {
+        // Full dispose only when leaving the space or switching spaces.
+        if (typeof this._spacePresenceOff === 'function') this._spacePresenceOff()
+        else this._spacePresenceOff.dispose?.(true)
+      } catch {}
       this._spacePresenceOff = null
     }
     if (this._spacePresenceListenOff) {
@@ -384,30 +419,74 @@ export class SignalingClient {
     }
     if (!this.userId || !spaceId) return
 
-    this._spacePresenceOff = attachSpacePresence(this.userId, spaceId, this.roomId || null)
-    this._spacePresenceListenOff = listenSpacePresence(spaceId, (map) => {
+    const handle = attachSpacePresence(this.userId, spaceId, this.roomId || null)
+    this._spacePresenceOff = handle
+
+    const applyPresenceMap = (map) => {
       this._presenceByUser = map
       if (this._spaceCache?.members) {
         const members = this._spaceCache.members.map((m) => {
           const p = map[m.userId]
-          if (!p) return { ...m, online: false }
+          if (!p) {
+            // Keep last known status for members not yet in the map —
+            // an empty/partial snapshot during reconnect must not wipe everyone.
+            return m
+          }
           return {
             ...m,
             online: !!p.online,
             location: p.online
               ? { spaceId, roomId: p.roomId || null }
-              : m.location,
+              : null,
           }
         })
         this._spaceCache = { ...this._spaceCache, members }
       }
       this._emit('presenceChanged', { spaceId, presence: map })
-    })
+    }
+
+    this._spacePresenceListenOff = listenSpacePresence(spaceId, applyPresenceMap)
+
+    // Re-evaluate freshness locally so stale "online" expires even if RTDB
+    // is quiet (common when Electron throttles the socket briefly).
+    if (this._presenceFreshTimer) {
+      clearInterval(this._presenceFreshTimer)
+      this._presenceFreshTimer = null
+    }
+    this._presenceFreshTimer = setInterval(() => {
+      const prev = this._presenceByUser || {}
+      if (!Object.keys(prev).length) return
+      const next = {}
+      let changed = false
+      Object.keys(prev).forEach((uid) => {
+        const row = prev[uid]
+        const online = !!row.online && isPresenceLastFresh(row.lastChanged)
+        if (online !== !!row.online) changed = true
+        next[uid] = { ...row, online }
+      })
+      if (changed) applyPresenceMap(next)
+    }, 15_000)
+  }
+
+  _updateSpacePresenceRoom() {
+    const handle = this._spacePresenceOff
+    if (handle && typeof handle.setRoomId === 'function') {
+      handle.setRoomId(this.roomId || null)
+      return
+    }
+    if (this.spaceId) this._bindSpacePresence(this.spaceId)
   }
 
   _clearSpacePresence() {
+    if (this._presenceFreshTimer) {
+      clearInterval(this._presenceFreshTimer)
+      this._presenceFreshTimer = null
+    }
     if (this._spacePresenceOff) {
-      try { this._spacePresenceOff() } catch {}
+      try {
+        if (typeof this._spacePresenceOff === 'function') this._spacePresenceOff()
+        else this._spacePresenceOff.dispose?.(true)
+      } catch {}
       this._spacePresenceOff = null
     }
     if (this._spacePresenceListenOff) {
@@ -484,9 +563,10 @@ export class SignalingClient {
     }))
 
     this._spaceUnsubs.push(onSnapshot(membersCol(spaceId), (snap) => {
-      // Prefer the fresh member doc. Only keep enrichment fields (e.g. createdAt)
-      // from the previous cache when the snapshot omits them — never let stale
-      // cache overwrite profile cosmetics like cardThemeId / cover.
+      // Prefer the fresh member doc, but never let empty cosmetics wipe
+      // values already enriched from vc_users.
+      const pick = (a, b, fallback = '') =>
+        (a != null && a !== '' ? a : (b != null && b !== '' ? b : fallback))
       const members = snap.docs.map((d) => {
         const view = toMemberView(d.id, d.data())
         const prev = this._spaceCache?.members?.find((m) => m.userId === d.id)
@@ -494,12 +574,24 @@ export class SignalingClient {
         return {
           ...prev,
           ...view,
+          displayName: pick(view.displayName, prev.displayName, view.displayName),
+          photoURL: pick(view.photoURL, prev.photoURL, ''),
+          handle: pick(view.handle, prev.handle, ''),
+          bio: pick(view.bio, prev.bio, ''),
+          statusText: pick(view.statusText, prev.statusText, ''),
+          cover: pick(view.cover, prev.cover, ''),
+          coverFit: view.coverFit || prev.coverFit || null,
+          bannerHue: view.bannerHue ?? prev.bannerHue ?? null,
+          cardThemeId: pick(view.cardThemeId, prev.cardThemeId, 'default'),
           createdAt: view.createdAt || prev.createdAt || null,
         }
       })
       if (this._spaceCache) this._spaceCache = { ...this._spaceCache, members, memberCount: members.length }
       if (!membersReady) {
         membersReady = true
+        // Push enriched list into UI — first snapshot used to skip emits and
+        // left the shell on optimistic / photo-stripped members.
+        this._emit('spaceChanged', { space: this._spaceCache, updated: true })
         return
       }
       snap.docChanges().forEach((change) => {
@@ -673,10 +765,64 @@ export class SignalingClient {
       presenceWrite,
     ])
 
+    // Drop orphan member docs + prior-auth ghosts that share this account email.
+    const canonicalIds = new Set(memberIds)
+    if (this.userId) canonicalIds.add(this.userId)
+    if (canonicalIds.size > 0) {
+      try {
+        await this._reconcileMemberDocs(spaceId, canonicalIds)
+      } catch (err) {
+        console.warn('[joinSpace] reconcile', err)
+      }
+    }
+
+    const fresh = await this._hydrateSpace(spaceId, null, { enrichUsers: true }).catch(() => space)
+
     this._attachSpaceListeners(spaceId)
     this._bindSpacePresence(spaceId)
-    this._emit('spaceChanged', { space, currentSpace: space, currentRoom: null })
-    return { space }
+    this._emit('spaceChanged', { space: fresh, currentSpace: fresh, currentRoom: null })
+    return { space: fresh }
+  }
+
+  /**
+   * Remove members/* not listed in memberIds, and any other member whose
+   * vc_users.email matches the current account (leftover Auth UID after
+   * Google/email re-login with the same person).
+   */
+  async _reconcileMemberDocs(spaceId, canonicalIds) {
+    const snap = await getDocs(membersCol(spaceId))
+    const myEmail = (auth.currentUser?.email || '').trim().toLowerCase()
+    const toDelete = []
+
+    for (const d of snap.docs) {
+      if (!canonicalIds.has(d.id)) {
+        toDelete.push(d.id)
+        continue
+      }
+      if (!myEmail || d.id === this.userId) continue
+      try {
+        const userSnap = await getDoc(doc(db, VC.users, d.id))
+        const email = String(userSnap.data()?.email || '').trim().toLowerCase()
+        if (email && email === myEmail) toDelete.push(d.id)
+      } catch { /* ignore */ }
+    }
+
+    if (toDelete.length === 0) return
+
+    const unique = [...new Set(toDelete)].slice(0, 40)
+    const spaceSnap = await getDoc(spaceRef(spaceId))
+    const createdBy = spaceSnap.data()?.createdBy
+    const claimOwner = !!(createdBy && unique.includes(createdBy) && this.userId)
+
+    const batch = writeBatch(db)
+    unique.forEach((uid) => {
+      batch.delete(memberRef(spaceId, uid))
+    })
+    batch.update(spaceRef(spaceId), {
+      memberIds: arrayRemove(...unique),
+      ...(claimOwner ? { createdBy: this.userId } : {}),
+    })
+    await batch.commit()
   }
 
   async leaveSpace(spaceId) {
@@ -744,6 +890,7 @@ export class SignalingClient {
     const next = {}
     if (typeof updates.name === 'string') next.name = updates.name.slice(0, 64).trim()
     if (typeof updates.description === 'string') next.description = updates.description.slice(0, 256)
+    if (typeof updates.slogan === 'string') next.slogan = updates.slogan.slice(0, 80)
     if (typeof updates.icon === 'string') next.icon = updates.icon.slice(0, 80)
     if (typeof updates.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(updates.color)) next.color = updates.color
     if (Array.isArray(updates.events)) next.events = updates.events
@@ -755,8 +902,13 @@ export class SignalingClient {
     } else if (typeof updates.cover === 'string') {
       next.cover = await uploadSpaceCover(id, updates.cover)
     }
-    if (Object.keys(next).length === 0) return
+    if (Object.keys(next).length === 0) return next
     await updateDoc(spaceRef(id), next)
+    if (this._spaceCache?.id === id) {
+      this._spaceCache = { ...this._spaceCache, ...next }
+      this._emit('spaceChanged', { space: this._spaceCache, updated: true })
+    }
+    return next
   }
 
   async createRoom(name, type = 'voice', purpose) {
@@ -826,7 +978,7 @@ export class SignalingClient {
     await setDoc(memberRef(this.spaceId, this.userId), {
       location: { spaceId: this.spaceId, roomId },
     }, { merge: true })
-    this._bindSpacePresence(this.spaceId)
+    this._updateSpacePresenceRoom()
     this._attachRoomListeners(this.spaceId, roomId)
     const peersSnap = await getDocs(peersCol(this.spaceId, roomId))
     const room = toRoomView(roomId, snap.data())
@@ -852,7 +1004,7 @@ export class SignalingClient {
     } catch {}
     this._clear(this._roomUnsubs)
     this.roomId = null
-    this._bindSpacePresence(this.spaceId)
+    this._updateSpacePresenceRoom()
     this._emit('roomChanged', { kind: 'left' })
   }
 
@@ -898,19 +1050,41 @@ export class SignalingClient {
     this._emit('cameraState', { active: !!active, userId: this.userId })
   }
 
-  async uploadChatFile(file) {
-    if (!this.spaceId || !this.roomId || !file) return null
-    return uploadChatFile(this.spaceId, this.roomId, file)
+  async uploadChatFile(file, roomId = null) {
+    const rid = roomId || this.roomId
+    if (!this.spaceId || !rid || !file) return null
+    return uploadChatFile(this.spaceId, rid, file)
   }
 
-  async sendChatMessage(message) {
-    if (!this.spaceId || !this.roomId || !message) return
+  async sendChatMessage(message, roomId = null) {
+    const rid = roomId || this.roomId
+    if (!this.spaceId || !rid || !message) return
     const clean = JSON.parse(JSON.stringify({
       ...message,
       authorId: this.userId,
       ts: message.ts || Date.now(),
     }))
-    await addDoc(messagesCol(this.spaceId, this.roomId), clean)
+    const docRef = await addDoc(messagesCol(this.spaceId, rid), clean)
+    const preview = String(clean.text || clean.attachment?.name || 'Anexo').slice(0, 140)
+    try {
+      await updateDoc(roomRef(this.spaceId, rid), {
+        lastMessageAt: clean.ts,
+        lastMessageId: docRef.id,
+        lastMessagePreview: preview,
+        lastAuthorId: this.userId,
+        lastAuthorName: clean.author || this.displayName || 'alguém',
+      })
+    } catch (err) {
+      console.warn('[sendChatMessage] lastMessage', err)
+    }
+  }
+
+  /** Lightweight rooms listener for unread badges (all rooms in a Space). */
+  listenSpaceRooms(spaceId, cb) {
+    if (!spaceId || typeof cb !== 'function') return () => {}
+    return onSnapshot(roomsCol(spaceId), (snap) => {
+      cb(snap.docs.map((d) => toRoomView(d.id, d.data())))
+    }, (err) => console.warn('[listenSpaceRooms]', err))
   }
 
   listenChat(spaceId, roomId, cb) {
@@ -945,7 +1119,7 @@ export class SignalingClient {
     if (!this.userId) return
     if (patch.displayName) {
       this.displayName = String(patch.displayName || '').slice(0, 64) || this.displayName
-      try { localStorage.setItem('voicecraft:displayName', this.displayName) } catch {}
+      try { this._storeDisplayName(this.displayName) } catch {}
     }
     this._profile = {
       ...this._profile,

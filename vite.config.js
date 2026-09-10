@@ -14,6 +14,10 @@ export default defineConfig({
           build: {
             sourcemap: true,
             outDir: 'dist-electron',
+            rollupOptions: {
+              // Keep native/runtime package out of the main bundle.
+              external: ['electron-updater'],
+            },
           },
         },
       },

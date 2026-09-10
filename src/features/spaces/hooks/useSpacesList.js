@@ -13,6 +13,7 @@ function toSummary(s) {
     id: s.id,
     name: s.name,
     description: s.description,
+    slogan: s.slogan || '',
     icon: s.icon,
     color: s.color,
     cover: s.cover || null,

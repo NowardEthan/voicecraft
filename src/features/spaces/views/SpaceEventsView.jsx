@@ -40,8 +40,8 @@ export default function SpaceEventsView({ space, onEditSpace, isCreator }) {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto bg-canvas" style={spaceTokens(space)}>
-      <div className="max-w-3xl mx-auto px-6 sm:px-10 py-8">
+    <div className="h-full min-h-0 overflow-y-auto overscroll-contain bg-canvas" style={spaceTokens(space)}>
+      <div className="max-w-3xl mx-auto px-4 sm:px-10 pt-12 sm:pt-8 pb-8">
         <div className="flex items-center gap-3 mb-6">
           <div className="w-11 h-11 rounded-2xl bg-accent/15 text-accent flex items-center justify-center">
             <Calendar size={18} />

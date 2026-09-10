@@ -241,7 +241,7 @@ export default function PeoplePanel({
       </div>
 
       {/* List */}
-      <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2">
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 pb-2">
         {memberCount === 0 ? (
           <p className="text-[12px] text-muted text-center px-4 py-6">
             Ninguém no Space ainda.

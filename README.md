@@ -34,9 +34,30 @@ npm install
 # Desenvolvimento
 npm run dev
 
-# Build para produção
-npm run build
+# Build para produção (sem publicar release)
+npm run electron:build
+
+# Publicar release no GitHub (local; CI faz isso em tags v*)
+npm run release
 ```
+
+### Releases e auto-update
+
+Diretrizes completas (SemVer, checklist, CI): [`docs/RELEASE_PROCESS.md`](docs/RELEASE_PROCESS.md)
+(resumo: [`RELEASING.md`](RELEASING.md)).
+
+Resumo:
+
+```bash
+npm version patch   # ou minor / major
+git push && git push --tags
+```
+
+O workflow **Release** gera o NSIS e publica em
+[GitHub Releases](https://github.com/NowardEthan/voicecraft/releases).
+Apps instalados atualizam sozinhos (mini notificação + Configurações).
+
+> Sem assinatura de código no Windows o SmartScreen pode avisar na primeira instalação — normal no início.
 
 ## 🎮 Uso
 

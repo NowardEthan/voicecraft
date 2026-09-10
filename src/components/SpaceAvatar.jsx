@@ -6,6 +6,8 @@ const FALLBACK_COLORS = ['#0A84FF', '#E91E63', '#9B59B6', '#1ABC9C', '#F1C40F', 
 /**
  * SpaceAvatar — identity badge of a Space. Always color + icon.
  * Cover photos are wallpaper/theme only and never replace this badge.
+ * Ring lives on the outer box (no overflow:hidden) so it is never clipped
+ * by the avatar itself; parents must leave a few px of padding.
  */
 export default function SpaceAvatar({
   space,
@@ -28,20 +30,26 @@ export default function SpaceAvatar({
     return FALLBACK_COLORS[h % FALLBACK_COLORS.length]
   }, [space?.color, space?.id])
 
+  const surface = identitySurfaceStyle(color)
   const ringClass = withRing
-    ? 'ring-2 ring-white ring-offset-2 ring-offset-[#0d0d0e]'
+    ? 'ring-2 ring-white ring-offset-1 ring-offset-rail'
     : ''
 
   return (
     <div
-      className={`relative shrink-0 overflow-hidden flex items-center justify-center transition-all duration-200 ${radiusClass} ${ringClass} ${className}`}
+      className={`relative shrink-0 flex items-center justify-center transition-all duration-200 ${radiusClass} ${ringClass} ${className}`}
       style={{
         width: size,
         height: size,
-        ...identitySurfaceStyle(color),
+        color: surface.color,
       }}
       aria-label={space?.name}
     >
+      <span
+        className={`absolute inset-0 ${radiusClass} overflow-hidden pointer-events-none`}
+        style={surface}
+        aria-hidden
+      />
       <SpaceIcon
         value={iconValue}
         size={Math.round(size * 0.5)}

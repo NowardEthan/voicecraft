@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Settings store
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
+  getGpuInfo: () => ipcRenderer.invoke('system:get-gpu-info'),
 
   // File logging
   log: (level, msg) => ipcRenderer.invoke('app:log', level, msg),
@@ -15,12 +16,37 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Paths
   getPaths: () => ipcRenderer.invoke('app:get-paths'),
 
+  // Custom title bar / frameless window
+  windowControls: {
+    minimize: () => ipcRenderer.invoke('window:minimize'),
+    maximize: () => ipcRenderer.invoke('window:maximize'),
+    close: () => ipcRenderer.invoke('window:close'),
+    isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
+    onMaximized: (cb) => {
+      const handler = (_e, maximized) => cb(!!maximized)
+      ipcRenderer.on('window:maximized', handler)
+      return () => ipcRenderer.removeListener('window:maximized', handler)
+    },
+  },
+
   startGoogleAuth: () => ipcRenderer.invoke('auth:google-start'),
   cancelGoogleAuth: () => ipcRenderer.invoke('auth:google-cancel'),
   onGoogleAuthResult: (cb) => {
     const handler = (_e, payload) => cb(payload)
     ipcRenderer.on('auth:google-result', handler)
     return () => ipcRenderer.removeListener('auth:google-result', handler)
+  },
+
+  // Auto-update (packaged builds only)
+  updater: {
+    getVersion: () => ipcRenderer.invoke('updater:get-version'),
+    check: () => ipcRenderer.invoke('updater:check'),
+    install: () => ipcRenderer.invoke('updater:install'),
+    onStatus: (cb) => {
+      const handler = (_e, payload) => cb(payload)
+      ipcRenderer.on('updater:status', handler)
+      return () => ipcRenderer.removeListener('updater:status', handler)
+    },
   },
 
   // Audio service (C++ child process)

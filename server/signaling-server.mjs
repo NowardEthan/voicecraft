@@ -371,6 +371,9 @@ wss.on('connection', (ws) => {
         if (typeof msg.description === 'string') {
           updates.description = msg.description.slice(0, 256)
         }
+        if (typeof msg.slogan === 'string') {
+          updates.slogan = msg.slogan.slice(0, 80)
+        }
         if (typeof msg.icon === 'string') {
           updates.icon = msg.icon.slice(0, 80)
         }

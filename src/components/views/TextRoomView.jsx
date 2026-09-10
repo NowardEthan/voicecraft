@@ -23,6 +23,7 @@ export default function ConversationRoom({
   members = [],
   onClose,
   onInvite,
+  voiceActive = false,
 }) {
   const purpose = purposeOf(room)
   const Icon = purpose.icon
@@ -32,6 +33,8 @@ export default function ConversationRoom({
     roomId: room?.id,
     currentUserId,
     roomCreatedBy: room?.createdBy,
+    // Firestore chat works without DataChannel; avoid stealing voice signals.
+    enabled: !voiceActive,
   })
 
   const roomKey = room ? `${space?.id || 'nospace'}:${room.id}` : null
@@ -117,15 +120,15 @@ export default function ConversationRoom({
       style={tokens}
     >
       <header
-        className="relative shrink-0 z-20 px-4 sm:px-6 py-3.5 border-b border-white/[0.06]"
+        className="@container relative shrink-0 z-20 px-3 sm:px-6 py-3 sm:py-3.5 border-b border-white/[0.06]"
         style={{
           background:
             'linear-gradient(180deg, color-mix(in srgb, var(--space-accent) 20%, #15171d) 0%, color-mix(in srgb, var(--space-accent) 6%, #12141a) 70%, #12141a 100%)',
         }}
       >
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <div
-            className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0"
+            className="w-10 h-10 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center shrink-0"
             style={{
               backgroundColor: 'var(--space-accent-soft)',
               color: 'var(--space-accent)',
@@ -134,17 +137,17 @@ export default function ConversationRoom({
             <Icon size={20} strokeWidth={1.75} />
           </div>
 
-          <div className="flex-1 min-w-0">
-            <h1 className="text-[18px] sm:text-[20px] font-bold text-strong tracking-tight truncate">
+          <div className={`min-w-0 ${searchOpen ? 'hidden @[480px]:block flex-1' : 'flex-1'}`}>
+            <h1 className="text-[16px] sm:text-[20px] font-bold text-strong tracking-tight truncate">
               {room.name}
             </h1>
-            <p className="text-[12px] text-muted truncate mt-0.5">
+            <p className="text-[11px] sm:text-[12px] text-muted truncate mt-0.5 hidden @[380px]:block">
               {purpose.description}
             </p>
           </div>
 
           {searchOpen ? (
-            <div className="flex items-center gap-2 min-w-0 w-[min(280px,42vw)] px-3 h-9 rounded-full bg-surface1 border border-line focus-within:border-accent/50">
+            <div className="flex items-center gap-2 min-w-0 flex-1 @[480px]:flex-none @[480px]:w-[min(280px,42vw)] px-3 h-9 rounded-full bg-surface1 border border-line focus-within:border-accent/50">
               <Search size={13} className="text-muted shrink-0" />
               <input
                 autoFocus
@@ -164,7 +167,7 @@ export default function ConversationRoom({
             </div>
           ) : (
             <>
-              <div className="hidden sm:flex items-center gap-2.5 shrink-0">
+              <div className="hidden @[640px]:flex items-center gap-2.5 shrink-0">
                 <ParticipantStack members={onlineMembers} selfId={currentUserId} />
                 {onlineCount > 0 && (
                   <span className="text-[12px] text-muted tabular-nums whitespace-nowrap">
@@ -185,13 +188,15 @@ export default function ConversationRoom({
             </>
           )}
 
-          <ChatDensityMenu
-            value={density}
-            onChange={(next) => {
-              setDensity(next)
-              writeChatDensity(next)
-            }}
-          />
+          <div className="hidden @[520px]:block shrink-0">
+            <ChatDensityMenu
+              value={density}
+              onChange={(next) => {
+                setDensity(next)
+                writeChatDensity(next)
+              }}
+            />
+          </div>
 
           <button
             type="button"
@@ -215,7 +220,19 @@ export default function ConversationRoom({
               <MoreHorizontal size={16} strokeWidth={1.75} />
             </button>
             {headerMenuOpen && (
-              <div className="absolute right-0 top-full mt-1 z-30 w-40 py-1 rounded-xl bg-surface1 border border-line shadow-2xl vc-anim-fade-in-up">
+              <div className="absolute right-0 top-full mt-1 z-30 w-44 py-1 rounded-xl bg-surface1 border border-line shadow-2xl vc-anim-fade-in-up">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = density === 'compact' ? 'comfy' : 'compact'
+                    setHeaderMenuOpen(false)
+                    setDensity(next)
+                    writeChatDensity(next)
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-[12px] text-ink hover:bg-surface2 hover:text-strong @[520px]:hidden"
+                >
+                  Densidade: {density === 'compact' ? 'Compacta' : 'Confortável'}
+                </button>
                 <button
                   type="button"
                   onClick={() => { setHeaderMenuOpen(false); onClose?.() }}

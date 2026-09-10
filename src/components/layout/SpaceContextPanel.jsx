@@ -27,6 +27,8 @@ import { resolveSpaceCover, spaceTokens } from '../../features/spaces'
 import { SpaceCoverLayer } from '../../features/spaces/components/SpaceCoverLayer'
 import SpaceSettingsModal from '../../features/spaces/components/SpaceSettingsModal'
 import { PURPOSE_BY_KEY } from '../../features/rooms'
+import { useNotifications, RoomUnreadPill } from '../../features/notifications'
+import VoiceActiveBar from '../../features/rooms/views/voice/components/VoiceActiveBar'
 
 const NAV_ITEMS = [
   { key: 'overview', label: 'Visão geral', icon: LayoutGrid },
@@ -54,6 +56,9 @@ export default function SpaceContextPanel({
   onCollapse,
   onOpenSettings,
   optimisticFirstRoom,
+  voiceRoom = null,
+  onFocusVoice,
+  onLeaveCall,
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [menuPos, setMenuPos] = useState(null)  // { top, right } in viewport coords
@@ -62,6 +67,7 @@ export default function SpaceContextPanel({
   // and rendered as a modal at the bottom of this component.
   const [spaceSettingsOpen, setSpaceSettingsOpen] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState(null)
+  const { unreadByRoom, roomKey } = useNotifications()
   const menuRef = useRef(null)        // the gear button (toggle)
   const popoverRef = useRef(null)     // the portal-rendered popover
 
@@ -144,30 +150,33 @@ export default function SpaceContextPanel({
       style={tokens}
     >
       {/* === Space identity banner (compact) === */}
-      <div className="relative shrink-0 overflow-hidden border-b border-line">
-        {cover ? (
-          <SpaceCoverLayer src={cover} fit={space.coverFit} className="pointer-events-none" />
-        ) : (
+      <div className="relative shrink-0 border-b border-line">
+        {/* Clip wallpaper only — keep avatar/rings/buttons unclipped */}
+        <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden>
+          {cover ? (
+            <SpaceCoverLayer src={cover} fit={space.coverFit} className="pointer-events-none" />
+          ) : (
+            <div
+              className="absolute inset-0"
+              style={{ background: 'var(--space-gradient)' }}
+            />
+          )}
           <div
-            className="absolute inset-0 pointer-events-none"
-            style={{ background: 'var(--space-gradient)' }}
+            className="absolute inset-0"
+            style={{
+              background: 'linear-gradient(180deg, rgba(255,255,255,0.04) 0%, transparent 35%, rgba(0,0,0,0.20) 100%)',
+            }}
           />
-        )}
-        <div
-          className="absolute inset-0 pointer-events-none"
-          style={{
-            background: 'linear-gradient(180deg, rgba(255,255,255,0.04) 0%, transparent 35%, rgba(0,0,0,0.20) 100%)',
-          }}
-        />
-        <div className="relative px-4 pt-4 pb-3">
+        </div>
+        <div className="relative z-[1] px-3 sm:px-4 pt-3.5 pb-3">
           <div className="flex items-start gap-2.5">
             <SpaceAvatar
               space={space}
               size={40}
               rounded="2xl"
-              className="shadow-md ring-2 ring-panel/80 mt-0.5 shrink-0"
+              className="shadow-md ring-2 ring-panel/80 shrink-0"
             />
-            <div className="flex-1 min-w-0">
+            <div className="flex-1 min-w-0 pt-0.5">
               <h2 className="text-[14.5px] font-semibold text-strong tracking-tight truncate">
                 {space.name}
               </h2>
@@ -187,23 +196,24 @@ export default function SpaceContextPanel({
                 <p className="text-[11px] text-muted italic mt-0.5">Sem descrição</p>
               )}
             </div>
-            <div className="relative flex items-center gap-0.5" ref={menuRef}>
+            <div className="relative flex items-center gap-0.5 shrink-0 -mr-0.5" ref={menuRef}>
               {onCollapse && (
                 <button
                   type="button"
                   onClick={onCollapse}
                   title="Recolher painel"
                   aria-label="Recolher painel"
-                  className="w-7 h-7 rounded-md hover:bg-black/40 flex items-center justify-center text-ink/55 hover:text-strong shrink-0 transition-colors"
+                  className="w-8 h-8 rounded-md hover:bg-black/40 flex items-center justify-center text-ink/55 hover:text-strong transition-colors"
                 >
                   <PanelLeftClose size={13} />
                 </button>
               )}
               <button
+                type="button"
                 onClick={() => (menuOpen ? setMenuOpen(false) : openMenu())}
                 title="Configurações do Space"
                 aria-label="Configurações do Space"
-                className="w-7 h-7 rounded-md hover:bg-black/40 flex items-center justify-center text-ink/55 hover:text-strong shrink-0 transition-colors"
+                className="w-8 h-8 rounded-md hover:bg-black/40 flex items-center justify-center text-ink/55 hover:text-strong transition-colors"
               >
                 <Settings size={13} />
               </button>
@@ -267,7 +277,7 @@ export default function SpaceContextPanel({
       </nav>
 
       {/* === Salas section (always visible, with room list) === */}
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
         <div className="px-3 pt-2 pb-3">
           <div className="flex items-center justify-between mb-1.5 px-1">
             <h4 className="text-[10.5px] font-semibold text-muted uppercase tracking-[0.10em]">
@@ -299,6 +309,7 @@ export default function SpaceContextPanel({
                 const isActive = currentRoomId === room.id || selectedRoomId === room.id
                 const isOptimistic = room.id === '__optimistic__'
                 const confirming = confirmDeleteId === room.id
+                const hasUnread = !!(space?.id && unreadByRoom[roomKey(space.id, room.id)])
                 return (
                   <li key={room.id} className="group relative">
                     <button
@@ -311,7 +322,9 @@ export default function SpaceContextPanel({
                         'hover:translate-x-0.5 active:scale-[0.98] ' +
                         (isActive
                           ? 'bg-accent/[0.12] text-strong'
-                          : 'text-ink hover:bg-surface2 hover:text-strong')
+                          : hasUnread
+                            ? 'text-strong hover:bg-surface2'
+                            : 'text-ink hover:bg-surface2 hover:text-strong')
                       }
                     >
                       {isActive && (
@@ -329,9 +342,13 @@ export default function SpaceContextPanel({
                       >
                         <RoomIcon size={13} strokeWidth={1.8} />
                       </span>
-                      <p className="min-w-0 flex-1 text-[13px] font-semibold leading-tight truncate">
+                      <p className={
+                        'min-w-0 flex-1 text-[13px] leading-tight truncate ' +
+                        (hasUnread && !isActive ? 'font-bold' : 'font-semibold')
+                      }>
                         {room.name}
                       </p>
+                      {!isActive && <RoomUnreadPill show={hasUnread} />}
                     </button>
                     {!isOptimistic && (
                       <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
@@ -383,12 +400,22 @@ export default function SpaceContextPanel({
         </div>
       </div>
 
+      {/* Voice connected — above SelfControls (Discord-style) */}
+      {voiceRoom && (
+        <VoiceActiveBar
+          room={voiceRoom}
+          onReturn={onFocusVoice}
+          onLeave={onLeaveCall}
+        />
+      )}
+
       {/* === SelfControls — pinned bottom === */}
       <SelfControls
         currentUserName={currentUserName}
         currentUserId={currentUserId}
         members={members}
         onOpenSettings={onOpenSettings}
+        flushTop={!!voiceRoom}
       />
       {settingsPortalNode}
 
@@ -411,6 +438,7 @@ function SelfControls({
   currentUserId,
   members = [],
   onOpenSettings,
+  flushTop = false,
 }) {
   const self = members.find((m) => m.userId === currentUserId)
   const name = self?.displayName || currentUserName || 'você'
@@ -422,7 +450,10 @@ function SelfControls({
   }
 
   return (
-    <div className="shrink-0 px-3 py-3 border-t border-line bg-panel">
+    <div
+      className={`shrink-0 px-3 py-3 bg-panel ${flushTop ? 'pt-1.5' : 'border-t border-line'}`}
+      style={flushTop ? { background: 'var(--vc-surface-1)' } : undefined}
+    >
       <div className="flex items-center gap-2">
         <button
           type="button"

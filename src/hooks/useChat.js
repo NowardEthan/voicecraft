@@ -361,6 +361,10 @@ export function useChat({ channel, signaling, username, roomKey, userId, authorP
     const trimmed = String(text || '').trim()
     if (!trimmed && !attachment) return false
 
+    const rawKey = String(roomKey || '')
+    const sep = rawKey.indexOf(':')
+    const chatRoomId = sep >= 0 ? rawKey.slice(sep + 1) : (rawKey || null)
+
     const id = uid()
     const ts = Date.now()
     const kind = (attachment?.type || '').startsWith('image/') ? 'image' : 'file'
@@ -396,7 +400,7 @@ export function useChat({ channel, signaling, username, roomKey, userId, authorP
     try {
       if (attachment?.file && signaling?.uploadChatFile) {
         try {
-          const url = await signaling.uploadChatFile(attachment.file)
+          const url = await signaling.uploadChatFile(attachment.file, chatRoomId)
           if (url) {
             storedAtt = { ...storedAtt, url, dataUrl: storedAtt?.dataUrl || null }
             replaceMessage(id, { attachment: storedAtt })
@@ -414,7 +418,7 @@ export function useChat({ channel, signaling, username, roomKey, userId, authorP
           console.warn('[chat] p2p send failed:', err)
         }
       }
-      await signaling?.sendChatMessage?.(wire)
+      await signaling?.sendChatMessage?.(wire, chatRoomId)
       replaceMessage(id, {
         status: 'sent',
         attachment: storedAtt ? { ...storedAtt, dataUrl: persistAtt?.dataUrl || storedAtt.dataUrl || null, url: persistAtt?.url || storedAtt.url } : undefined,
@@ -425,7 +429,7 @@ export function useChat({ channel, signaling, username, roomKey, userId, authorP
       replaceMessage(id, { status: 'failed' })
       return false
     }
-  }, [username, userId, authorProfile, appendMessage, replaceMessage, channel, signaling])
+  }, [username, userId, authorProfile, appendMessage, replaceMessage, channel, signaling, roomKey])
 
   const sendFile = useCallback((file) => {
     if (!file) return false

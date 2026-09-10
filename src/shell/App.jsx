@@ -3,16 +3,15 @@
  */
 import { lazy, Suspense } from 'react'
 import { GoogleAuthBridge, LoginScreen, useAuth } from '../features/auth'
+import { BrandLoader } from '../shared/ui/BrandMark'
+import TitleBar from './TitleBar'
 
 const AppShell = lazy(() => import('./AppShell'))
 
 function AuthSplash() {
   return (
-    <div className="h-screen w-screen bg-[#07080c] flex items-center justify-center">
-      <div className="flex flex-col items-center gap-3">
-        <div className="w-10 h-10 rounded-full border-2 border-white/10 border-t-accent animate-spin" />
-        <span className="text-[12px] text-muted">carregando…</span>
-      </div>
+    <div className="h-full w-full bg-[#07080c]">
+      <BrandLoader size={72} fill label="carregando…" />
     </div>
   )
 }
@@ -23,16 +22,47 @@ function isGoogleBridge() {
   return mode === 'google' || mode === 'done'
 }
 
+function AppFrame({ children }) {
+  return (
+    <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#07080c]">
+      <TitleBar />
+      <div className="flex-1 min-h-0 min-w-0 relative">
+        {children}
+      </div>
+    </div>
+  )
+}
+
 function App() {
   const bridge = isGoogleBridge()
   const { ready, user, signedIn } = useAuth()
-  if (bridge) return <GoogleAuthBridge />
-  if (!ready) return <AuthSplash />
-  if (!signedIn) return <LoginScreen />
+  if (bridge) {
+    return (
+      <AppFrame>
+        <GoogleAuthBridge />
+      </AppFrame>
+    )
+  }
+  if (!ready) {
+    return (
+      <AppFrame>
+        <AuthSplash />
+      </AppFrame>
+    )
+  }
+  if (!signedIn) {
+    return (
+      <AppFrame>
+        <LoginScreen />
+      </AppFrame>
+    )
+  }
   return (
-    <Suspense fallback={<AuthSplash />}>
-      <AppShell account={user} />
-    </Suspense>
+    <AppFrame>
+      <Suspense fallback={<AuthSplash />}>
+        <AppShell account={user} />
+      </Suspense>
+    </AppFrame>
   )
 }
 

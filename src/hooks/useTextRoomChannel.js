@@ -28,7 +28,7 @@ const ICE_SERVERS = {
   ],
 }
 
-export function useTextRoomChannel({ signaling, roomId, currentUserId, roomCreatedBy }) {
+export function useTextRoomChannel({ signaling, roomId, currentUserId, roomCreatedBy, enabled = true }) {
   const pcRef = useRef(null)
   const channelRef = useRef(null)
   const makingOfferRef = useRef(false)
@@ -53,7 +53,11 @@ export function useTextRoomChannel({ signaling, roomId, currentUserId, roomCreat
   }, [signaling])
 
   useEffect(() => {
-    if (!signaling || !roomId) return
+    if (!enabled || !signaling || !roomId) {
+      setChannel(null)
+      setConnectionState(enabled ? 'idle' : 'disabled')
+      return undefined
+    }
     let cancelled = false
 
     const pc = new RTCPeerConnection(ICE_SERVERS)
@@ -121,10 +125,8 @@ export function useTextRoomChannel({ signaling, roomId, currentUserId, roomCreat
       }
     }
 
-    // Stash a transient signal handler. signalingClient.signalCallback
-    // would conflict with VoiceChannel if both are mounted, but VoiceChannel
-    // is unmounted before TextRoomView mounts (selectedRoom != currentRoom
-    // guard in App.jsx), so we're fine.
+    // Stash a transient signal handler. Must NOT run while a voice call
+    // owns signaling callbacks (pass enabled=false in that case).
     const prevCb = signaling.signalCallback
     signaling.signalCallback = handleRemoteSignal
 
@@ -169,7 +171,7 @@ export function useTextRoomChannel({ signaling, roomId, currentUserId, roomCreat
       setConnectionState('closed')
       setPeerInRoom(false)
     }
-  }, [signaling, roomId, isHost, safeSend])
+  }, [signaling, roomId, isHost, safeSend, enabled])
 
   return { channel, connectionState, peerInRoom, isHost }
 }

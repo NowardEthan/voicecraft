@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { resetPassword } from '../../auth'
+import { BrandLoader } from '../../../shared/ui/BrandMark'
 import { AccountSidebar } from './AccountSidebar'
 import { ProfileHome } from '../views/ProfileHome'
 import { ProfileEdit } from '../views/ProfileEdit'
@@ -90,11 +91,9 @@ export function AccountShell({
         onOpenSettings={onOpenSettings}
         onSignOut={onSignOut}
       />
-      <div className="flex-1 min-w-0 overflow-y-auto">
+      <div className="flex-1 min-w-0 min-h-0 overflow-y-auto overscroll-contain">
         {loading ? (
-          <div className="h-full flex items-center justify-center">
-            <div className="w-9 h-9 rounded-full border-2 border-white/10 border-t-accent animate-spin" />
-          </div>
+          <BrandLoader size={48} fill showLabel={false} />
         ) : page === 'edit' ? (
           <ProfileEdit profile={profile} saving={saving} error={error} onSave={save} onAvatar={handleAvatar} />
         ) : page === 'look' ? (

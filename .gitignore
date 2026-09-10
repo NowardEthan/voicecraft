@@ -6,6 +6,11 @@ data/
 keys/
 .env
 .env.local
+Keys Twillio.txt
+*Twillio*
+*Twilio*.txt
+VoiceCraft-Brand-Kit-Completo.zip
+VoiceCraft-Brand-Kit-Completo/
 *.log
 .DS_Store
 .claude/

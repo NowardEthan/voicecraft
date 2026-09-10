@@ -3,7 +3,7 @@
  *
  * Identity of the strip:
  *   - Home button (returns to the welcome state)
- *   - Stacked Space avatars
+ *   - Stacked Space avatars (scrollable when many)
  *   - "Add Space" affordance (menu: create / join)
  *   - Account avatar at the bottom (Conta Lunar)
  */
@@ -12,6 +12,7 @@ import { createPortal } from 'react-dom'
 import { Home, Plus, Sparkles, LogIn } from 'lucide-react'
 import SpaceAvatar from './SpaceAvatar'
 import { AvatarCircle } from '../features/account/components/AccountSidebar'
+import { useNotifications, UnreadDot } from '../features/notifications'
 
 export default function GlobalRail({
   spaces = [],
@@ -25,14 +26,36 @@ export default function GlobalRail({
   accountPhoto = '',
   accountName = '',
   compact = false,
+  notificationBell = null,
 }) {
+  const { unreadBySpace } = useNotifications()
   const [hoveredId, setHoveredId] = useState(null)
+  const [hoverPos, setHoverPos] = useState({ top: 0, left: 0 })
   const [menuOpen, setMenuOpen] = useState(false)
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0 })
   const addBtnRef = useRef(null)
   const menuRef = useRef(null)
   const tile = compact ? 'w-10 h-10' : 'w-12 h-12'
   const avatar = compact ? 32 : 40
+  const hoveredSpace = hoveredId ? spaces.find((s) => s.id === hoveredId) : null
+
+  const placeMenu = () => {
+    const rect = addBtnRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const menuH = 156
+    const menuW = 220
+    const pad = 12
+    let top = rect.top
+    let left = rect.right + 10
+    // Prefer opening upward when the + sits near the bottom (above account).
+    if (top + menuH > window.innerHeight - pad) {
+      top = Math.max(pad, rect.bottom - menuH)
+    }
+    if (left + menuW > window.innerWidth - pad) {
+      left = Math.max(pad, rect.left - menuW - 10)
+    }
+    setMenuPos({ top, left })
+  }
 
   useEffect(() => {
     if (!menuOpen) return
@@ -41,28 +64,25 @@ export default function GlobalRail({
       setMenuOpen(false)
     }
     const onKey = (e) => { if (e.key === 'Escape') setMenuOpen(false) }
+    const onReposition = () => placeMenu()
     document.addEventListener('mousedown', onDoc)
     window.addEventListener('keydown', onKey)
+    window.addEventListener('resize', onReposition)
     return () => {
       document.removeEventListener('mousedown', onDoc)
       window.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', onReposition)
     }
   }, [menuOpen])
 
   const openMenu = () => {
-    const rect = addBtnRef.current?.getBoundingClientRect()
-    if (rect) {
-      setMenuPos({
-        top: Math.max(12, rect.top),
-        left: rect.right + 10,
-      })
-    }
+    placeMenu()
     setMenuOpen((o) => !o)
   }
 
   return (
     <aside
-      className={`${compact ? 'w-14' : 'w-[72px]'} shrink-0 h-full flex flex-col items-center py-2 sm:py-3 gap-1.5 sm:gap-2 bg-rail border-r border-line pb-[max(0.5rem,env(safe-area-inset-bottom))]`}
+      className={`${compact ? 'w-14' : 'w-[72px]'} shrink-0 h-full min-h-0 flex flex-col items-center py-2 sm:py-3 gap-1.5 sm:gap-2 bg-rail border-r border-line overflow-visible pb-[max(0.5rem,env(safe-area-inset-bottom))]`}
       aria-label="Spaces"
     >
       <button
@@ -72,7 +92,7 @@ export default function GlobalRail({
         aria-label="Início"
         aria-pressed={!currentSpaceId && !accountOpen}
         className={
-          `relative ${tile} rounded-2xl flex items-center justify-center ` +
+          `relative ${tile} rounded-2xl flex items-center justify-center shrink-0 ` +
           'transition-[transform,background-color,border-radius,box-shadow] duration-200 ' +
           'hover:scale-[1.04] active:scale-[0.94] ' +
           (!currentSpaceId && !accountOpen
@@ -83,80 +103,88 @@ export default function GlobalRail({
         <Home size={20} strokeWidth={1.75} />
       </button>
 
+      {notificationBell ? (
+        <div className="relative shrink-0 flex items-center justify-center w-full px-1 overflow-visible">
+          {typeof notificationBell === 'object' && notificationBell?.type
+            ? notificationBell
+            : notificationBell}
+        </div>
+      ) : null}
+
       {spaces.length > 0 && (
-        <div className="w-8 h-px my-1 bg-line" />
+        <div className="w-8 h-px my-0.5 bg-line shrink-0" />
       )}
 
-      {spaces.map((space) => {
-        const active = currentSpaceId === space.id
-        const isSwitching = switchingSpaceId === space.id
-        return (
-          <div
-            key={space.id}
-            className="group relative"
-            onMouseEnter={() => setHoveredId(space.id)}
-            onMouseLeave={() => setHoveredId(null)}
-          >
-            <button
-              type="button"
-              onClick={() => onSelectSpace(space.id)}
-              aria-label={space.name}
-              aria-pressed={active}
-              aria-busy={isSwitching || undefined}
-              className="relative block transition-transform duration-200 hover:scale-[1.06] hover:-translate-y-px active:scale-[0.94]"
-            >
-              <SpaceAvatar
-                space={space}
-                size={compact ? 40 : 48}
-                rounded={active || hoveredId === space.id || isSwitching ? 'xl' : 'full'}
-                withRing={active || isSwitching}
-              />
-              {isSwitching && (
-                <span
-                  className="absolute inset-0 rounded-[inherit] flex items-center justify-center bg-canvas/40 pointer-events-none"
-                  aria-hidden
-                >
-                  <span className="w-4 h-4 rounded-full border-2 border-line border-t-accent vc-anim-spin" />
-                </span>
-              )}
-            </button>
-
+      <div className="flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden overscroll-contain flex flex-col items-center gap-0.5 py-1.5">
+        {spaces.map((space) => {
+          const active = currentSpaceId === space.id
+          const isSwitching = switchingSpaceId === space.id
+          const unread = unreadBySpace[space.id] || 0
+          return (
             <div
-              className={
-                'absolute left-full ml-3 top-1/2 -translate-y-1/2 z-50 px-2.5 py-1 ' +
-                'rounded-lg bg-rail border border-line text-strong text-[12px] font-medium ' +
-                'whitespace-nowrap pointer-events-none transition-all duration-150 ' +
-                (hoveredId === space.id
-                  ? 'opacity-100 translate-x-0'
-                  : 'opacity-0 -translate-x-1')
-              }
+              key={space.id}
+              className="relative shrink-0 p-1"
+              onMouseEnter={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect()
+                setHoveredId(space.id)
+                setHoverPos({
+                  top: rect.top + rect.height / 2,
+                  left: rect.right + 4,
+                })
+              }}
+              onMouseLeave={() => setHoveredId(null)}
             >
-              {space.name}
+              <button
+                type="button"
+                onClick={() => onSelectSpace(space.id)}
+                title={space.name}
+                aria-label={unread ? `${space.name}, ${unread} não lidas` : space.name}
+                aria-pressed={active}
+                aria-busy={isSwitching || undefined}
+                className="relative block transition-transform duration-200 hover:scale-[1.05] active:scale-[0.94]"
+              >
+                <SpaceAvatar
+                  space={space}
+                  size={compact ? 40 : 48}
+                  rounded={active || hoveredId === space.id || isSwitching ? 'xl' : 'full'}
+                  withRing={active || isSwitching}
+                />
+                <UnreadDot count={unread} className="!translate-x-0 !-translate-y-0 !top-0.5 !right-0.5" />
+                {isSwitching && (
+                  <span
+                    className="absolute inset-0 rounded-[inherit] flex items-center justify-center bg-canvas/40 pointer-events-none"
+                    aria-hidden
+                  >
+                    <span className="w-4 h-4 rounded-full border-2 border-line border-t-accent vc-anim-spin" />
+                  </span>
+                )}
+              </button>
             </div>
-          </div>
-        )
-      })}
+          )
+        })}
 
-      <div className="relative">
-        <button
-          ref={addBtnRef}
-          type="button"
-          onClick={openMenu}
-          title="Criar ou entrar"
-          aria-label="Criar ou entrar em um Space"
-          aria-expanded={menuOpen}
-          aria-haspopup="menu"
-          className={
-            `${tile} rounded-full flex items-center justify-center ` +
-            'bg-surface1 text-muted hover:text-strong hover:bg-surface2 ' +
-            'transition-[transform,background-color,border-radius] duration-200 ' +
-            'hover:scale-[1.04] hover:rounded-2xl active:scale-[0.94] ' +
-            'border border-dashed border-line ' +
-            (menuOpen ? 'text-strong bg-surface2 rounded-2xl' : '')
-          }
-        >
-          <Plus size={20} strokeWidth={1.75} />
-        </button>
+        {/* Always sits right under the last Space (Discord-style). */}
+        <div className="relative shrink-0 p-1 mt-0.5">
+          <button
+            ref={addBtnRef}
+            type="button"
+            onClick={openMenu}
+            title="Criar ou entrar"
+            aria-label="Criar ou entrar em um Space"
+            aria-expanded={menuOpen}
+            aria-haspopup="menu"
+            className={
+              `${tile} rounded-full flex items-center justify-center ` +
+              'bg-surface1 text-muted hover:text-strong hover:bg-surface2 ' +
+              'transition-[transform,background-color,border-radius] duration-200 ' +
+              'hover:scale-[1.04] hover:rounded-2xl active:scale-[0.94] ' +
+              'border border-dashed border-line ' +
+              (menuOpen ? 'text-strong bg-surface2 rounded-2xl' : '')
+            }
+          >
+            <Plus size={20} strokeWidth={1.75} />
+          </button>
+        </div>
       </div>
 
       {menuOpen && createPortal(
@@ -207,8 +235,18 @@ export default function GlobalRail({
         document.body,
       )}
 
+      {hoveredSpace && typeof document !== 'undefined' && createPortal(
+        <div
+          className="fixed z-[70] px-2.5 py-1 rounded-lg bg-rail border border-line text-strong text-[12px] font-medium whitespace-nowrap pointer-events-none -translate-y-1/2 shadow-lg"
+          style={{ top: hoverPos.top, left: hoverPos.left }}
+        >
+          {hoveredSpace.name}
+        </div>,
+        document.body,
+      )}
+
       {onOpenAccount && (
-        <div className="mt-auto pb-1 pt-2">
+        <div className="shrink-0 mt-auto pb-1 pt-2">
           <button
             type="button"
             onClick={onOpenAccount}

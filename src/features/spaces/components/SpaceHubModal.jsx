@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { ModalShell } from '../../../shared/motion/ModalShell'
 import SpaceAvatar from '../../../components/SpaceAvatar'
+import { BrandLoader } from '../../../shared/ui/BrandMark'
 import { getSharedSignaling } from '../../../shared/connection/useSignaling'
 import { flashToast } from '../../../shared/utils/toast'
 import { parseSpaceInvite } from '../model/spaceInvite'
@@ -258,9 +259,7 @@ export default function SpaceHubModal({
     setJoiningInvite(true)
     try {
       const already = memberSet.has(parsed.spaceId)
-      if (!already) {
-        await getSharedSignaling().joinSpace(parsed.spaceId)
-      }
+      // selectSpace / onJoined always runs joinSpace — don't double-call here.
       await finishJoin(parsed.spaceId, { alreadyMember: already })
     } catch (err) {
       setInviteError(err?.message || 'Não foi possível entrar neste Space.')
@@ -434,9 +433,8 @@ export default function SpaceHubModal({
             )}
 
             {loading && visible.length === 0 ? (
-              <div className="py-12 flex flex-col items-center gap-2 text-[#949ba2]">
-                <div className="w-8 h-8 rounded-full border-2 border-white/10 border-t-[#ff3f6c] animate-spin" />
-                <span className="text-[12px]">Carregando Spaces…</span>
+              <div className="py-12">
+                <BrandLoader size={48} label="Carregando Spaces…" />
               </div>
             ) : filtered.length === 0 ? (
               <div className="py-12 text-center space-y-1 rounded-2xl border border-dashed border-white/[0.08] bg-[#12141a]/50">

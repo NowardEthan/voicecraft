@@ -7,6 +7,7 @@ import { ArrowDown, MessageSquare } from 'lucide-react'
 import MessageBubble from './MessageBubble'
 import { colorFromId } from '../../features/spaces'
 import { resolveChatDensity } from './chatDensity'
+import { getLastRead, setLastRead } from '../../features/notifications/unreadStore'
 
 const STICK_THRESHOLD_PX = 100
 const GROUP_BREAK_MS = 5 * 60 * 1000
@@ -29,19 +30,11 @@ export function resolveChatAuthor(msg, members = [], currentUserId, currentUserN
   }
 }
 
-function lastReadStorageKey(roomKey) {
-  return `vc:chat:lastRead:${roomKey || 'default'}`
-}
-
-function readLastRead(roomKey) {
-  if (typeof sessionStorage === 'undefined') return 0
-  const n = Number(sessionStorage.getItem(lastReadStorageKey(roomKey)))
-  return Number.isFinite(n) && n > 0 ? n : 0
-}
-
-function writeLastRead(roomKey, ts) {
-  if (typeof sessionStorage === 'undefined' || !ts) return
-  sessionStorage.setItem(lastReadStorageKey(roomKey), String(ts))
+function parseRoomKey(roomKey) {
+  const raw = String(roomKey || '')
+  const idx = raw.indexOf(':')
+  if (idx < 0) return { spaceId: null, roomId: raw || null }
+  return { spaceId: raw.slice(0, idx), roomId: raw.slice(idx + 1) }
 }
 
 function dayKey(ts) {
@@ -84,7 +77,10 @@ export default function MessageList({
   const [highlightTick, setHighlightTick] = useState(0)
   const highlightTimerRef = useRef(null)
   const lastLenRef = useRef(messages.length)
-  const [lastReadTs] = useState(() => readLastRead(roomKey))
+  const [lastReadTs] = useState(() => {
+    const { spaceId, roomId } = parseRoomKey(roomKey)
+    return getLastRead(currentUserId, spaceId, roomId).at || 0
+  })
   const dens = resolveChatDensity(density)
 
   const handleScroll = useCallback(() => {
@@ -126,8 +122,10 @@ export default function MessageList({
   useEffect(() => {
     if (!stickToBottom || !messages.length) return
     const latest = messages[messages.length - 1]
-    if (latest?.ts) writeLastRead(roomKey, latest.ts)
-  }, [messages, stickToBottom, roomKey])
+    if (!latest?.ts) return
+    const { spaceId, roomId } = parseRoomKey(roomKey)
+    setLastRead(currentUserId, spaceId, roomId, { at: latest.ts, id: latest.id || null })
+  }, [messages, stickToBottom, roomKey, currentUserId])
 
   const jumpToMessage = useCallback((id) => {
     if (!id) return

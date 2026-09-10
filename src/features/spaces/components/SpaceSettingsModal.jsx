@@ -13,6 +13,7 @@ import { SpaceIcon, normalizeSpaceIcon, serializeSpaceIcon, getRecentIcons, push
 import { flashToast } from '../../../shared/utils/toast'
 import {
   getSpaceCover,
+  setSpaceCover,
   clearSpaceCover,
   readFileAsDataUrl,
   DEFAULT_COVER_FIT,
@@ -28,10 +29,22 @@ import {
 import { normalizeVisibility } from '../model/spaceInvite'
 import { bannerGradient, bannerOverlay, identitySurfaceStyle, spaceTokens } from '../model/spaceTokens'
 
-function snapshotOf({ icon, name, description, color, cover, coverFit, visibility, notify }) {
+function isCoverSrc(src) {
+  return typeof src === 'string'
+    && (src.startsWith('data:image/') || /^https?:\/\//.test(src))
+}
+
+function snapshotOf({ icon, name, description, slogan, color, cover, coverFit, visibility, notify }) {
   return JSON.stringify({
     icon: serializeSpaceIcon(icon),
-    name, description, color, cover: cover || '', coverFit: normalizeCoverFit(coverFit), visibility, notify,
+    name,
+    description,
+    slogan,
+    color,
+    cover: cover || '',
+    coverFit: normalizeCoverFit(coverFit),
+    visibility,
+    notify,
   })
 }
 
@@ -41,6 +54,7 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
   const iconButtonRef = useRef(null)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+  const [slogan, setSlogan] = useState('')
   const [color, setColor] = useState(PALETTE[0].css)
   const [coverDataUrl, setCoverDataUrl] = useState(null)
   const [coverFit, setCoverFit] = useState(DEFAULT_COVER_FIT)
@@ -58,16 +72,18 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
     const nextIcon = normalizeSpaceIcon(space.icon)
     const nextName = space.name || ''
     const nextDesc = space.description || ''
+    const nextSlogan = space.slogan || space.tagline || ''
     const nextColor = paletteColorFor(space.color).css
-    const sharedCover = typeof space.cover === 'string' ? space.cover : null
+    const sharedCover = isCoverSrc(space.cover) ? space.cover : null
     const localCover = getSpaceCover(space.id)
-    const nextCover = sharedCover || localCover
+    const nextCover = sharedCover || (isCoverSrc(localCover) ? localCover : null)
     const nextFit = normalizeCoverFit(space.coverFit)
     const nextVis = normalizeVisibility(space.visibility ?? getVisibility(space.id))
     const nextNotify = getNotify(space.id)
     setIcon(nextIcon)
     setName(nextName)
     setDescription(nextDesc)
+    setSlogan(nextSlogan)
     setColor(nextColor)
     setCoverDataUrl(nextCover)
     setCoverFit(nextFit)
@@ -81,6 +97,7 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
       icon: nextIcon,
       name: nextName,
       description: nextDesc,
+      slogan: nextSlogan,
       color: nextColor,
       cover: nextCover,
       coverFit: nextFit,
@@ -92,14 +109,13 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
   const dirty = useMemo(() => {
     if (!open) return false
     return snapshotOf({
-      icon, name, description, color, cover: coverDataUrl, coverFit, visibility, notify,
+      icon, name, description, slogan, color, cover: coverDataUrl, coverFit, visibility, notify,
     }) !== baselineRef.current
-  }, [open, icon, name, description, color, coverDataUrl, coverFit, visibility, notify])
+  }, [open, icon, name, description, slogan, color, coverDataUrl, coverFit, visibility, notify])
 
   if (!open || !space) return null
 
-  const hasCover = typeof coverDataUrl === 'string' && coverDataUrl.startsWith('data:image/')
-
+  const hasCover = isCoverSrc(coverDataUrl)
   const handlePickCover = () => fileInputRef.current?.click()
   const handleFile = async (e) => {
     const file = e.target.files?.[0]
@@ -123,21 +139,31 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
     setError(null)
     try {
       if (space.id) {
-        clearSpaceCover(space.id)
         setVisibility(space.id, visibility)
         setNotify(space.id, notify)
       }
-      const maybePromise = onSave?.({
+      const payload = {
         name: name.trim(),
         description: description.trim().slice(0, 256),
+        slogan: slogan.trim().slice(0, 80),
         color,
         icon: serializeSpaceIcon(icon),
         cover: coverDataUrl || null,
         coverFit: coverDataUrl ? coverFit : null,
         visibility,
-      })
+      }
+      // Keep a local copy so the banner still works if Storage upload fails.
+      if (space.id && typeof coverDataUrl === 'string' && coverDataUrl.startsWith('data:image/')) {
+        setSpaceCover(space.id, coverDataUrl)
+      } else if (space.id && !coverDataUrl) {
+        clearSpaceCover(space.id)
+      }
+      const maybePromise = onSave?.(payload)
       if (maybePromise && typeof maybePromise.then === 'function') {
         await maybePromise
+      }
+      if (space.id && isCoverSrc(coverDataUrl) && !coverDataUrl.startsWith('data:image/')) {
+        clearSpaceCover(space.id)
       }
       onClose?.()
     } catch (err) {
@@ -209,22 +235,30 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
               style={{ background: bannerOverlay(color, hasCover) }}
             />
             <div className="absolute inset-0 bg-gradient-to-r from-black/55 via-black/30 to-transparent" />
-            <div className="relative flex items-center gap-3.5 px-5 py-5">
-              <span
-                className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0 shadow-lg"
-                style={{ backgroundColor: 'rgba(0,0,0,0.38)', boxShadow: `0 0 0 1px color-mix(in srgb, ${color} 50%, transparent)` }}
-                aria-hidden
-              >
-                <SpaceIcon value={icon} size={24} className="text-white" />
-              </span>
-              <div className="min-w-0">
-                <p className="text-[18px] font-semibold text-white tracking-tight truncate">
-                  {name.trim() || 'Sem nome'}
-                </p>
-                <p className="text-[12.5px] text-white/70 mt-0.5 line-clamp-2">
-                  {description.trim() || 'Um lugar para jogar, conversar e criar junto.'}
-                </p>
+            <div className="relative flex items-end justify-between gap-4 px-5 py-5">
+              <div className="flex items-center gap-3.5 min-w-0">
+                <span
+                  className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0 shadow-lg"
+                  style={{ backgroundColor: 'rgba(0,0,0,0.38)', boxShadow: `0 0 0 1px color-mix(in srgb, ${color} 50%, transparent)` }}
+                  aria-hidden
+                >
+                  <SpaceIcon value={icon} size={24} className="text-white" />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-[18px] font-semibold text-white tracking-tight truncate">
+                    {name.trim() || 'Sem nome'}
+                  </p>
+                  <p className="text-[12.5px] text-white/70 mt-0.5 line-clamp-2">
+                    {description.trim() || 'Um lugar para jogar, conversar e criar junto.'}
+                  </p>
+                </div>
               </div>
+              <p
+                className="hidden sm:block text-right text-[18px] leading-tight font-semibold text-white/85 max-w-[140px] shrink-0 select-none"
+                style={{ fontFamily: '"Segoe Script", "Apple Chancery", cursive', whiteSpace: 'pre-line' }}
+              >
+                {(slogan.trim() || 'Good Games\nBetter People.')}
+              </p>
             </div>
           </div>
 
@@ -361,6 +395,23 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
                   placeholder="Do que se trata este Space?"
                 />
                 <p className="text-[11px] text-muted mt-1 text-right tabular-nums">{description.length}/256</p>
+              </label>
+              <label className="block min-w-0">
+                <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted block mb-1.5">
+                  Frase do banner
+                </span>
+                <textarea
+                  value={slogan}
+                  onChange={(e) => setSlogan(e.target.value)}
+                  maxLength={80}
+                  rows={2}
+                  className="w-full min-h-[56px] px-3 py-2 rounded-xl text-[13px] resize-none bg-[#0d0e12] border border-white/[0.08] text-strong focus:outline-none focus:border-accent/50 placeholder:text-muted"
+                  placeholder={'Good Games\nBetter People.'}
+                />
+                <p className="text-[11px] text-muted mt-1">
+                  Aparece em cursiva no lado direito do hero. Use Enter para quebrar linha.
+                  <span className="float-right tabular-nums">{slogan.length}/80</span>
+                </p>
               </label>
             </div>
           </section>

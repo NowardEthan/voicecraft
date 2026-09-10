@@ -1,297 +1,188 @@
-import { useEffect, useState } from 'react'
-import { X, Mic, Volume2, MonitorUp, Sliders, Cpu, Zap, LogOut } from 'lucide-react'
-import { enumerateMics, watchDeviceChanges } from '../../../utils/devices'
-import { detectGpu } from '../../../utils/gpu'
+import { useEffect, useMemo, useState } from 'react'
+import {
+  X, RotateCcw, Mic, MonitorUp, AppWindow, UserRound,
+} from 'lucide-react'
+import { enumerateMics, enumerateSpeakers, watchDeviceChanges } from '../../../utils/devices'
 import { ModalShell } from '../../../shared/motion/ModalShell.jsx'
+import { BrandAppIcon } from '../../../shared/ui/BrandMark'
+import { SETTINGS_DEFAULTS } from '../hooks/useSettings'
+import AudioTab from './settingsTabs/AudioTab'
+import VideoTab from './settingsTabs/VideoTab'
+import AppTab from './settingsTabs/AppTab'
+import AccountTab from './settingsTabs/AccountTab'
 
-const HAS_ELECTRON_AUDIO = typeof window !== 'undefined' && !!window.electronAPI?.audioService
+function cloneSettings(settings) {
+  return { ...SETTINGS_DEFAULTS, ...settings }
+}
+
+function diffSettings(from, to) {
+  const patch = {}
+  const keys = new Set([...Object.keys(from || {}), ...Object.keys(to || {})])
+  keys.forEach((key) => {
+    if (from?.[key] !== to?.[key]) patch[key] = to[key]
+  })
+  return patch
+}
 
 /**
- * Settings modal — accessible from the home screen.
- * Lets the user pick the default microphone, configure defaults that are
- * applied on the next call, and toggle GPU acceleration. All values are
- * persisted through useSettings.
+ * Call settings modal — draft until Aplicar; matches the VoiceCraft mockup.
  */
 export default function SettingsModal({ settings, onChange, onClose, account, onSignOut }) {
+  const [draft, setDraft] = useState(() => cloneSettings(settings))
+  const [tab, setTab] = useState('audio')
   const [mics, setMics] = useState([])
+  const [speakers, setSpeakers] = useState([])
+
+  useEffect(() => {
+    setDraft(cloneSettings(settings))
+  }, [settings])
 
   useEffect(() => {
     let cancelled = false
     const refresh = async () => {
-      const list = await enumerateMics()
-      if (!cancelled) setMics(list)
+      const [micList, speakerList] = await Promise.all([
+        enumerateMics(),
+        enumerateSpeakers(),
+      ])
+      if (!cancelled) {
+        setMics(micList)
+        setSpeakers(speakerList)
+      }
     }
     refresh()
     return watchDeviceChanges(refresh)
   }, [])
 
-  // Detect GPU once on mount. Shown as informational read-only in the
-  // "Desempenho" section.
-  const [gpuInfo, setGpuInfo] = useState({ supported: null, info: null })
-  useEffect(() => {
-    let cancelled = false
-    detectGpu().then((res) => {
-      if (!cancelled) setGpuInfo(res)
-    })
-    return () => { cancelled = true }
-  }, [])
+  const tabs = useMemo(() => {
+    const list = [
+      { id: 'audio', label: 'Áudio', Icon: Mic },
+      { id: 'video', label: 'Vídeo e tela', Icon: MonitorUp },
+      { id: 'app', label: 'Aplicativo', Icon: AppWindow },
+    ]
+    if (account) list.push({ id: 'account', label: 'Conta', Icon: UserRound })
+    return list
+  }, [account])
 
-  // Resolve a friendly label for the currently-saved deviceId.
-  const currentMicLabel = mics.find(m => m.deviceId === settings.microphoneId)?.label
-    || (settings.microphoneId ? 'Microfone desconhecido' : 'Padrão do sistema')
+  useEffect(() => {
+    if (!account && tab === 'account') setTab('audio')
+  }, [account, tab])
+
+  const handleApply = () => {
+    const patch = diffSettings(cloneSettings(settings), draft)
+    if (Object.keys(patch).length) onChange?.(patch)
+    onClose?.()
+  }
+
+  const handleReset = () => {
+    setDraft(cloneSettings(SETTINGS_DEFAULTS))
+  }
+
+  const handleCancel = () => onClose?.()
 
   return (
     <ModalShell
       open
-      onClose={onClose}
+      onClose={handleCancel}
       labelledBy="settings-title"
-      maxWidth="md"
-      panelClassName="rounded-2xl overflow-hidden"
+      describedBy="settings-desc"
+      maxWidth="4xl"
+      panelClassName="rounded-[22px] overflow-hidden"
       contentClassName=""
     >
       <div
-        className="rounded-2xl overflow-hidden"
+        className="rounded-[22px] overflow-hidden flex flex-col max-h-[min(90vh,860px)]"
         style={{
-          background: 'rgba(28, 28, 30, 0.98)',
+          background: 'linear-gradient(180deg, rgba(22,24,30,0.99) 0%, rgba(14,16,22,0.99) 100%)',
           backdropFilter: 'blur(40px)',
           border: '1px solid rgba(255, 255, 255, 0.1)',
+          boxShadow: '0 28px 80px -24px rgba(0,0,0,0.75)',
         }}
       >
-        <div className="px-6 pt-6 pb-4 border-b border-line flex items-start justify-between">
-          <div>
-            <h2 id="settings-title" className="text-[18px] font-semibold text-strong tracking-tight">
-              Configurações
-            </h2>
-            <p className="text-[12px] text-muted mt-1">
-              Aplicado na próxima chamada
-            </p>
+        <div className="px-5 sm:px-6 pt-5 pb-3 flex items-start justify-between gap-4 shrink-0">
+          <div className="flex items-start gap-3 min-w-0">
+            <BrandAppIcon size={40} decorative className="mt-0.5 shadow-[0_0_20px_rgba(255,63,108,0.28)]" />
+            <div className="min-w-0">
+              <h2 id="settings-title" className="text-[17px] sm:text-[18px] font-semibold text-strong tracking-tight">
+                Configurações da chamada
+              </h2>
+              <p id="settings-desc" className="text-[12px] text-muted mt-0.5">
+                Ajuste antes de entrar
+              </p>
+            </div>
           </div>
           <button
-            onClick={onClose}
+            type="button"
+            onClick={handleCancel}
             aria-label="Fechar configurações"
             title="Fechar"
-            className="w-8 h-8 rounded-full hover:bg-surface2 flex items-center justify-center transition-all"
+            className="w-8 h-8 rounded-full hover:bg-white/[0.06] flex items-center justify-center transition-all shrink-0"
           >
-            <X size={14} strokeWidth={1.75} className="text-ink" />
+            <X size={15} strokeWidth={1.75} className="text-ink" />
           </button>
         </div>
 
-        <div className="p-6 space-y-6">
-          {account && (
-            <Section icon={LogOut} title="Conta">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-[13px] text-strong truncate">
-                    {account.displayName || 'Sua conta'}
-                  </p>
-                  <p className="text-[12px] text-muted truncate">
-                    {account.email || 'Conta conectada'}
-                  </p>
-                </div>
+        <div className="px-5 sm:px-6 shrink-0" role="tablist" aria-label="Seções de configuração">
+          <div className="flex gap-1 border-b border-white/[0.07] overflow-x-auto">
+            {tabs.map(({ id, label, Icon }) => {
+              const on = tab === id
+              return (
                 <button
+                  key={id}
                   type="button"
-                  onClick={onSignOut}
-                  className="h-8 px-3 rounded-lg text-[12px] font-medium text-ink bg-white/[0.04] border border-white/[0.08] hover:bg-white/[0.08] shrink-0"
-                >
-                  Sair
-                </button>
-              </div>
-            </Section>
-          )}
-
-          {/* Microphone picker */}
-          <Section icon={Mic} title="Microfone">
-            <select
-              value={settings.microphoneId || ''}
-              onChange={(e) => onChange({ microphoneId: e.target.value || null })}
-              className="w-full px-3 py-2 rounded-lg bg-surface1 border border-line text-strong text-[13px] focus:outline-none focus:border-accent transition-colors"
-            >
-              <option value="">Padrão do sistema</option>
-              {mics.map(m => (
-                <option key={m.deviceId} value={m.deviceId}>{m.label}</option>
-              ))}
-            </select>
-            {settings.microphoneId && (
-              <p className="text-[11px] text-muted mt-1.5 leading-tight">
-                Selecionado: {currentMicLabel}
-              </p>
-            )}
-          </Section>
-
-          {/* DSP default */}
-          <Section icon={Volume2} title="Processamento de Áudio">
-            <div className="flex gap-1.5">
-              {[
-                { key: 'off',   label: 'Sem filtro' },
-                { key: 'light', label: 'Suave' },
-                { key: 'strong', label: 'Forte' },
-              ].map(({ key, label }) => (
-                <button
-                  key={key}
-                  onClick={() => onChange({ dspLevel: key })}
-                  className={`flex-1 px-3 py-2 rounded-lg text-[12px] font-medium transition-all duration-200 ${
-                    settings.dspLevel === key
-                      ? 'bg-accent-soft text-accent ring-1 ring-accent/30'
-                      : 'bg-surface1 text-ink hover:bg-surface2'
+                  role="tab"
+                  aria-selected={on}
+                  onClick={() => setTab(id)}
+                  className={`relative flex items-center gap-1.5 px-3.5 py-2.5 text-[12.5px] font-semibold whitespace-nowrap transition-colors ${
+                    on ? 'text-accent' : 'text-muted hover:text-ink'
                   }`}
                 >
+                  <Icon size={14} strokeWidth={1.8} className={on ? 'text-accent' : 'text-muted'} />
                   {label}
+                  {on && (
+                    <span className="absolute left-2 right-2 bottom-0 h-0.5 rounded-full bg-accent" />
+                  )}
                 </button>
-              ))}
-            </div>
-          </Section>
+              )
+            })}
+          </div>
+        </div>
 
-          {/* Screen share defaults */}
-          <Section icon={MonitorUp} title="Compartilhamento de Tela">
-            <div>
-              <Label>Resolução padrão</Label>
-              <div className="flex gap-1.5">
-                {[
-                  { key: '720p',  label: 'HD' },
-                  { key: '1080p', label: 'Full HD' },
-                  { key: '1440p', label: '2K' },
-                  { key: '4k',    label: '4K' },
-                ].map(({ key, label }) => (
-                  <button
-                    key={key}
-                    onClick={() => onChange({ screenQuality: key })}
-                    className={`flex-1 px-2 py-1.5 rounded-md text-[12px] font-medium transition-all duration-200 ${
-                      settings.screenQuality === key
-                        ? 'bg-accent-soft text-accent ring-1 ring-accent/30'
-                        : 'bg-surface1 text-ink hover:bg-surface2'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
+        <div className="flex-1 min-h-0 overflow-y-auto px-5 sm:px-6 py-5">
+          {tab === 'audio' && (
+            <AudioTab draft={draft} setDraft={setDraft} mics={mics} speakers={speakers} />
+          )}
+          {tab === 'video' && <VideoTab draft={draft} setDraft={setDraft} />}
+          {tab === 'app' && <AppTab draft={draft} setDraft={setDraft} />}
+          {tab === 'account' && <AccountTab account={account} onSignOut={onSignOut} />}
+        </div>
 
-            <div className="mt-3">
-              <Label>FPS</Label>
-              <div className="flex gap-1.5">
-                {[15, 30, 60].map((fps) => (
-                  <button
-                    key={fps}
-                    onClick={() => onChange({ screenFramerate: fps })}
-                    className={`flex-1 px-2 py-1.5 rounded-md text-[12px] font-medium transition-all duration-200 ${
-                      settings.screenFramerate === fps
-                        ? 'bg-accent-soft text-accent ring-1 ring-accent/30'
-                        : 'bg-surface1 text-ink hover:bg-surface2'
-                    }`}
-                  >
-                    {fps}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <p className="text-[11px] text-muted mt-2.5 leading-snug">
-              HD a 30 fps deixa a sala bem mais leve. 2K, 4K e 60 fps pesam no PC — principalmente com YouTube.
-            </p>
-          </Section>
-
-          {/* Performance: GPU acceleration toggle. Requires restart to take
-              effect — when toggled, the change is persisted but Electron
-              needs to apply `disableHardwareAcceleration()` BEFORE
-              `app.whenReady()` on the next launch. */}
-          <Section icon={Zap} title="Desempenho">
-            <div className="space-y-3">
-              <label className="flex items-start justify-between gap-3 cursor-pointer">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <Cpu size={13} strokeWidth={1.75} className="text-ink" />
-                    <span className="text-[13px] font-medium text-strong">Aceleração por GPU</span>
-                  </div>
-                  <p className="text-[11px] text-muted leading-tight mt-1 ml-5">
-                    Recomendado. Acelera captura de tela, renderização de preview e encoding de vídeo. Reinicie o app após alterar.
-                  </p>
-                </div>
-                <Toggle
-                  on={settings.gpuAcceleration}
-                  onChange={(v) => onChange({ gpuAcceleration: v })}
-                />
-              </label>
-
-              {/* Audio service toggle — only relevant in Electron. In a plain
-                  browser there's no electronAPI.audioService, so the toggle
-                  would do nothing. */}
-              {HAS_ELECTRON_AUDIO && (
-                <label className="flex items-start justify-between gap-3 cursor-pointer">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <Mic size={13} strokeWidth={1.75} className="text-ink" />
-                      <span className="text-[13px] font-medium text-strong">Audio service (C++)</span>
-                    </div>
-                    <p className="text-[11px] text-muted leading-tight mt-1 ml-5">
-                      Captura de áudio via processo nativo (mais estável). Requer compilar <code className="text-ink bg-surface1 px-1 rounded">audio-service/</code> antes.
-                    </p>
-                  </div>
-                  <Toggle
-                    on={settings.useAudioService}
-                    onChange={(v) => onChange({ useAudioService: v })}
-                  />
-                </label>
-              )}
-
-              <div className="px-3 py-2 rounded-lg bg-canvas border border-line">
-                {gpuInfo.supported === null ? (
-                  <p className="text-[11px] text-muted">Detectando GPU…</p>
-                ) : (
-                  <p className="text-[12px] text-strong font-medium break-words">
-                    {gpuInfo.info?.device || 'GPU detectada'}
-                  </p>
-                )}
-              </div>
-            </div>
-          </Section>
-
-          {/* Behavior */}
-          <Section icon={Sliders} title="Comportamento">
-            <label className="flex items-center justify-between cursor-pointer">
-              <span className="text-[13px] text-strong">Iniciar minimizado</span>
-              <Toggle
-                on={settings.startMinimized}
-                onChange={(v) => onChange({ startMinimized: v })}
-              />
-            </label>
-          </Section>
+        <div className="px-5 sm:px-6 py-4 border-t border-white/[0.07] flex items-center justify-between gap-3 shrink-0 flex-wrap">
+          <button
+            type="button"
+            onClick={handleReset}
+            className="h-10 px-3.5 rounded-xl text-[12.5px] font-semibold text-muted hover:text-ink hover:bg-white/[0.04] inline-flex items-center gap-1.5 transition-colors"
+          >
+            <RotateCcw size={14} strokeWidth={1.75} />
+            Redefinir
+          </button>
+          <div className="flex items-center gap-2 ml-auto">
+            <button
+              type="button"
+              onClick={handleCancel}
+              className="h-10 px-4 rounded-xl text-[12.5px] font-semibold text-ink bg-white/[0.04] border border-white/[0.1] hover:bg-white/[0.08] transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={handleApply}
+              className="h-10 px-5 rounded-xl text-[12.5px] font-semibold text-on-accent bg-accent hover:opacity-90 shadow-[0_8px_24px_-10px_rgba(255,63,108,0.7)] transition-opacity"
+            >
+              Aplicar
+            </button>
+          </div>
         </div>
       </div>
     </ModalShell>
-  )
-}
-
-function Section({ icon: Icon, title, children }) {
-  return (
-    <div>
-      <div className="flex items-center gap-2 mb-2.5">
-        <Icon size={13} strokeWidth={1.75} className="text-muted" />
-        <p className="text-[11px] font-medium text-muted uppercase tracking-[0.06em]">{title}</p>
-      </div>
-      {children}
-    </div>
-  )
-}
-
-function Label({ children }) {
-  return (
-    <p className="text-[11px] text-muted mb-1.5">{children}</p>
-  )
-}
-
-function Toggle({ on, onChange }) {
-  return (
-    <button
-      onClick={() => onChange(!on)}
-      className={`w-9 h-5 rounded-full transition-colors relative ${
-        on ? 'bg-accent' : 'bg-surface2'
-      }`}
-    >
-      <div
-        className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-          on ? 'translate-x-[18px]' : 'translate-x-0.5'
-        }`}
-      />
-    </button>
   )
 }

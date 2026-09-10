@@ -1,14 +1,15 @@
 {
   "name": "voicecraft",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "P2P voice/video chat for LAN",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && electron-builder",
+    "build": "vite build && electron-builder --publish never",
     "preview": "vite preview",
     "electron:dev": "vite",
-    "electron:build": "vite build && electron-builder",
+    "electron:build": "vite build && electron-builder --publish never",
+    "release": "vite build && electron-builder --publish always",
     "dev:multi": "node scripts/dev-multi.cjs",
     "signaling": "node server/signaling-server.mjs",
     "all": "vite"
@@ -22,9 +23,14 @@
   ],
   "author": "",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NowardEthan/voicecraft.git"
+  },
   "dependencies": {
     "@iconify-json/ph": "^1.2.2",
     "@iconify/react": "^6.0.2",
+    "electron-updater": "^6.8.9",
     "firebase": "^12.18.0",
     "framer-motion": "^13.2.0",
     "lucide-react": "^1.41.0",
@@ -60,7 +66,21 @@
     ],
     "win": {
       "target": "nsis",
-      "icon": "public/icon.ico"
-    }
+      "icon": "public/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "NowardEthan",
+        "repo": "voicecraft"
+      }
+    ]
   }
 }

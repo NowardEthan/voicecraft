@@ -6,7 +6,8 @@
 import { useEffect, useState } from 'react'
 import { getRedirectResult, GoogleAuthProvider, signInWithPopup } from 'firebase/auth'
 import { auth } from '../../../shared/firebase/app'
-import { Check, LoaderCircle } from 'lucide-react'
+import { BrandAppIcon, BrandLoader } from '../../../shared/ui/BrandMark'
+import { Check } from 'lucide-react'
 
 const googleProvider = new GoogleAuthProvider()
 googleProvider.setCustomParameters({ prompt: 'select_account' })
@@ -102,11 +103,20 @@ export default function GoogleAuthBridge() {
   }, [alreadyDone])
 
   return (
-    <div className="h-screen w-screen bg-[#07080c] text-strong flex items-center justify-center px-6">
+    <div className="h-full w-full bg-[#07080c] text-strong flex items-center justify-center px-6">
       <div className="w-full max-w-sm rounded-[24px] border border-white/[0.08] bg-[#14161c]/90 px-6 py-8 text-center">
-        <div className="w-12 h-12 mx-auto rounded-2xl bg-accent/15 text-accent flex items-center justify-center mb-4">
-          {state === 'done' ? <Check size={22} /> : <LoaderCircle size={22} className={state === 'working' ? 'animate-spin' : ''} />}
-        </div>
+        {state === 'working' ? (
+          <BrandLoader size={56} showLabel={false} className="mb-4" />
+        ) : (
+          <div className="relative mx-auto mb-4 w-14 h-14">
+            <BrandAppIcon size={56} decorative className="drop-shadow-[0_0_16px_var(--space-accent-glow-24)]" />
+            {state === 'done' && (
+              <span className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-accent text-on-accent flex items-center justify-center ring-2 ring-[#14161c]">
+                <Check size={14} strokeWidth={2.5} />
+              </span>
+            )}
+          </div>
+        )}
         <h1 className="text-[18px] font-semibold tracking-tight">
           {state === 'done' ? 'Conta conectada' : state === 'error' ? 'Algo deu errado' : 'Entrar com Google'}
         </h1>

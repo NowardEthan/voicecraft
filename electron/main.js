@@ -11,6 +11,95 @@ let audioServiceProc = null
 
 const isDev = !app.isPackaged
 
+// ---------- Auto-update (electron-updater + GitHub Releases) ----------
+// Inlined so Vite's single-file main bundle does not `require('./updater')`
+// at runtime (that path does not exist under dist-electron/).
+let updaterWired = false
+let autoUpdaterRef = null
+
+function getAutoUpdater() {
+  if (!autoUpdaterRef) {
+    ;({ autoUpdater: autoUpdaterRef } = require('electron-updater'))
+  }
+  return autoUpdaterRef
+}
+
+function sendUpdater(getMainWindow, channel, payload) {
+  const win = typeof getMainWindow === 'function' ? getMainWindow() : null
+  if (!win || win.isDestroyed()) return
+  try {
+    win.webContents.send(channel, payload)
+  } catch {}
+}
+
+function setupUpdater(getMainWindow) {
+  if (updaterWired) return
+  updaterWired = true
+
+  ipcMain.handle('updater:get-version', () => app.getVersion())
+  ipcMain.handle('updater:check', async () => {
+    if (!app.isPackaged) {
+      return { ok: false, error: 'Atualizações só funcionam no app instalado.' }
+    }
+    try {
+      const result = await getAutoUpdater().checkForUpdates()
+      return { ok: true, updateInfo: result?.updateInfo || null }
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) }
+    }
+  })
+  ipcMain.handle('updater:install', () => {
+    if (!app.isPackaged) return { ok: false, error: 'dev' }
+    setImmediate(() => getAutoUpdater().quitAndInstall(false, true))
+    return { ok: true }
+  })
+
+  if (!app.isPackaged) return
+
+  const updater = getAutoUpdater()
+  updater.autoDownload = true
+  updater.autoInstallOnAppQuit = true
+  updater.logger = null
+
+  updater.on('checking-for-update', () => {
+    sendUpdater(getMainWindow, 'updater:status', { status: 'checking' })
+  })
+  updater.on('update-available', (info) => {
+    sendUpdater(getMainWindow, 'updater:status', {
+      status: 'available',
+      version: info?.version || null,
+    })
+  })
+  updater.on('update-not-available', (info) => {
+    sendUpdater(getMainWindow, 'updater:status', {
+      status: 'not-available',
+      version: info?.version || app.getVersion(),
+    })
+  })
+  updater.on('download-progress', (p) => {
+    sendUpdater(getMainWindow, 'updater:status', {
+      status: 'downloading',
+      percent: typeof p?.percent === 'number' ? p.percent : 0,
+    })
+  })
+  updater.on('update-downloaded', (info) => {
+    sendUpdater(getMainWindow, 'updater:status', {
+      status: 'downloaded',
+      version: info?.version || null,
+    })
+  })
+  updater.on('error', (err) => {
+    sendUpdater(getMainWindow, 'updater:status', {
+      status: 'error',
+      message: err?.message || String(err),
+    })
+  })
+
+  setTimeout(() => {
+    updater.checkForUpdates().catch(() => {})
+  }, 8000)
+}
+
 // Dev and the installed app must not share Cache/GPUCache — a leftover
 // tray instance + `npm run dev` both lock AppData\Roaming\voicecraft and
 // Chromium then prints "Unable to move the cache: Acesso negado (0x5)"
@@ -18,6 +107,12 @@ const isDev = !app.isPackaged
 if (isDev) {
   app.setPath('userData', path.join(app.getPath('appData'), 'voicecraft-dev'))
 }
+
+// Keep RTDB / WebSocket presence alive when the window is occluded or
+// minimized — Chromium otherwise throttles timers and can stall presence.
+app.commandLine.appendSwitch('disable-background-timer-throttling')
+app.commandLine.appendSwitch('disable-renderer-backgrounding')
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
 
 function ensureCacheDirs() {
   const root = app.getPath('userData')
@@ -72,6 +167,9 @@ const settingsPath = path.join(app.getPath('userData'), 'settings.json')
 const DEFAULT_SETTINGS = {
   // Input devices (resolved to deviceId via enumerateDevices)
   microphoneId: null,
+  // Output device + master volume for remote call audio
+  speakerId: null,
+  outputVolume: 80,
   // DSP
   dspLevel: 'off',
   // Screen share — 720p/30 is enough for voice rooms and much cheaper
@@ -144,6 +242,39 @@ ipcMain.handle('app:log', (_e, level, msg) => log(level, msg))
 
 ipcMain.handle('settings:get', () => loadSettings())
 ipcMain.handle('settings:set', (_e, patch) => saveSettings(patch || {}))
+
+ipcMain.handle('system:get-gpu-info', async () => {
+  try {
+    const info = await app.getGPUInfo('complete')
+    return { ok: true, info }
+  } catch (err) {
+    try {
+      const info = await app.getGPUInfo('basic')
+      return { ok: true, info }
+    } catch (err2) {
+      return { ok: false, error: err2?.message || err?.message || 'gpu info failed' }
+    }
+  }
+})
+
+ipcMain.handle('window:minimize', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize()
+  return { ok: true }
+})
+ipcMain.handle('window:maximize', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return { maximized: false }
+  if (mainWindow.isMaximized()) mainWindow.unmaximize()
+  else mainWindow.maximize()
+  return { maximized: mainWindow.isMaximized() }
+})
+ipcMain.handle('window:close', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close()
+  return { ok: true }
+})
+ipcMain.handle('window:is-maximized', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return false
+  return mainWindow.isMaximized()
+})
 
 // ---------- System info IPC ----------
 ipcMain.handle('get-local-ip', () => {
@@ -449,27 +580,66 @@ async function startSignalingServer() {
   }
 }
 
+function resolveAppIcon() {
+  const candidates = [
+    path.join(__dirname, '..', 'public', 'icon.ico'),
+    path.join(__dirname, '..', 'dist', 'icon.ico'),
+    path.join(app.getAppPath(), 'dist', 'icon.ico'),
+    path.join(app.getAppPath(), 'public', 'icon.ico'),
+  ]
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return p
+    } catch {}
+  }
+  return undefined
+}
+
+function resolveTrayPng() {
+  const candidates = [
+    path.join(__dirname, '..', 'public', 'brand', 'app-icon', 'voicecraft-app-icon-32.png'),
+    path.join(__dirname, '..', 'dist', 'brand', 'app-icon', 'voicecraft-app-icon-32.png'),
+    path.join(app.getAppPath(), 'dist', 'brand', 'app-icon', 'voicecraft-app-icon-32.png'),
+    path.join(__dirname, '..', 'public', 'favicon.png'),
+    path.join(__dirname, '..', 'dist', 'favicon.png'),
+  ]
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) return p
+    } catch {}
+  }
+  return null
+}
+
 // ---------- Window ----------
 function createWindow() {
   const settings = loadSettings()
   // In `npm run dev`, always show the window. startMinimized + detached
   // DevTools looks like "only DevTools opened" because the app stays hidden.
   const startHidden = !isDev && !!settings.startMinimized
+  const appIcon = resolveAppIcon()
   mainWindow = new BrowserWindow({
     width: 900,
     height: 700,
     minWidth: 600,
     minHeight: 500,
-    backgroundColor: '#1E1F22',
+    backgroundColor: '#0d0f14',
     show: !startHidden,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      // Presence / signaling websockets must keep ticking while unfocused.
+      backgroundThrottling: false,
     },
-    frame: true,
-    titleBarStyle: 'default',
+    frame: false,
+    title: 'VoiceCraft',
+    autoHideMenuBar: true,
+    ...(appIcon ? { icon: appIcon } : {}),
   })
+
+  // No File / Edit / View menu — custom title bar owns chrome.
+  Menu.setApplicationMenu(null)
 
   mainWindow.once('ready-to-show', () => {
     if (!mainWindow || mainWindow.isDestroyed()) return
@@ -524,13 +694,24 @@ function createWindow() {
       mainWindow.hide()
     }
   })
+
+  const emitMaximized = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    mainWindow.webContents.send('window:maximized', mainWindow.isMaximized())
+  }
+  mainWindow.on('maximize', emitMaximized)
+  mainWindow.on('unmaximize', emitMaximized)
 }
 
 // ---------- System tray ----------
 function buildTrayIcon() {
-  // A 16x16 transparent PNG with a colored square drawn via nativeImage
-  // would be ideal, but to avoid bundling a binary we just draw something
-  // simple via base64.
+  const pngPath = resolveTrayPng()
+  if (pngPath) {
+    const img = nativeImage.createFromPath(pngPath)
+    if (!img.isEmpty()) {
+      return process.platform === 'win32' ? img.resize({ width: 16, height: 16 }) : img
+    }
+  }
   const png = nativeImage.createFromBuffer(Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAOUlEQVR42mNk+M9QzwAEjDAGABCRAv8HfwdQYg4GjcUB0QYGBiDRA0mDiIMYBoDkH8X/BxAaaAaj+gIAAEUYBXsfvRdGAAAAAElFTkSuQmCC',
     'base64'))
@@ -579,6 +760,7 @@ app.whenReady().then(() => {
   // with EADDRINUSE.
   createWindow()
   createTray()
+  setupUpdater(() => mainWindow)
 
   // Re-build the tray menu whenever the window visibility flips.
   if (mainWindow) {
