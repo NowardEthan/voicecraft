@@ -2,6 +2,20 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import electron from 'vite-plugin-electron/simple'
 import path from 'path'
+import { resolveLiveKitEmbed } from './scripts/resolve-livekit-embed.mjs'
+
+const livekitEmbed = resolveLiveKitEmbed()
+if (livekitEmbed.source !== 'none') {
+  console.log(`[vite] LiveKit credentials embedded from ${livekitEmbed.source}`)
+} else {
+  console.warn('[vite] LiveKit credentials missing — packaged voice calls will need AppData keys')
+}
+
+const livekitDefine = {
+  __VC_LIVEKIT_URL__: JSON.stringify(livekitEmbed.url || ''),
+  __VC_LIVEKIT_API_KEY__: JSON.stringify(livekitEmbed.apiKey || ''),
+  __VC_LIVEKIT_API_SECRET__: JSON.stringify(livekitEmbed.apiSecret || ''),
+}
 
 export default defineConfig({
   base: './',
@@ -11,6 +25,7 @@ export default defineConfig({
       main: {
         entry: 'electron/main.js',
         vite: {
+          define: livekitDefine,
           build: {
             sourcemap: true,
             outDir: 'dist-electron',

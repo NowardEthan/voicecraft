@@ -45,6 +45,10 @@ function loadLiveKitCredentials() {
   const candidates = [
     path.join(app.getPath('userData'), 'livekit-keys.txt'),
     path.join(app.getPath('userData'), 'Keys LiveKit.txt'),
+    path.join(app.getPath('appData'), 'voicecraft', 'livekit-keys.txt'),
+    path.join(app.getPath('appData'), 'voicecraft', 'Keys LiveKit.txt'),
+    path.join(app.getPath('appData'), 'voicecraft', 'Cache', 'voicecraft', 'livekit-keys.txt'),
+    path.join(app.getPath('appData'), 'voicecraft', 'Cache', 'voicecraft', 'Keys LiveKit.txt'),
     path.join(app.getAppPath(), 'LiveKit', 'Keys LiveKit.txt'),
     path.join(process.cwd(), 'LiveKit', 'Keys LiveKit.txt'),
     path.join(__dirname, '..', 'LiveKit', 'Keys LiveKit.txt'),

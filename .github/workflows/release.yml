@@ -29,4 +29,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Unsigned builds; avoids winCodeSign symlink privilege failures.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          # Embedded into Electron main at build time so friends can join calls
+          # without a local keys file. Set these in repo Settings → Secrets.
+          LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
+          LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
+          LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
         run: npm run release

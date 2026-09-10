@@ -48,6 +48,11 @@ function loadLiveKitCredentials() {
   const candidates = [
     path.join(app.getPath('userData'), 'livekit-keys.txt'),
     path.join(app.getPath('userData'), 'Keys LiveKit.txt'),
+    // Legacy nested profile (bug from setPath('cache') on Windows)
+    path.join(app.getPath('appData'), 'voicecraft', 'livekit-keys.txt'),
+    path.join(app.getPath('appData'), 'voicecraft', 'Keys LiveKit.txt'),
+    path.join(app.getPath('appData'), 'voicecraft', 'Cache', 'voicecraft', 'livekit-keys.txt'),
+    path.join(app.getPath('appData'), 'voicecraft', 'Cache', 'voicecraft', 'Keys LiveKit.txt'),
     path.join(app.getAppPath(), 'LiveKit', 'Keys LiveKit.txt'),
     path.join(process.cwd(), 'LiveKit', 'Keys LiveKit.txt'),
     path.join(__dirname, '..', 'LiveKit', 'Keys LiveKit.txt'),
@@ -62,6 +67,16 @@ function loadLiveKitCredentials() {
       }
     } catch {}
   }
+
+  // Build-time embed (CI secrets / local Keys file via Vite define). Empty in plain dev
+  // unless vite.config resolved credentials at bundle time.
+  const embedded = {
+    url: typeof __VC_LIVEKIT_URL__ !== 'undefined' ? __VC_LIVEKIT_URL__ : '',
+    apiKey: typeof __VC_LIVEKIT_API_KEY__ !== 'undefined' ? __VC_LIVEKIT_API_KEY__ : '',
+    apiSecret: typeof __VC_LIVEKIT_API_SECRET__ !== 'undefined' ? __VC_LIVEKIT_API_SECRET__ : '',
+  }
+  if (embedded.url && embedded.apiKey && embedded.apiSecret) return embedded
+
   return fromEnv
 }
 
@@ -74,7 +89,7 @@ async function mintLiveKitToken({ spaceId, roomId, identity, displayName }) {
   const creds = loadLiveKitCredentials()
   if (!creds.url || !creds.apiKey || !creds.apiSecret) {
     throw new Error(
-      'LiveKit não configurado. Salve URL, API Key e Secret em %APPDATA%/VoiceCraft/livekit-keys.txt',
+      'LiveKit não configurado. Salve URL, API Key e Secret em %APPDATA%\\voicecraft\\livekit-keys.txt',
     )
   }
   if (!identity) throw new Error('identity obrigatória')
@@ -239,10 +254,21 @@ if (process.platform === 'win32') {
 }
 
 function ensureCacheDirs() {
+  // Packaged builds on Windows were ending up with a nested profile at
+  // %APPDATA%/voicecraft/Cache/voicecraft when setPath('cache') ran early.
+  // Pin userData to the stable folder before touching cache paths.
+  if (app.isPackaged) {
+    const stable = path.join(app.getPath('appData'), 'voicecraft')
+    try {
+      if (path.resolve(app.getPath('userData')) !== path.resolve(stable)) {
+        app.setPath('userData', stable)
+      }
+    } catch {}
+  }
   const root = app.getPath('userData')
   const cacheDir = path.join(root, 'Cache')
   try { fs.mkdirSync(cacheDir, { recursive: true }) } catch {}
-  try { app.setPath('cache', cacheDir) } catch {}
+  // Prefer the Chromium switch only — setPath('cache') nested userData on Win.
   app.commandLine.appendSwitch('disk-cache-dir', cacheDir)
   // Shader disk cache is what throws gpu_disk_cache.cc — GPU still works,
   // it just compiles in memory instead of fighting a locked GPUCache folder.
