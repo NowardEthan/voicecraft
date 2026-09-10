@@ -16,6 +16,8 @@ const isDev = !app.isPackaged
 // at runtime (that path does not exist under dist-electron/).
 let updaterWired = false
 let autoUpdaterRef = null
+/** Last status pushed to the renderer — replayed when the UI mounts late (login). */
+let lastUpdaterStatus = null
 
 function getAutoUpdater() {
   if (!autoUpdaterRef) {
@@ -25,6 +27,9 @@ function getAutoUpdater() {
 }
 
 function sendUpdater(getMainWindow, channel, payload) {
+  if (channel === 'updater:status' && payload) {
+    lastUpdaterStatus = payload
+  }
   const win = typeof getMainWindow === 'function' ? getMainWindow() : null
   if (!win || win.isDestroyed()) return
   try {
@@ -37,6 +42,7 @@ function setupUpdater(getMainWindow) {
   updaterWired = true
 
   ipcMain.handle('updater:get-version', () => app.getVersion())
+  ipcMain.handle('updater:get-status', () => lastUpdaterStatus)
   ipcMain.handle('updater:check', async () => {
     if (!app.isPackaged) {
       return { ok: false, error: 'Atualizações só funcionam no app instalado.' }
@@ -95,9 +101,28 @@ function setupUpdater(getMainWindow) {
     })
   })
 
-  setTimeout(() => {
+  const runCheck = () => {
     updater.checkForUpdates().catch(() => {})
-  }, 8000)
+  }
+  // Early + late: UI may still be on login when the first check finishes.
+  setTimeout(runCheck, 6_000)
+  setTimeout(runCheck, 45_000)
+
+  // When the window finally loads (or user finishes login), re-push last status.
+  const replay = () => {
+    if (!lastUpdaterStatus) return
+    const s = lastUpdaterStatus.status
+    if (s === 'available' || s === 'downloading' || s === 'downloaded') {
+      sendUpdater(getMainWindow, 'updater:status', lastUpdaterStatus)
+    }
+  }
+  const win = typeof getMainWindow === 'function' ? getMainWindow() : null
+  if (win && !win.isDestroyed()) {
+    win.webContents.on('did-finish-load', () => {
+      setTimeout(replay, 800)
+      setTimeout(runCheck, 2_500)
+    })
+  }
 }
 
 // Dev and the installed app must not share Cache/GPUCache — a leftover
@@ -106,6 +131,12 @@ function setupUpdater(getMainWindow) {
 // and "Gpu Cache Creation failed: -2".
 if (isDev) {
   app.setPath('userData', path.join(app.getPath('appData'), 'voicecraft-dev'))
+}
+
+// Without this, Windows taskbar/notifications pin under the default Electron AUMID
+// and show the atom icon even when the .exe itself has the right icon.
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.voicecraft.app')
 }
 
 // Keep RTDB / WebSocket presence alive when the window is occluded or
@@ -582,11 +613,13 @@ async function startSignalingServer() {
 
 function resolveAppIcon() {
   const candidates = [
+    // Packaged: copied next to the exe via extraResources (outside asar — Windows needs this for taskbar).
+    process.resourcesPath ? path.join(process.resourcesPath, 'icon.ico') : null,
     path.join(__dirname, '..', 'public', 'icon.ico'),
     path.join(__dirname, '..', 'dist', 'icon.ico'),
     path.join(app.getAppPath(), 'dist', 'icon.ico'),
     path.join(app.getAppPath(), 'public', 'icon.ico'),
-  ]
+  ].filter(Boolean)
   for (const p of candidates) {
     try {
       if (fs.existsSync(p)) return p
@@ -637,6 +670,17 @@ function createWindow() {
     autoHideMenuBar: true,
     ...(appIcon ? { icon: appIcon } : {}),
   })
+
+  // Taskbar icon: set explicitly (and prefer nativeImage) — path-only icon
+  // inside asar is unreliable on Windows.
+  if (appIcon) {
+    try {
+      const img = nativeImage.createFromPath(appIcon)
+      if (!img.isEmpty()) mainWindow.setIcon(img)
+    } catch {
+      try { mainWindow.setIcon(appIcon) } catch {}
+    }
+  }
 
   // No File / Edit / View menu — custom title bar owns chrome.
   Menu.setApplicationMenu(null)

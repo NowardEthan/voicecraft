@@ -14,7 +14,7 @@ export default function UpdateToast() {
     const api = typeof window !== 'undefined' ? window.electronAPI?.updater : null
     if (!api?.onStatus) return undefined
 
-    const off = api.onStatus((payload) => {
+    const apply = (payload) => {
       if (!payload?.status) return
       if (payload.status === 'checking' || payload.status === 'not-available') return
       if (payload.status === 'error') {
@@ -28,7 +28,12 @@ export default function UpdateToast() {
         percent: typeof payload.percent === 'number' ? payload.percent : (prev?.percent ?? 0),
         message: payload.message || null,
       }))
-    })
+    }
+
+    // Replay status that arrived while Login / splash was still up.
+    api.getStatus?.().then(apply).catch(() => {})
+
+    const off = api.onStatus(apply)
     return () => { off?.() }
   }, [])
 

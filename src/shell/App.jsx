@@ -4,6 +4,7 @@
 import { lazy, Suspense } from 'react'
 import { GoogleAuthBridge, LoginScreen, useAuth } from '../features/auth'
 import { BrandLoader } from '../shared/ui/BrandMark'
+import { UpdateToast } from '../features/settings'
 import TitleBar from './TitleBar'
 
 const AppShell = lazy(() => import('./AppShell'))
@@ -28,6 +29,7 @@ function AppFrame({ children }) {
       <TitleBar />
       <div className="flex-1 min-h-0 min-w-0 relative">
         {children}
+        <UpdateToast />
       </div>
     </div>
   )

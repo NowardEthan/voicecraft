@@ -15,7 +15,7 @@ import { useCurrentSpace, useSpacesList, isSpaceInRail, spaceTokens, ensureFullS
 import { parseSpaceInvite } from '../features/spaces/model/spaceInvite'
 import { useRoomActions } from '../features/rooms'
 import { useProfilePopover } from '../features/people'
-import { useSettings, UpdateToast } from '../features/settings'
+import { useSettings } from '../features/settings'
 import { useAccountProfile } from '../features/account'
 import { NotificationsProvider } from '../features/notifications'
 import NotificationBell from '../features/notifications/NotificationBell'
@@ -674,8 +674,6 @@ export default function AppShell({ account }) {
           </motion.div>
         )}
       </AnimatePresence>
-
-      <UpdateToast />
 
       <Suspense fallback={null}>
         <ProfilePopover
