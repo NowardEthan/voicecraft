@@ -20,7 +20,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowLeft, ArrowRight, Check, X, RefreshCw, ImagePlus,
 } from 'lucide-react'
-import { PURPOSES } from '../features/rooms'
+import { CREATE_PURPOSES } from '../features/rooms'
 import useFocusTrap from '../shared/hooks/useFocusTrap'
 import { EASE_OUT } from '../shared/motion/presets.js'
 import {
@@ -236,7 +236,7 @@ export default function SpaceCreator({ onCreate, onClose }) {
       if (roomTrimmed.length > 64) {
         return { ok: false, field: 'firstRoom.name', message: 'Nome da sala muito longo (máx. 64).' }
       }
-      if (!PURPOSES.find(p => p.key === firstRoomPurpose)) {
+      if (!CREATE_PURPOSES.find(p => p.key === firstRoomPurpose)) {
         return { ok: false, field: 'firstRoom.type', message: 'Tipo de sala inválido.' }
       }
     }
@@ -368,7 +368,7 @@ export default function SpaceCreator({ onCreate, onClose }) {
               )}
               {step === 2 && (
                 <FirstRoomStep
-                  types={PURPOSES}
+                  types={CREATE_PURPOSES}
                   typeKey={firstRoomPurpose}
                   roomName={firstRoomName}
                   manuallyRenamed={firstRoomManuallyRenamed}

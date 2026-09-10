@@ -2,6 +2,34 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import electron from 'vite-plugin-electron/simple'
 import path from 'path'
+import fs from 'fs'
+
+function copyLiveKitTokenHelper() {
+  return {
+    name: 'copy-livekit-token-helper',
+    writeBundle() {
+      const src = path.resolve(__dirname, 'electron/livekitToken.js')
+      const destDir = path.resolve(__dirname, 'dist-electron')
+      const dest = path.join(destDir, 'livekitToken.js')
+      try {
+        fs.mkdirSync(destDir, { recursive: true })
+        fs.copyFileSync(src, dest)
+      } catch (err) {
+        console.warn('[vite] failed to copy livekitToken.js', err?.message || err)
+      }
+    },
+    closeBundle() {
+      const src = path.resolve(__dirname, 'electron/livekitToken.js')
+      const dest = path.resolve(__dirname, 'dist-electron/livekitToken.js')
+      try {
+        fs.mkdirSync(path.dirname(dest), { recursive: true })
+        fs.copyFileSync(src, dest)
+      } catch (err) {
+        console.warn('[vite] failed to copy livekitToken.js', err?.message || err)
+      }
+    },
+  }
+}
 
 export default defineConfig({
   base: './',
@@ -15,9 +43,10 @@ export default defineConfig({
             sourcemap: true,
             outDir: 'dist-electron',
             rollupOptions: {
-              // Keep native/runtime package out of the main bundle.
-              external: ['electron-updater'],
+              // Keep native/runtime packages out of the main bundle.
+              external: ['electron-updater', 'livekit-server-sdk'],
             },
+            plugins: [copyLiveKitTokenHelper()],
           },
         },
       },

@@ -26,7 +26,8 @@ import { PersonAvatar } from '../../features/people'
 import { resolveSpaceCover, spaceTokens } from '../../features/spaces'
 import { SpaceCoverLayer } from '../../features/spaces/components/SpaceCoverLayer'
 import SpaceSettingsModal from '../../features/spaces/components/SpaceSettingsModal'
-import { PURPOSE_BY_KEY } from '../../features/rooms'
+import { RoomIconMark, roomAccentColor, roomSoftColor } from '../../features/rooms/components/RoomIconMark'
+import { resolveRoomNameStyle } from '../../features/rooms/model/roomCosmetics'
 import { useNotifications, RoomUnreadPill } from '../../features/notifications'
 import VoiceActiveBar from '../../features/rooms/views/voice/components/VoiceActiveBar'
 
@@ -304,12 +305,13 @@ export default function SpaceContextPanel({
           ) : (
             <ul className="space-y-1">
               {rooms.map(room => {
-                const purpose = PURPOSE_BY_KEY[room.purpose] || PURPOSE_BY_KEY.conversation
-                const RoomIcon = purpose.icon
                 const isActive = currentRoomId === room.id || selectedRoomId === room.id
                 const isOptimistic = room.id === '__optimistic__'
                 const confirming = confirmDeleteId === room.id
                 const hasUnread = !!(space?.id && unreadByRoom[roomKey(space.id, room.id)])
+                const accent = roomAccentColor(room)
+                const soft = roomSoftColor(room)
+                const nameStyle = resolveRoomNameStyle(room.nameStyle).style
                 return (
                   <li key={room.id} className="group relative">
                     <button
@@ -329,23 +331,31 @@ export default function SpaceContextPanel({
                     >
                       {isActive && (
                         <span
-                          className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full bg-accent"
+                          className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full"
+                          style={{ background: accent }}
                           aria-hidden
                         />
                       )}
                       <span
-                        className={
-                          'w-7 h-7 rounded-[8px] flex items-center justify-center shrink-0 ' +
-                          (isActive ? 'bg-accent/15 text-accent' : '')
+                        className="w-7 h-7 rounded-[8px] flex items-center justify-center shrink-0"
+                        style={
+                          isActive
+                            ? { background: `color-mix(in srgb, ${accent} 18%, transparent)`, color: accent }
+                            : { background: soft, color: accent }
                         }
-                        style={isActive ? undefined : { background: purpose.soft, color: purpose.color }}
                       >
-                        <RoomIcon size={13} strokeWidth={1.8} />
+                        <RoomIconMark room={room} size={13} />
                       </span>
-                      <p className={
-                        'min-w-0 flex-1 text-[13px] leading-tight truncate ' +
-                        (hasUnread && !isActive ? 'font-bold' : 'font-semibold')
-                      }>
+                      <p
+                        className={
+                          'min-w-0 flex-1 text-[13px] leading-tight truncate ' +
+                          (hasUnread && !isActive ? 'font-bold' : 'font-semibold')
+                        }
+                        style={{
+                          ...nameStyle,
+                          ...(room.color ? { color: isActive || hasUnread ? accent : undefined } : null),
+                        }}
+                      >
                         {room.name}
                       </p>
                       {!isActive && <RoomUnreadPill show={hasUnread} />}

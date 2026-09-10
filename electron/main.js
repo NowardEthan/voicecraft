@@ -144,6 +144,12 @@ if (process.platform === 'win32') {
 app.commandLine.appendSwitch('disable-background-timer-throttling')
 app.commandLine.appendSwitch('disable-renderer-backgrounding')
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+// Prefer system DNS on Windows — Chromium AsyncDns often fails to resolve
+// LiveKit media hosts (ip-*.host.livekit.cloud → ERR_NAME_NOT_RESOLVED / -105).
+app.commandLine.appendSwitch('disable-features', 'AsyncDns,DnsOverHttps')
+if (process.platform === 'win32') {
+  app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess2')
+}
 
 function ensureCacheDirs() {
   const root = app.getPath('userData')
@@ -207,6 +213,7 @@ const DEFAULT_SETTINGS = {
   screenQuality: '720p',
   screenFramerate: 30,
   screenWithAudio: false,
+  callSounds: true,
   // GPU acceleration (must be applied BEFORE app.whenReady — see below)
   gpuAcceleration: true,
   // UI
@@ -582,6 +589,34 @@ ipcMain.handle('auth:google-start', async () => {
 ipcMain.handle('auth:google-cancel', () => {
   stopOAuthServer()
   return { ok: true }
+})
+
+ipcMain.handle('livekit:token', async (_event, payload = {}) => {
+  try {
+    const candidates = [
+      path.join(__dirname, 'livekitToken.js'),
+      path.join(__dirname, '..', 'electron', 'livekitToken.js'),
+      path.join(process.cwd(), 'electron', 'livekitToken.js'),
+    ]
+    const modPath = candidates.find((p) => {
+      try { return fs.existsSync(p) } catch { return false }
+    })
+    if (!modPath) {
+      throw new Error('Módulo livekitToken não encontrado (reinicie o npm run electron:dev)')
+    }
+    // Bust require cache so key-file edits apply without full rebuild.
+    try { delete require.cache[require.resolve(modPath)] } catch {}
+    const { mintLiveKitToken } = require(modPath)
+    const result = await mintLiveKitToken({
+      spaceId: payload.spaceId || null,
+      roomId: payload.roomId || null,
+      identity: payload.identity || null,
+      displayName: payload.displayName || null,
+    })
+    return { ok: true, ...result }
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) }
+  }
 })
 
 ipcMain.handle('desktop-capturer:get-sources', async (_event, opts) => {

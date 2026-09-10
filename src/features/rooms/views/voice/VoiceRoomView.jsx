@@ -2,12 +2,14 @@
  * VoiceRoomView — top-level orchestrator for the voice room.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { useVoiceRoom } from './useVoiceRoom'
+import { useLiveKitRoom } from './useLiveKitRoom'
 import { VoiceRoomHeader } from './components/VoiceRoomHeader'
 import { ParticipantGrid } from './components/ParticipantGrid'
 import { VoiceControlDock } from './components/VoiceControlDock'
 import { ScreenSharePicker } from './components/ScreenSharePicker'
 import { PermissionDeniedState } from './components/PermissionDeniedState'
+import { CallConnectingState } from './components/CallConnectingState'
+import { unlockCallSounds } from '../../../../shared/audio/callSounds'
 import { resolveSpaceCover, spaceTokens } from '../../../spaces'
 import { SpaceCoverLayer } from '../../../spaces/components/SpaceCoverLayer'
 import { getRoomCover } from '../../model/roomCover'
@@ -25,6 +27,7 @@ export default function VoiceRoomView({
   onLeave,
   onInvite,
   onStatusChange,
+  onOpenSettings,
 }) {
   void signaling
   const reducedMotion = useReducedMotion()
@@ -35,6 +38,17 @@ export default function VoiceRoomView({
   const [roomCover, setRoomCoverState] = useState(() => getRoomCover(room?.id))
   useEffect(() => { setRoomCoverState(getRoomCover(room?.id)) }, [room?.id])
   const handleCoverChange = (dataUrl) => setRoomCoverState(dataUrl)
+
+  // Local personal override → shared room cover → space cover.
+  const sharedRoomCover = room?.cover || null
+  const atmosphere = roomCover || sharedRoomCover || spaceCover
+  const atmosphereIsRoom = !!(roomCover || sharedRoomCover)
+  const atmosphereSrc = roomCover || sharedRoomCover || spaceCover
+  const atmosphereFit = roomCover
+    ? null
+    : sharedRoomCover
+      ? (room?.coverFit || null)
+      : space?.coverFit
 
   const [selfStatus, setSelfStatus] = useState(() => getLocalMemberStatus())
   useEffect(() => {
@@ -65,10 +79,7 @@ export default function VoiceRoomView({
         isCreator: space?.createdBy === m.userId,
         status: m.userId === currentUserId ? selfStatus : (m.status || m.statusText || ''),
       }))
-    // Already listed — never inject a second self row.
     if (inRoom.some(m => m.userId === currentUserId)) return inRoom
-    // Only synthesize self when we have entered this room (caller is here)
-    // but presence hasn't caught up yet. Skip if currentUserId is unknown.
     if (!currentUserId) return inRoom
     const self = members.find(m => m.userId === currentUserId)
     return [
@@ -93,6 +104,8 @@ export default function VoiceRoomView({
     isMuted,
     isDeafened,
     connectionState,
+    joinPhase,
+    isCallReady,
     error,
     permissionDenied,
     elapsed,
@@ -115,19 +128,25 @@ export default function VoiceRoomView({
     remoteCameras,
     shareNeedsPicker,
     shareSources,
-    onLeave: _unusedLeave,
-  } = useVoiceRoom({
+    onLeave: leaveWithSound,
+  } = useLiveKitRoom({
     room,
+    space,
     currentUserId,
     currentUserName,
-    members,
     onLeave,
     onInvite,
     onStatusChange,
   })
-  void _unusedLeave
 
-  const atmosphere = roomCover || spaceCover
+  useEffect(() => {
+    unlockCallSounds()
+  }, [])
+
+  const showConnecting = !permissionDenied && !error && (
+    joinPhase === 'reconnecting'
+    || (!isCallReady && joinPhase !== 'failed' && joinPhase !== 'ready')
+  )
 
   if (!room) return null
 
@@ -139,7 +158,7 @@ export default function VoiceRoomView({
       <div className="relative z-10 flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
         {atmosphere && (
           <div aria-hidden className="absolute inset-0">
-            {roomCover ? (
+            {atmosphereIsRoom && roomCover ? (
               <div
                 className="absolute inset-0"
                 style={{
@@ -149,7 +168,7 @@ export default function VoiceRoomView({
                 }}
               />
             ) : (
-              <SpaceCoverLayer src={spaceCover} fit={space?.coverFit} />
+              <SpaceCoverLayer src={atmosphereSrc} fit={atmosphereFit} />
             )}
           </div>
         )}
@@ -187,76 +206,85 @@ export default function VoiceRoomView({
         )}
 
         <div className="relative z-10 flex-1 flex flex-col min-w-0 min-h-0">
-        <VoiceRoomHeader
-          space={space}
-          room={room}
-          elapsed={elapsed}
-          participantsCount={participants.length}
-          connectionState={connectionState}
-          roomCover={roomCover}
-          onCoverChange={handleCoverChange}
-          onInvite={onInvite}
-          onMore={() => {}}
-        />
-
-        {permissionDenied ? (
-          <PermissionDeniedState onOpenSettings={() => window.open('chrome://settings/content/microphone', '_blank')} />
-        ) : error ? (
-          <div className="flex-1 flex items-center justify-center px-6">
-            <div
-              role="alert"
-              className="max-w-md w-full rounded-[16px] border border-danger/30 bg-[#1a0f11]/85 backdrop-blur p-6 text-center"
-            >
-              <p className="text-[14px] font-semibold text-strong">Erro na chamada</p>
-              <p className="text-[12.5px] text-muted mt-1.5">{error}</p>
-              <button
-                type="button"
-                onClick={onLeave}
-                className="mt-4 inline-flex items-center gap-2 h-9 px-4 rounded-pill bg-accent text-strong text-[12.5px] font-semibold hover:scale-[1.03] active:scale-[0.97] transition-transform"
-              >
-                Sair da sala
-              </button>
-            </div>
-          </div>
-        ) : (
-          <ParticipantGrid
-            participants={participants}
-            currentUserId={currentUserId}
-            isCreator={isCreator}
-            selfSpeaking={selfSpeaking}
-            remoteSpeaking={remoteSpeaking}
-            selfMuted={isMuted}
-            reducedMotion={reducedMotion}
+          <VoiceRoomHeader
+            space={space}
+            room={room}
+            elapsed={elapsed}
+            participantsCount={participants.length}
+            connectionState={connectionState}
+            roomCover={roomCover || sharedRoomCover}
+            onCoverChange={handleCoverChange}
             onInvite={onInvite}
-            onStatusChange={handleStatusChange}
-            screenStream={screenStream || remoteScreenStream}
-            screenIsSelf={!!screenStream}
-            onStopShare={handleShareScreen}
-            cameraStreams={{
-              ...remoteCameras,
-              ...(cameraStream && currentUserId ? { [currentUserId]: cameraStream } : {}),
-            }}
+            onOpenSettings={onOpenSettings}
+            onLeave={leaveWithSound}
           />
-        )}
 
-        <div className="pointer-events-none absolute inset-x-0 bottom-3 sm:bottom-6 flex justify-center px-2 sm:px-4 pb-[env(safe-area-inset-bottom)]">
-          <VoiceControlDock
-            isMuted={isMuted}
-            permissionDenied={permissionDenied}
-            onToggleMute={handleToggleMute}
-            mics={mics}
-            activeDeviceId={activeDeviceId}
-            onPickDevice={handlePickDevice}
-            isDeafened={isDeafened}
-            onToggleDeafen={handleToggleDeafen}
-            onShareScreen={handleShareScreen}
-            screenSharing={screenSharing}
-            onToggleCamera={handleToggleCamera}
-            cameraOn={cameraOn}
-            onLeave={onLeave}
-            reducedMotion={reducedMotion}
-          />
-        </div>
+          {permissionDenied ? (
+            <PermissionDeniedState onOpenSettings={() => window.open('chrome://settings/content/microphone', '_blank')} />
+          ) : error ? (
+            <div className="flex-1 flex items-center justify-center px-6">
+              <div
+                role="alert"
+                className="max-w-md w-full rounded-[16px] border border-danger/30 bg-[#1a0f11]/85 backdrop-blur p-6 text-center"
+              >
+                <p className="text-[14px] font-semibold text-strong">Erro na chamada</p>
+                <p className="text-[12.5px] text-muted mt-1.5">{error}</p>
+                <button
+                  type="button"
+                  onClick={leaveWithSound}
+                  className="mt-4 inline-flex items-center gap-2 h-9 px-4 rounded-pill bg-accent text-strong text-[12.5px] font-semibold hover:scale-[1.03] active:scale-[0.97] transition-transform"
+                >
+                  Sair da sala
+                </button>
+              </div>
+            </div>
+          ) : showConnecting ? (
+            <CallConnectingState
+              roomName={room?.name}
+              phase={joinPhase === 'reconnecting' ? 'reconnecting' : joinPhase}
+              onLeave={leaveWithSound}
+              reducedMotion={reducedMotion}
+            />
+          ) : (
+            <ParticipantGrid
+              participants={participants}
+              currentUserId={currentUserId}
+              isCreator={isCreator}
+              selfSpeaking={selfSpeaking}
+              remoteSpeaking={remoteSpeaking}
+              selfMuted={isMuted}
+              reducedMotion={reducedMotion}
+              onInvite={onInvite}
+              onStatusChange={handleStatusChange}
+              screenStream={screenStream || remoteScreenStream}
+              screenIsSelf={!!screenStream}
+              onStopShare={handleShareScreen}
+              cameraStreams={{
+                ...remoteCameras,
+                ...(cameraStream && currentUserId ? { [currentUserId]: cameraStream } : {}),
+              }}
+            />
+          )}
+
+          <div className="pointer-events-none absolute inset-x-0 bottom-3 sm:bottom-6 flex justify-center px-2 sm:px-4 pb-[env(safe-area-inset-bottom)]">
+            <VoiceControlDock
+              isMuted={isMuted}
+              permissionDenied={permissionDenied}
+              onToggleMute={handleToggleMute}
+              mics={mics}
+              activeDeviceId={activeDeviceId}
+              onPickDevice={handlePickDevice}
+              isDeafened={isDeafened}
+              onToggleDeafen={handleToggleDeafen}
+              onShareScreen={handleShareScreen}
+              screenSharing={screenSharing}
+              onToggleCamera={handleToggleCamera}
+              cameraOn={cameraOn}
+              onLeave={leaveWithSound}
+              reducedMotion={reducedMotion}
+              mediaEnabled={isCallReady && !permissionDenied && !error}
+            />
+          </div>
         </div>
       </div>
 

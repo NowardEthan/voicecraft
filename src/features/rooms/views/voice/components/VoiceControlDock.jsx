@@ -1,22 +1,22 @@
 /**
- * VoiceControlDock — the pill-shaped control bar pinned to the bottom
- * of the voice room main area.
- *
- * Contains:
- *   - MicrophoneControl + InputDeviceMenu (left)
- *   - Headphones / Output device (center-left)
- *   - ScreenShareControl (center)
- *   - More menu (center-right)
- *   - LeaveCallButton (right)
- *
- * The dock is the only thing that floats over the participant grid.
- * It must remain visible at all viewport sizes — even when the
- * participant list scrolls.
+ * VoiceControlDock — floating glass control bar for the voice room.
  */
-import { Headphones, Video, VideoOff } from 'lucide-react'
+import { Headphones, Video, VideoOff, Monitor } from 'lucide-react'
 import { MicrophoneControl } from './MicrophoneControl'
 import { InputDeviceMenu } from './InputDeviceMenu'
 import { LeaveCallButton } from './LeaveCallButton'
+
+const dockBtn = [
+  'h-11 w-11 rounded-full flex items-center justify-center',
+  'transition-[transform,background-color,color] duration-200',
+  'hover:scale-[1.05] active:scale-[0.95]',
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/20',
+  'disabled:opacity-40 disabled:pointer-events-none disabled:hover:scale-100',
+].join(' ')
+
+const dockBtnIdle = 'bg-white/[0.08] text-white/85 hover:bg-white/[0.14] hover:text-white'
+const dockBtnOn = 'bg-accent text-strong shadow-[0_10px_24px_-10px_var(--space-accent-glow-40)]'
+const dockBtnDanger = 'bg-danger text-white shadow-[0_10px_24px_-10px_rgba(239,68,68,0.45)]'
 
 export function VoiceControlDock({
   isMuted, permissionDenied, onToggleMute,
@@ -24,7 +24,9 @@ export function VoiceControlDock({
   onLeave, onShareScreen, screenSharing, isDeafened, onToggleDeafen,
   onToggleCamera, cameraOn,
   reducedMotion,
+  mediaEnabled = true,
 }) {
+  const mediaLocked = !mediaEnabled
   return (
     <div
       role="toolbar"
@@ -33,14 +35,13 @@ export function VoiceControlDock({
         pointer-events-auto
         inline-flex items-center gap-1 sm:gap-1.5
         max-w-full
-        rounded-pill bg-[#0f1014]
-        border border-white/[0.07]
-        shadow-[0_18px_44px_-12px_rgba(0,0,0,0.7)]
-        p-1 sm:p-1.5 sm:pl-2.5 sm:pr-2
+        rounded-full
+        bg-black/45 backdrop-blur-xl
+        shadow-[0_22px_50px_-18px_rgba(0,0,0,0.75),inset_0_1px_0_rgba(255,255,255,0.06)]
+        p-1.5 sm:pl-2 sm:pr-2
       "
     >
-      {/* Microphone (with device selector) */}
-      <div className="flex items-center">
+      <div className={`flex items-center gap-0.5 ${mediaLocked ? 'opacity-40 pointer-events-none' : ''}`}>
         <MicrophoneControl
           isMuted={isMuted}
           permissionDenied={permissionDenied}
@@ -54,68 +55,45 @@ export function VoiceControlDock({
         />
       </div>
 
-      {/* Headphones (mute / deafen output) */}
       <button
         type="button"
         onClick={onToggleDeafen}
+        disabled={mediaLocked}
         aria-label={isDeafened ? 'Reativar áudio' : 'Silenciar áudio'}
         aria-pressed={!isDeafened}
-        title={isDeafened ? 'Reativar áudio' : 'Silenciar áudio'}
-        className={[
-          'h-11 w-11 rounded-full flex items-center justify-center',
-          'border transition-[transform,background-color,border-color,color] duration-200',
-          'hover:scale-[1.06] active:scale-[0.94] focus-visible:ring-2 focus-visible:ring-accent/50',
-          isDeafened
-            ? 'bg-danger/15 border-danger/40 text-danger'
-            : 'bg-surface2 border-line text-ink hover:bg-surface1 hover:text-strong',
-        ].join(' ')}
+        title={mediaLocked ? 'Aguarde conectar' : (isDeafened ? 'Reativar áudio' : 'Silenciar áudio')}
+        className={[dockBtn, isDeafened ? dockBtnDanger : dockBtnIdle].join(' ')}
       >
-        <Headphones size={16} strokeWidth={1.8} />
+        <Headphones size={16} strokeWidth={1.9} />
       </button>
 
       <button
         type="button"
         onClick={onToggleCamera}
+        disabled={mediaLocked}
         aria-label={cameraOn ? 'Desligar câmera' : 'Ligar câmera'}
         aria-pressed={!!cameraOn}
-        title={cameraOn ? 'Desligar câmera' : 'Ligar câmera'}
-        className={[
-          'h-11 w-11 rounded-full flex items-center justify-center',
-          'border transition-[transform,background-color,border-color,color] duration-200',
-          'hover:scale-[1.06] active:scale-[0.94] focus-visible:ring-2 focus-visible:ring-accent/50',
-          cameraOn
-            ? 'bg-accent/15 border-accent/40 text-accent'
-            : 'bg-surface2 border-line text-ink hover:bg-surface1 hover:text-strong',
-        ].join(' ')}
+        title={mediaLocked ? 'Aguarde conectar' : (cameraOn ? 'Desligar câmera' : 'Ligar câmera')}
+        className={[dockBtn, cameraOn ? dockBtnOn : dockBtnIdle].join(' ')}
       >
         {cameraOn
-          ? <Video size={16} strokeWidth={1.8} />
-          : <VideoOff size={16} strokeWidth={1.8} />}
+          ? <Video size={16} strokeWidth={1.9} />
+          : <VideoOff size={16} strokeWidth={1.9} />}
       </button>
 
-      {/* Screen share */}
       <button
         type="button"
         onClick={onShareScreen}
+        disabled={mediaLocked}
         aria-label={screenSharing ? 'Parar compartilhamento' : 'Compartilhar tela'}
         aria-pressed={!!screenSharing}
-        title={screenSharing ? 'Parar compartilhamento' : 'Compartilhar tela'}
-        className={[
-          'h-11 w-11 rounded-full flex items-center justify-center',
-          'border transition-[transform,background-color,border-color,color] duration-200',
-          'hover:scale-[1.06] active:scale-[0.94] focus-visible:ring-2 focus-visible:ring-accent/50',
-          screenSharing
-            ? 'bg-accent/15 border-accent/40 text-accent'
-            : 'bg-surface2 border-line text-ink hover:bg-surface1 hover:text-strong',
-        ].join(' ')}
+        title={mediaLocked ? 'Aguarde conectar' : (screenSharing ? 'Parar compartilhamento' : 'Compartilhar tela')}
+        className={[dockBtn, screenSharing ? dockBtnOn : dockBtnIdle].join(' ')}
       >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-          <rect x="2" y="3" width="20" height="14" rx="2" />
-          <path d="M8 21h8M12 17v4" />
-        </svg>
+        <Monitor size={16} strokeWidth={1.9} />
       </button>
 
-      <div className="w-px h-6 bg-white/10 mx-1" aria-hidden />
+      <div className="w-px h-5 bg-white/[0.08] mx-0.5 sm:mx-1" aria-hidden />
 
       <LeaveCallButton onClick={onLeave} />
     </div>

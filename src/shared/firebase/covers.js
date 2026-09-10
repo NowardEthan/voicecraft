@@ -30,6 +30,26 @@ export async function deleteSpaceCover(spaceId) {
   }
 }
 
+export async function uploadRoomCover(spaceId, roomId, cover) {
+  if (!spaceId || !roomId || !cover) return null
+  if (typeof cover === 'string' && /^https?:\/\//.test(cover)) return cover
+  if (typeof cover !== 'string' || !cover.startsWith('data:image/')) return null
+  const blob = dataUrlToBlob(cover)
+  const path = `voicecraft/room-covers/${spaceId}/${roomId}`
+  const fileRef = ref(storage, path)
+  await uploadBytes(fileRef, blob, { contentType: blob.type || 'image/jpeg' })
+  return getDownloadURL(fileRef)
+}
+
+export async function deleteRoomCover(spaceId, roomId) {
+  if (!spaceId || !roomId) return
+  try {
+    await deleteObject(ref(storage, `voicecraft/room-covers/${spaceId}/${roomId}`))
+  } catch {
+    // already gone
+  }
+}
+
 export function uploadProfileCover(uid, cover) {
   return uploadSpaceCover(`profile-${uid}`, cover)
 }

@@ -50,6 +50,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
   },
 
+  // LiveKit voice (token minted in main — secret never reaches the renderer)
+  livekit: {
+    getToken: (payload) => ipcRenderer.invoke('livekit:token', payload || {}),
+  },
+
   // Audio service (C++ child process)
   audioService: {
     available: () => ipcRenderer.invoke('audio-service:available'),

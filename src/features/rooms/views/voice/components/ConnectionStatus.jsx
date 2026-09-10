@@ -1,7 +1,6 @@
 /**
  * ConnectionStatus — small text + colored dot reflecting the state of
- * the WebRTC peer connection (NOT the signaling socket, which is the
- * App shell's job).
+ * the LiveKit room connection.
  *
  * Always pairs color with text so color-blind users and screen readers
  * can read the state.
@@ -22,12 +21,16 @@ const TONE_DOT = {
   muted:    'bg-muted/60',
 }
 
-export function ConnectionStatus({ state }) {
+export function ConnectionStatus({ state, pulse = false }) {
   const info = STATE_LABEL[state] || STATE_LABEL.connecting
+  const busy = state === 'connecting' || state === 'reconnecting' || pulse
   return (
-    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 ${info.text}`}>
+    <span
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 ${info.text}`}
+      aria-live="polite"
+    >
       <span
-        className={`w-1.5 h-1.5 rounded-full ${TONE_DOT[info.tone]}`}
+        className={`w-1.5 h-1.5 rounded-full ${TONE_DOT[info.tone]} ${busy ? 'pulse-dot' : ''}`}
         aria-hidden
       />
       <span>{info.label}</span>

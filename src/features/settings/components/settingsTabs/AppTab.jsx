@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Cpu, Mic, RefreshCw, Download, Sliders } from 'lucide-react'
+import { Cpu, Mic, RefreshCw, Download, Sliders, Volume2 } from 'lucide-react'
 import { detectGpu } from '../../../../utils/gpu'
 import { flashToast } from '../../../../shared/utils/toast'
 
@@ -160,6 +160,22 @@ export default function AppTab({ draft, setDraft }) {
           />
         </label>
       )}
+
+      <label className="flex items-center justify-between gap-4 cursor-pointer rounded-2xl border border-white/[0.07] bg-[#12141a]/70 px-4 py-3.5">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <Volume2 size={14} className="text-accent" strokeWidth={1.75} />
+            <p className="text-[13px] font-semibold text-strong">Sons da call</p>
+          </div>
+          <p className="text-[11.5px] text-muted mt-1.5 leading-snug">
+            Toques ao entrar, sair, mute e quando alguém chega ou sai da sala.
+          </p>
+        </div>
+        <Toggle
+          on={draft.callSounds !== false}
+          onChange={(v) => setDraft((d) => ({ ...d, callSounds: v }))}
+        />
+      </label>
 
       <label className="flex items-center justify-between gap-4 cursor-pointer rounded-2xl border border-white/[0.07] bg-[#12141a]/70 px-4 py-3.5">
         <div className="flex items-center gap-2">

@@ -177,14 +177,16 @@ export function RoomThemeControl({ roomId, currentCover, onCoverChange, anchorRe
         aria-label="Tema da sala"
         title="Tema da sala"
         className={[
-          'w-9 h-9 rounded-pill inline-flex items-center justify-center',
-          'transition-colors duration-150',
+          'w-9 h-9 rounded-full inline-flex items-center justify-center',
+          'backdrop-blur-md shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]',
+          'transition-[background-color,color,transform] duration-150',
+          'hover:scale-[1.03] active:scale-[0.97]',
           currentCover
-            ? 'bg-accent/15 border border-accent/30 text-accent hover:bg-accent/20'
-            : 'bg-white/[0.04] hover:bg-white/[0.10] border border-white/[0.08] text-ink hover:text-strong',
+            ? 'bg-accent text-strong shadow-[0_10px_22px_-10px_var(--space-accent-glow-40)]'
+            : 'bg-black/35 hover:bg-black/50 text-white/85 hover:text-white',
         ].join(' ')}
       >
-        <ImageIcon size={15} strokeWidth={1.8} />
+        <ImageIcon size={15} strokeWidth={1.9} />
       </button>
       {typeof document !== 'undefined' && createPortal(node, document.body)}
     </>

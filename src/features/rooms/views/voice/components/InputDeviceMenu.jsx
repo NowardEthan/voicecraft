@@ -126,9 +126,8 @@ export function InputDeviceMenu({ devices, activeId, onPick }) {
         aria-label="Selecionar microfone"
         title="Selecionar microfone"
         className="
-          h-11 w-7 rounded-r-full -ml-3 flex items-center justify-center
-          text-muted hover:text-strong hover:bg-white/5
-          border-l border-white/5
+          h-9 w-7 rounded-full -ml-1 mr-0.5 flex items-center justify-center
+          text-white/55 hover:text-white hover:bg-white/[0.08]
           transition-colors duration-150
         "
       >

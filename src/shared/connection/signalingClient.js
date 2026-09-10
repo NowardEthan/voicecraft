@@ -26,7 +26,7 @@ import {
 } from 'firebase/firestore'
 import { onAuthStateChanged, updateProfile } from 'firebase/auth'
 import { auth, db, VC } from '../firebase/app'
-import { deleteSpaceCover, uploadSpaceCover } from '../firebase/covers'
+import { deleteSpaceCover, uploadSpaceCover, uploadRoomCover, deleteRoomCover } from '../firebase/covers'
 import { uploadChatFile } from '../firebase/chatFiles'
 import {
   attachUserPresence,
@@ -135,6 +135,12 @@ function toRoomView(id, data = {}) {
     name: data.name || 'sala',
     type: data.type === 'voice' ? 'voice' : 'text',
     purpose: data.purpose || (data.type === 'voice' ? 'voice' : 'conversation'),
+    icon: data.icon || null,
+    emoji: data.emoji || null,
+    color: data.color || null,
+    nameStyle: data.nameStyle || 'default',
+    cover: data.cover || null,
+    coverFit: data.coverFit || null,
     createdBy: data.createdBy || null,
     createdAt: data.createdAt || Date.now(),
     lastMessageAt: data.lastMessageAt || null,
@@ -911,7 +917,7 @@ export class SignalingClient {
     return next
   }
 
-  async createRoom(name, type = 'voice', purpose) {
+  async createRoom(name, type = 'voice', purpose, cosmetics = {}) {
     if (!this.spaceId) throw new Error('entre num space primeiro')
     const roomType = type === 'voice' ? 'voice' : 'text'
     const payload = {
@@ -921,7 +927,27 @@ export class SignalingClient {
       createdBy: this.userId,
       createdAt: Date.now(),
     }
+    if (cosmetics?.icon) payload.icon = String(cosmetics.icon).slice(0, 80)
+    if (cosmetics?.emoji) payload.emoji = String(cosmetics.emoji).slice(0, 16)
+    if (cosmetics?.color) payload.color = String(cosmetics.color).slice(0, 16)
+    if (cosmetics?.nameStyle) payload.nameStyle = String(cosmetics.nameStyle).slice(0, 24)
+    if (cosmetics?.coverFit && typeof cosmetics.coverFit === 'object') {
+      payload.coverFit = cosmetics.coverFit
+    }
+
     const ref = await addDoc(roomsCol(this.spaceId), payload)
+    let coverUrl = null
+    if (typeof cosmetics?.cover === 'string' && cosmetics.cover) {
+      try {
+        coverUrl = await uploadRoomCover(this.spaceId, ref.id, cosmetics.cover)
+        if (coverUrl) {
+          await updateDoc(ref, { cover: coverUrl })
+          payload.cover = coverUrl
+        }
+      } catch (err) {
+        console.warn('[createRoom] cover upload failed', err)
+      }
+    }
     try {
       await updateDoc(spaceRef(this.spaceId), { roomCount: (this._spaceCache?.rooms?.length || 0) + 1 })
     } catch {}
@@ -941,6 +967,28 @@ export class SignalingClient {
     } else if (typeof updates.type === 'string') {
       next.type = updates.type === 'voice' ? 'voice' : 'text'
     }
+    if (updates.icon === null) next.icon = null
+    else if (typeof updates.icon === 'string') next.icon = updates.icon.slice(0, 80)
+    if (updates.emoji === null) next.emoji = null
+    else if (typeof updates.emoji === 'string') next.emoji = updates.emoji.slice(0, 16)
+    if (updates.color === null) next.color = null
+    else if (typeof updates.color === 'string') next.color = updates.color.slice(0, 16)
+    if (typeof updates.nameStyle === 'string') next.nameStyle = updates.nameStyle.slice(0, 24)
+    if (updates.coverFit === null) next.coverFit = null
+    else if (updates.coverFit && typeof updates.coverFit === 'object') next.coverFit = updates.coverFit
+
+    if (updates.cover === null) {
+      try { await deleteRoomCover(this.spaceId, roomId) } catch {}
+      next.cover = null
+    } else if (typeof updates.cover === 'string' && updates.cover) {
+      try {
+        const url = await uploadRoomCover(this.spaceId, roomId, updates.cover)
+        if (url) next.cover = url
+      } catch (err) {
+        console.warn('[updateRoom] cover upload failed', err)
+      }
+    }
+
     if (Object.keys(next).length === 0) return
     await updateDoc(roomRef(this.spaceId, roomId), next)
     const snap = await getDoc(roomRef(this.spaceId, roomId))
@@ -950,6 +998,7 @@ export class SignalingClient {
 
   async deleteRoom(roomId) {
     if (!this.spaceId || !roomId) return
+    try { await deleteRoomCover(this.spaceId, roomId) } catch {}
     await deleteDoc(roomRef(this.spaceId, roomId))
     try {
       const remaining = Math.max(0, (this._spaceCache?.rooms?.length || 1) - 1)

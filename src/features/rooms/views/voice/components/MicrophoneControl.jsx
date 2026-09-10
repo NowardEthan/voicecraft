@@ -1,16 +1,22 @@
 /**
- * MicrophoneControl — the dock's "Microfone" button. Toggles the local
- * mic track on/off (for outgoing audio). Visual state reflects both the
- * toggle and the real mic permission status.
+ * MicrophoneControl — flat glass mic toggle (no outline rings).
  */
 import { Mic, MicOff } from 'lucide-react'
 
 export function MicrophoneControl({ isMuted, permissionDenied, onClick, reducedMotion = false }) {
+  void reducedMotion
   const label = permissionDenied
     ? 'Permissão negada — clique para tentar de novo'
     : isMuted
       ? 'Reativar microfone'
       : 'Silenciar microfone'
+
+  const tone = permissionDenied
+    ? 'bg-danger text-white shadow-[0_10px_24px_-10px_rgba(239,68,68,0.45)]'
+    : isMuted
+      ? 'bg-white/[0.08] text-white/70 hover:bg-white/[0.14] hover:text-white'
+      : 'bg-accent text-strong shadow-[0_10px_24px_-10px_var(--space-accent-glow-40)]'
+
   return (
     <button
       type="button"
@@ -19,19 +25,16 @@ export function MicrophoneControl({ isMuted, permissionDenied, onClick, reducedM
       aria-pressed={!isMuted}
       title={label}
       className={[
-        'group relative h-11 w-11 rounded-full flex items-center justify-center',
-        'border transition-[transform,background-color,border-color,box-shadow] duration-200',
-        'hover:scale-[1.06] active:scale-[0.94] focus-visible:ring-2 focus-visible:ring-accent/50',
-        permissionDenied
-          ? 'bg-danger/15 border-danger/40 text-danger'
-          : isMuted
-            ? 'bg-surface2 border-line text-ink hover:bg-surface1'
-            : 'bg-accent/15 border-accent/40 text-accent',
+        'relative h-11 w-11 rounded-full flex items-center justify-center',
+        'transition-[transform,background-color,color,box-shadow] duration-200',
+        'hover:scale-[1.05] active:scale-[0.95]',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/20',
+        tone,
       ].join(' ')}
     >
       {isMuted || permissionDenied
-        ? <MicOff size={16} strokeWidth={1.8} />
-        : <Mic size={16} strokeWidth={1.8} />}
+        ? <MicOff size={16} strokeWidth={1.9} />
+        : <Mic size={16} strokeWidth={1.9} />}
     </button>
   )
 }

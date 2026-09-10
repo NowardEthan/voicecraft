@@ -403,9 +403,17 @@ export default function AppShell({ account }) {
           onClick={togglePanel}
           aria-label="Abrir painel do Space"
           title="Abrir painel do Space"
-          className="absolute left-2 sm:left-3 top-2 sm:top-3 z-30 w-9 h-9 rounded-lg flex items-center justify-center bg-surface1/95 backdrop-blur border border-line text-ink/85 hover:text-strong hover:border-accent/40 transition-all shadow-lg"
+          className="
+            absolute left-2 sm:left-3 top-2 sm:top-3 z-30
+            w-9 h-9 rounded-xl flex items-center justify-center
+            bg-black/40 hover:bg-black/55 backdrop-blur-md
+            text-white/85 hover:text-white
+            shadow-[0_10px_28px_-14px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.06)]
+            transition-[background-color,color,transform] duration-150
+            hover:scale-[1.03] active:scale-[0.97]
+          "
         >
-          <PanelLeftOpen size={15} strokeWidth={1.75} />
+          <PanelLeftOpen size={15} strokeWidth={1.85} />
         </button>
       )}
 
@@ -416,9 +424,17 @@ export default function AppShell({ account }) {
           onClick={() => setPeoplePanelCollapsed(false)}
           aria-label="Abrir painel de pessoas"
           title="Abrir painel de pessoas"
-          className="absolute right-2 sm:right-3 top-2 sm:top-3 z-30 w-9 h-9 rounded-lg flex items-center justify-center bg-surface1/95 backdrop-blur border border-line text-ink/85 hover:text-strong hover:border-accent/40 transition-all shadow-lg"
+          className="
+            absolute right-2 sm:right-3 top-2 sm:top-3 z-30
+            w-9 h-9 rounded-xl flex items-center justify-center
+            bg-black/40 hover:bg-black/55 backdrop-blur-md
+            text-white/85 hover:text-white
+            shadow-[0_10px_28px_-14px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.06)]
+            transition-[background-color,color,transform] duration-150
+            hover:scale-[1.03] active:scale-[0.97]
+          "
         >
-          <PanelRightOpen size={15} strokeWidth={1.75} />
+          <PanelRightOpen size={15} strokeWidth={1.85} />
         </button>
       )}
 
@@ -481,6 +497,7 @@ export default function AppShell({ account }) {
                     onLeave={leaveCall}
                     onInvite={handleOpenInvite}
                     onStatusChange={setVoiceStatus}
+                    onOpenSettings={() => setShowSettingsModal(true)}
                   />
                 </Suspense>
               </ErrorBoundary>

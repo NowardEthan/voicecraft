@@ -11,6 +11,8 @@ import { readChatDensity, writeChatDensity } from './chatDensity'
 import { useChat } from '../../hooks/useChat'
 import { useTextRoomChannel } from '../../hooks/useTextRoomChannel'
 import { purposeOf } from '../../features/rooms'
+import { RoomIconMark, roomAccentColor } from '../../features/rooms/components/RoomIconMark'
+import { resolveRoomNameStyle } from '../../features/rooms/model/roomCosmetics'
 import { colorFromId, spaceTokens } from '../../features/spaces'
 import { PersonAvatar } from '../../features/people'
 
@@ -26,7 +28,8 @@ export default function ConversationRoom({
   voiceActive = false,
 }) {
   const purpose = purposeOf(room)
-  const Icon = purpose.icon
+  const accent = roomAccentColor(room)
+  const nameStyle = resolveRoomNameStyle(room?.nameStyle).style
 
   const { channel } = useTextRoomChannel({
     signaling,
@@ -130,15 +133,18 @@ export default function ConversationRoom({
           <div
             className="w-10 h-10 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center shrink-0"
             style={{
-              backgroundColor: 'var(--space-accent-soft)',
-              color: 'var(--space-accent)',
+              backgroundColor: `color-mix(in srgb, ${accent} 18%, transparent)`,
+              color: accent,
             }}
           >
-            <Icon size={20} strokeWidth={1.75} />
+            <RoomIconMark room={room} size={20} />
           </div>
 
           <div className={`min-w-0 ${searchOpen ? 'hidden @[480px]:block flex-1' : 'flex-1'}`}>
-            <h1 className="text-[16px] sm:text-[20px] font-bold text-strong tracking-tight truncate">
+            <h1
+              className="text-[16px] sm:text-[20px] font-bold text-strong tracking-tight truncate"
+              style={{ ...nameStyle, ...(room?.color ? { color: accent } : null) }}
+            >
               {room.name}
             </h1>
             <p className="text-[11px] sm:text-[12px] text-muted truncate mt-0.5 hidden @[380px]:block">

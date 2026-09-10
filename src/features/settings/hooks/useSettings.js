@@ -8,6 +8,8 @@ export const SETTINGS_DEFAULTS = {
   screenQuality: '720p',
   screenFramerate: 30,
   screenWithAudio: false,
+  // Soft UI chimes for join/leave/mute in voice rooms
+  callSounds: true,
   // GPU acceleration — applied by Electron on next launch. Takes effect
   // when the user restarts the app (must be set before app.whenReady).
   gpuAcceleration: true,

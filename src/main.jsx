@@ -10,8 +10,6 @@ import './index.css'
 registerSpaceIcons()
 try { purgeHugeLocalCovers() } catch {}
 
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-)
+// No StrictMode: it double-mounts effects and tears down LiveKit/WebRTC
+// mid-call (User-Initiated Abort + reconnect storms).
+ReactDOM.createRoot(document.getElementById('root')).render(<App />)

@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getSharedSignaling } from '../../../shared/connection/useSignaling'
 import { flashToast } from '../../../shared/utils/toast'
+import { playCallSound } from '../../../shared/audio/callSounds'
 import { isSpaceNotifyOn } from '../../spaces/model/spacePreferences'
 import { DEFAULT_ROOM_NAMES } from '../model/roomPurposes'
 
@@ -41,11 +42,19 @@ export function useRoomActions() {
         setSelectedRoom((prev) => (prev?.id === info.room.id ? info.room : prev))
         setCurrentRoom((prev) => {
           if (prev?.id !== info.room.id) return prev
-          return info.room.type === 'voice' ? info.room : null
+          // Keep the LiveKit call mounted unless the room was intentionally
+          // converted away from voice (not a transient Firestore flicker).
+          if (info.room.type === 'voice') return info.room
+          return prev
         })
-        if (info.room.type !== 'voice' && sig.roomId === info.room.id) {
-          // Type flipped away from voice while we were in the call.
+        if (
+          info.room.type !== 'voice'
+          && sig.roomId === info.room.id
+          && info.room.purpose
+          && info.room.purpose !== 'voice'
+        ) {
           sig.leaveRoom?.()
+          setCurrentRoom((prev) => (prev?.id === info.room.id ? null : prev))
         }
       }
     })
@@ -95,6 +104,7 @@ export function useRoomActions() {
   }, [sig])
 
   const leaveCall = useCallback(() => {
+    playCallSound('leave')
     setTransitioning(true)
     sig.leaveRoom?.()
     setTimeout(() => {
@@ -113,7 +123,7 @@ export function useRoomActions() {
     setSelectedRoom(null)
   }, [])
 
-  const createRoom = useCallback(async (purposeKey, nameArg) => {
+  const createRoom = useCallback(async (purposeKey, nameArg, cosmetics = {}) => {
     const purpose = typeof purposeKey === 'string' ? purposeKey : 'conversation'
     const fallbackName = DEFAULT_ROOM_NAMES[purpose] || DEFAULT_ROOM_NAMES.conversation
     const name = (typeof nameArg === 'string' && nameArg.trim()) ? nameArg.trim() : fallbackName
@@ -121,7 +131,12 @@ export function useRoomActions() {
     setCreatingRoom(true)
     if (isSpaceNotifyOn(sig.spaceId)) flashToast('criando sala…')
     try {
-      await sig.createRoom?.(name, purpose === 'voice' ? 'voice' : 'text', purpose)
+      await sig.createRoom?.(
+        name,
+        purpose === 'voice' ? 'voice' : 'text',
+        purpose,
+        cosmetics && typeof cosmetics === 'object' ? cosmetics : {},
+      )
       if (pendingRoomTokenRef.current === myToken) setCreatingRoom(false)
     } catch (err) {
       if (pendingRoomTokenRef.current === myToken) setCreatingRoom(false)

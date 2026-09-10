@@ -27,4 +27,6 @@ jobs:
       - name: Build & publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Unsigned builds; avoids winCodeSign symlink privilege failures.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: npm run release
