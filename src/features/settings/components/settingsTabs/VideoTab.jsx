@@ -45,10 +45,10 @@ export default function VideoTab({ draft, setDraft }) {
         value={draft.screenQuality}
         onChange={(key) => setDraft((d) => ({ ...d, screenQuality: key }))}
         options={[
+          { key: '540p', label: 'Leve' },
           { key: '720p', label: 'HD' },
           { key: '1080p', label: 'Full HD' },
           { key: '1440p', label: '2K' },
-          { key: '4k', label: '4K' },
         ]}
       />
 
@@ -57,9 +57,10 @@ export default function VideoTab({ draft, setDraft }) {
         value={draft.screenFramerate}
         onChange={(key) => setDraft((d) => ({ ...d, screenFramerate: key }))}
         options={[
+          { key: 10, label: '10' },
           { key: 15, label: '15' },
+          { key: 24, label: '24' },
           { key: 30, label: '30' },
-          { key: 60, label: '60' },
         ]}
       />
 
@@ -77,7 +78,10 @@ export default function VideoTab({ draft, setDraft }) {
       </label>
 
       <p className="text-[11.5px] text-muted leading-snug">
-        HD a 30 fps deixa a sala mais leve. 2K, 4K e 60 fps pesam no PC — principalmente com navegador.
+        Jogando e transmitindo: use <span className="text-strong">Leve ou HD + 15 fps</span>,
+        compartilhe a <span className="text-strong">janela do jogo</span> (não a tela inteira)
+        e deixe áudio do sistema desligado se só forem conversar no mic.
+        GPU do app ajuda a UI — o encode da tela ainda pesa no CPU.
       </p>
     </div>
   )

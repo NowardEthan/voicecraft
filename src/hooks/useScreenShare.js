@@ -21,7 +21,7 @@ export function useScreenShare() {
   const [stream, setStream] = useState(null)
   const [error, setError] = useState(null)
   const [quality, setQuality] = useState('720p')
-  const [framerate, setFramerate] = useState(30)
+  const [framerate, setFramerate] = useState(15)
   const [withAudio, setWithAudio] = useState(false)
   const [availableSources, setAvailableSources] = useState([])
   const [needsPicker, setNeedsPicker] = useState(false)
@@ -128,7 +128,18 @@ export function useScreenShare() {
               },
             },
           })
-          captureAudio = captured.getAudioTracks().length > 0
+          const liveAudio = captured.getAudioTracks().filter((t) => t && t.readyState !== 'ended')
+          // Drop dead/placeholder tracks Electron sometimes returns for window+audio.
+          captured.getAudioTracks().forEach((t) => {
+            if (t && t.readyState === 'ended') {
+              try { captured.removeTrack(t) } catch {}
+              try { t.stop() } catch {}
+            }
+          })
+          captureAudio = liveAudio.length > 0
+          if (!captureAudio) {
+            console.warn('[screenShare] desktop audio track ended immediately; sharing video only')
+          }
         } catch (audioErr) {
           console.warn('[screenShare] desktop audio unavailable, falling back to video-only', audioErr?.message || audioErr)
         }
@@ -186,13 +197,14 @@ export function useScreenShare() {
 function decorateShareTrack(stream, quality) {
   const track = stream.getVideoTracks()[0]
   if (!track) return
-  // motion = YouTube/games; detail = text/docs. 720p rooms lean motion.
-  try { track.contentHint = 'detail' } catch {}
+  // motion = jogo/vídeo (fluidez); detail = texto/docs (mais CPU).
+  try { track.contentHint = 'motion' } catch {}
   void quality
 }
 
-function constraintsForQuality(q, fr = 30) {
+function constraintsForQuality(q, fr = 15) {
   const presets = {
+    '540p':  { width: { ideal: 960 },  height: { ideal: 540  } },
     '720p':  { width: { ideal: 1280 }, height: { ideal: 720  } },
     '1080p': { width: { ideal: 1920 }, height: { ideal: 1080 } },
     '1440p': { width: { ideal: 2560 }, height: { ideal: 1440 } },

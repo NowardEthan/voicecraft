@@ -5,8 +5,9 @@ export const SETTINGS_DEFAULTS = {
   speakerId: null,
   outputVolume: 80,
   dspLevel: 'off',
+  // Light defaults — screen encode fights the game for CPU even with GPU UI accel.
   screenQuality: '720p',
-  screenFramerate: 30,
+  screenFramerate: 15,
   screenWithAudio: false,
   // Soft UI chimes for join/leave/mute in voice rooms
   callSounds: true,

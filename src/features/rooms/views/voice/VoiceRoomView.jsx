@@ -96,6 +96,8 @@ export default function VoiceRoomView({
     shareNeedsPicker,
     shareSources,
     livePeerIds,
+    peerVolumes,
+    setParticipantVolume,
     onLeave: leaveWithSound,
   } = useLiveKitRoom({
     room,
@@ -451,6 +453,8 @@ export default function VoiceRoomView({
                   onStopShare={handleShareScreen}
                   chromeVisible={chromeVisible}
                   onImmersiveChange={setCinemaMode}
+                  peerVolumes={peerVolumes}
+                  onParticipantVolume={setParticipantVolume}
                   cameraStreams={{
                     ...remoteCameras,
                     ...(cameraStream && currentUserId ? { [currentUserId]: cameraStream } : {}),

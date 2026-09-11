@@ -28,6 +28,8 @@ export function ParticipantGrid({
   cameraStreams = {},
   chromeVisible = true,
   onImmersiveChange,
+  peerVolumes = null,
+  onParticipantVolume,
 }) {
   void onStatusChange
   const shares = useMemo(() => {
@@ -154,6 +156,8 @@ export function ParticipantGrid({
         videoStream={videoStream}
         videoKind={swapped ? 'screen' : 'camera'}
         onPromote={canPromote ? () => promoteCamera(p.userId) : undefined}
+        volume={peerVolumes?.[p.userId] ?? 100}
+        onVolumeChange={onParticipantVolume ? (v) => onParticipantVolume(p.userId, v) : undefined}
       />
     )
   }

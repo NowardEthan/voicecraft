@@ -3,12 +3,13 @@
  * With a camera stream the tile becomes the live preview; without it
  * we keep the avatar + cover flow.
  */
-import { memo, useEffect, useRef } from 'react'
-import { MicOff, Mic, Crown, Video, Monitor } from 'lucide-react'
+import { memo, useEffect, useRef, useState } from 'react'
+import { MicOff, Mic, Crown, Video, Monitor, Volume2, VolumeX } from 'lucide-react'
 import { PersonAvatar } from '../../../../people'
 import { UserTagChips } from '../../../../people/components/UserTagChips'
 import { SpaceCoverLayer } from '../../../../spaces/components/SpaceCoverLayer'
 import { SpeakingIndicator } from './SpeakingIndicator'
+import { PEER_VOLUME_DEFAULT, PEER_VOLUME_MAX } from '../peerVolumes'
 
 export const ParticipantCard = memo(function ParticipantCard({
   member,
@@ -20,6 +21,8 @@ export const ParticipantCard = memo(function ParticipantCard({
   reducedMotion = false,
   videoStream = null,
   videoKind = 'camera',
+  volume = PEER_VOLUME_DEFAULT,
+  onVolumeChange,
   onPromote,
 }) {
   const name = member.displayName || 'convidado'
@@ -28,6 +31,10 @@ export const ParticipantCard = memo(function ParticipantCard({
   const hasCover = !hasVideo && typeof member.cover === 'string' && (member.cover.startsWith('http') || member.cover.startsWith('data:image/'))
   const customStatus = typeof member.status === 'string' ? member.status.trim() : ''
   const canPromote = typeof onPromote === 'function' && hasVideo
+  const canControlVolume = !isSelf && typeof onVolumeChange === 'function'
+  const [volumeOpen, setVolumeOpen] = useState(false)
+  const vol = Math.max(0, Math.min(PEER_VOLUME_MAX, Number(volume) || PEER_VOLUME_DEFAULT))
+  const isPeerMuted = canControlVolume && vol === 0
   const stateLabel = isMuted
     ? 'Microfone desligado'
     : isSpeaking
@@ -85,6 +92,31 @@ export const ParticipantCard = memo(function ParticipantCard({
               >
                 <MicOff size={12} strokeWidth={1.9} />
               </span>
+            )}
+            {canControlVolume && (
+              <button
+                type="button"
+                className={[
+                  'w-7 h-7 rounded-full border flex items-center justify-center transition-colors',
+                  isPeerMuted
+                    ? 'bg-danger/15 border-danger/30 text-danger'
+                    : volumeOpen
+                      ? 'bg-accent/20 border-accent/40 text-accent'
+                      : 'bg-black/45 border-white/15 text-white/85 hover:border-white/30',
+                ].join(' ')}
+                aria-label={isPeerMuted ? `Volume de ${name} (silenciado)` : `Ajustar volume de ${name}`}
+                aria-expanded={volumeOpen}
+                title="Volume individual"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setVolumeOpen((v) => !v)
+                }}
+                onDoubleClick={(e) => e.stopPropagation()}
+              >
+                {isPeerMuted
+                  ? <VolumeX size={12} strokeWidth={1.9} />
+                  : <Volume2 size={12} strokeWidth={1.9} />}
+              </button>
             )}
           </div>
           <div className="flex items-center gap-1 flex-wrap justify-end max-w-[55%]">
@@ -171,6 +203,28 @@ export const ParticipantCard = memo(function ParticipantCard({
               </>
             )}
           </div>
+
+          {canControlVolume && volumeOpen && (
+            <div
+              className="pt-1.5 flex items-center gap-2"
+              onClick={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+            >
+              <input
+                type="range"
+                min={0}
+                max={PEER_VOLUME_MAX}
+                step={1}
+                value={vol}
+                aria-label={`Volume de ${name}`}
+                className="flex-1 h-1.5 accent-[var(--space-accent)] cursor-pointer"
+                onChange={(e) => onVolumeChange(Number(e.target.value))}
+              />
+              <span className={`text-[10.5px] tabular-nums w-8 text-right shrink-0 ${hasCover || hasVideo ? 'text-white/80' : 'text-muted'}`}>
+                {vol}%
+              </span>
+            </div>
+          )}
         </div>
       </div>
     </article>

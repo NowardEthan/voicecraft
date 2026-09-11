@@ -11,7 +11,6 @@ import {
   LocalAudioTrack,
   createLocalTracks,
   ConnectionState,
-  ScreenSharePresets,
 } from 'livekit-client'
 import { useSettings } from '../../../settings'
 import { enumerateMics, watchDeviceChanges } from '../../../../utils/devices'
@@ -26,6 +25,13 @@ import {
   releaseSession,
   disposeSessionNow,
 } from './liveKitSession'
+import {
+  clampPeerVolume,
+  loadPeerVolumes,
+  savePeerVolumes,
+  peerVolumeMultiplier,
+  PEER_VOLUME_DEFAULT,
+} from './peerVolumes'
 
 async function fetchLiveKitToken(payload) {
   const api = typeof window !== 'undefined' ? window.electronAPI?.livekit : null
@@ -63,9 +69,24 @@ function waitForRoomConnected(lkRoom, timeoutMs = 20000) {
 }
 
 function screenSharePreset(quality, framerate) {
-  const hi = quality === '1080p' || quality === '1440p' || quality === '4k'
-  if (hi) return framerate >= 30 ? ScreenSharePresets.h1080fps30 : ScreenSharePresets.h1080fps15
-  return framerate >= 30 ? ScreenSharePresets.h720fps30 : ScreenSharePresets.h720fps15
+  // Conservative bitrates — encode competes with the game on CPU even when the UI uses GPU.
+  const table = {
+    '540p': { maxBitrate: 700_000, maxFramerate: 24 },
+    '720p': { maxBitrate: 1_100_000, maxFramerate: 24 },
+    '1080p': { maxBitrate: 1_800_000, maxFramerate: 20 },
+    '1440p': { maxBitrate: 2_500_000, maxFramerate: 15 },
+    '4k': { maxBitrate: 3_500_000, maxFramerate: 15 },
+  }
+  const base = table[quality] || table['720p']
+  const fr = Math.max(8, Math.min(Number(framerate) || 15, base.maxFramerate))
+  // Scale bitrate gently with fps so 15fps stays cheap.
+  const bitrate = Math.round(base.maxBitrate * (0.65 + 0.35 * (fr / base.maxFramerate)))
+  return {
+    encoding: {
+      maxBitrate: bitrate,
+      maxFramerate: fr,
+    },
+  }
 }
 
 async function waitForVideoDimensions(mediaTrack, timeoutMs = 2000) {
@@ -148,6 +169,9 @@ export function useLiveKitRoom({
   const screenPublishingRef = useRef(false)
   const callReadyRef = useRef(false)
   const remoteAudiosRef = useRef(new Map())
+  const [peerVolumes, setPeerVolumes] = useState(() => loadPeerVolumes())
+  const peerVolumesRef = useRef(peerVolumes)
+  peerVolumesRef.current = peerVolumes
   const initCancelledRef = useRef(false)
   const isMutedRef = useRef(false)
   const isDeafenedRef = useRef(false)
@@ -190,11 +214,14 @@ export function useLiveKitRoom({
 
   const applyOutputToAudio = useCallback((audio) => {
     if (!audio) return
-    const vol = Math.max(0, Math.min(100, Number(settings?.outputVolume ?? 80))) / 100
-    // While capturing system audio, mute remote *mic* playback so loopback
-    // doesn't send their voice back to them. Still play remote screen-audio.
+    const master = Math.max(0, Math.min(100, Number(settings?.outputVolume ?? 80))) / 100
+    const peerMul = peerVolumeMultiplier(peerVolumesRef.current, audio.dataset?.vcPeer)
+    const vol = Math.min(1, master * peerMul)
+    // Loopback of desktop audio re-captures call playback. Soft-duck remotes
+    // (don't hard-mute) so you still hear the room and your mic stays independent.
     const duckMic = screenAudioCaptureRef.current && audio.dataset?.vcSource !== 'screen'
-    audio.volume = (isDeafenedRef.current || duckMic) ? 0 : vol
+    const LOOPBACK_DUCK = 0.22
+    audio.volume = isDeafenedRef.current ? 0 : duckMic ? vol * LOOPBACK_DUCK : vol
     if (typeof audio.setSinkId === 'function') {
       audio.setSinkId(settings?.speakerId || '').catch(() => {})
     }
@@ -202,6 +229,20 @@ export function useLiveKitRoom({
 
   const refreshRemoteAudioLevels = useCallback(() => {
     remoteAudiosRef.current.forEach((audio) => applyOutputToAudio(audio))
+  }, [applyOutputToAudio])
+
+  const setParticipantVolume = useCallback((userId, value) => {
+    if (!userId) return
+    const nextVol = clampPeerVolume(value)
+    const next = { ...peerVolumesRef.current }
+    if (nextVol === PEER_VOLUME_DEFAULT) delete next[userId]
+    else next[userId] = nextVol
+    peerVolumesRef.current = next
+    savePeerVolumes(next)
+    setPeerVolumes(next)
+    remoteAudiosRef.current.forEach((audio) => {
+      if (audio?.dataset?.vcPeer === userId) applyOutputToAudio(audio)
+    })
   }, [applyOutputToAudio])
 
   const setScreenAudioCaptureActive = useCallback((active) => {
@@ -251,6 +292,7 @@ export function useLiveKitRoom({
     detachRemoteAudio(participant.identity, track.sid)
     const audio = new Audio()
     try {
+      audio.dataset.vcPeer = participant.identity || ''
       audio.dataset.vcSource = track.source === Track.Source.ScreenShareAudio ? 'screen' : 'mic'
     } catch {}
     track.attach(audio)
@@ -297,7 +339,7 @@ export function useLiveKitRoom({
         backupCodec: false,
         simulcast: false,
         videoCodec: 'vp8',
-        screenShareEncoding: ScreenSharePresets.h720fps30.encoding,
+        screenShareEncoding: screenSharePreset('720p', 15).encoding,
       },
       audioCaptureDefaults: {
         deviceId: preferredMicId || undefined,
@@ -665,6 +707,41 @@ export function useLiveKitRoom({
     }
   }, [])
 
+  const ensureLocalMicHealthy = useCallback(async () => {
+    const lkRoom = roomRef.current
+    const mic = localAudioTrackRef.current
+    if (!lkRoom || !mic || lkRoom.state !== ConnectionState.Connected) return
+    try {
+      const mst = mic.mediaStreamTrack
+      if (mst && mst.readyState === 'ended') {
+        // Desktop loopback can disrupt the capture graph on Windows — reacquire mic.
+        const tracks = await createLocalTracks({
+          audio: { deviceId: activeDeviceId || undefined },
+          video: false,
+        })
+        const next = tracks.find((t) => t.kind === Track.Kind.Audio)
+        if (!next) return
+        try { await lkRoom.localParticipant.unpublishTrack(mic) } catch {}
+        try { mic.stop() } catch {}
+        localAudioTrackRef.current = next
+        setLocalStream(next.mediaStream || new MediaStream([next.mediaStreamTrack]))
+        if (isMutedRef.current) await next.mute()
+        await lkRoom.localParticipant.publishTrack(next)
+        return
+      }
+      const pub = lkRoom.localParticipant.getTrackPublication(Track.Source.Microphone)
+      if (!pub?.track) {
+        if (isMutedRef.current) await mic.mute()
+        else await mic.unmute()
+        await lkRoom.localParticipant.publishTrack(mic)
+        return
+      }
+      if (!isMutedRef.current && mic.isMuted) await mic.unmute()
+    } catch (err) {
+      console.warn('[screenShare] mic health check failed', err?.message || err)
+    }
+  }, [activeDeviceId])
+
   const stopScreenShare = useCallback(async () => {
     const lkRoom = roomRef.current
     const videoTrack = localScreenTrackRef.current
@@ -702,12 +779,12 @@ export function useLiveKitRoom({
       await waitForRoomConnected(lkRoom)
       await waitForVideoDimensions(mediaTrack)
 
-      try { mediaTrack.contentHint = 'detail' } catch {}
+      try { mediaTrack.contentHint = 'motion' } catch {}
 
       // Electron supplies the MediaStreamTrack; userProvided=true so LK won't reacquire.
       const localTrack = new LocalVideoTrack(mediaTrack, undefined, true)
       const q = settings?.screenQuality || '720p'
-      const fr = settings?.screenFramerate || 30
+      const fr = settings?.screenFramerate || 15
       const preset = screenSharePreset(q, fr)
 
       mediaTrack.addEventListener('ended', () => {
@@ -722,25 +799,33 @@ export function useLiveKitRoom({
         videoCodec: 'vp8',
         screenShareEncoding: {
           maxBitrate: preset.encoding.maxBitrate,
-          maxFramerate: Math.min(fr, preset.encoding.maxFramerate || fr),
+          maxFramerate: preset.encoding.maxFramerate,
         },
-        degradationPreference: 'maintain-resolution',
+        // Prefer smooth frames over sharpness while the sharer is also gaming.
+        degradationPreference: 'maintain-framerate',
       })
 
       localScreenTrackRef.current = publication?.track || localTrack
 
-      // System / display audio (YouTube, game, etc.) — separate LiveKit source.
-      // Desktop loopback also hears the call → duck remote mics while active.
-      const audioMedia = mediaStream.getAudioTracks()[0]
+      // System / display audio — separate LiveKit source from the mic.
+      // Loopback is system-wide (not per-app); exclusive-mode games often stay silent.
+      const audioMedia = mediaStream.getAudioTracks().find((t) => t && t.readyState !== 'ended') || null
       if (audioMedia) {
-        try {
-          audioMedia.contentHint = 'music'
-        } catch {}
-        audioMedia.addEventListener('ended', () => {
-          if (localScreenAudioTrackRef.current) stopScreenShare()
+        try { audioMedia.contentHint = 'music' } catch {}
+        audioMedia.addEventListener('ended', async () => {
+          // Drop only screen-audio; keep the video share and the mic.
+          const lk = roomRef.current
+          const at = localScreenAudioTrackRef.current
+          localScreenAudioTrackRef.current = null
+          setScreenAudioCaptureActive(false)
+          if (at && lk) {
+            try { await lk.localParticipant.unpublishTrack(at, true) } catch {}
+            try { at.stop() } catch {}
+          }
         })
         try {
           const localAudio = new LocalAudioTrack(audioMedia, undefined, true)
+          localAudio.source = Track.Source.ScreenShareAudio
           const audioPub = await lkRoom.localParticipant.publishTrack(localAudio, {
             source: Track.Source.ScreenShareAudio,
             name: 'screen-audio',
@@ -749,11 +834,15 @@ export function useLiveKitRoom({
           })
           localScreenAudioTrackRef.current = audioPub?.track || localAudio
           setScreenAudioCaptureActive(true)
-          flashToast('Áudio do sistema ligado — use fones; a call fica muda pra evitar eco')
+          flashToast('Áudio do sistema ligado — use fones (sem fones pode ter eco)')
+          // Windows loopback can disturb the mic graph; keep voice on the call.
+          await ensureLocalMicHealthy()
         } catch (audioErr) {
           console.warn('[screenShare] failed to publish display audio', audioErr?.message || audioErr)
           try { audioMedia.stop() } catch {}
           setScreenAudioCaptureActive(false)
+          flashToast('Não deu pra capturar áudio do sistema — seu mic segue normal')
+          await ensureLocalMicHealthy()
         }
       } else {
         setScreenAudioCaptureActive(false)
@@ -773,7 +862,7 @@ export function useLiveKitRoom({
     } finally {
       screenPublishingRef.current = false
     }
-  }, [settings, stopScreenShare, setScreenAudioCaptureActive])
+  }, [settings, stopScreenShare, setScreenAudioCaptureActive, ensureLocalMicHealthy])
 
   const handleShareScreen = useCallback(async () => {
     const lkRoom = roomRef.current
@@ -788,7 +877,7 @@ export function useLiveKitRoom({
         return
       }
       const q = settings?.screenQuality || '720p'
-      const fr = settings?.screenFramerate || 30
+      const fr = settings?.screenFramerate || 15
       // Electron: opens picker (returns null). Browser: getDisplayMedia stream.
       const started = await screenShare.start(q, fr, { withAudio: false })
       if (started) await publishScreenStream(started)
@@ -812,7 +901,7 @@ export function useLiveKitRoom({
         flashToast('Janela de navegador pode ficar cinza ao focar o VoiceCraft. Prefira a tela inteira.')
       }
       const q = settings?.screenQuality || '720p'
-      const fr = settings?.screenFramerate || 30
+      const fr = settings?.screenFramerate || 15
       const withAudio = opts.withAudio === true
       const started = await screenShare.startWithSource(sourceId, q, fr, { withAudio })
       if (started) await publishScreenStream(started)
@@ -879,6 +968,8 @@ export function useLiveKitRoom({
     shareSources: screenShare.availableSources,
     remoteSpeaking,
     livePeerIds,
+    peerVolumes,
+    setParticipantVolume,
     onLeave: handleLeave,
     onInvite,
   }

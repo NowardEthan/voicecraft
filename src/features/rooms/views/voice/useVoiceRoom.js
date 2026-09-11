@@ -479,7 +479,7 @@ export function useVoiceRoom({ room, currentUserId, currentUserName, members = [
         return
       }
       const q = settings?.screenQuality || '720p'
-      const fr = settings?.screenFramerate || 30
+      const fr = settings?.screenFramerate || 15
       const started = await screenShare.start(q, fr)
       if (started) await attachScreenTrack(started)
     } catch (err) {
@@ -494,7 +494,7 @@ export function useVoiceRoom({ room, currentUserId, currentUserName, members = [
         flashToast('Janela de navegador pode ficar cinza ao focar o VoiceCraft. Prefira a tela inteira e deixe o YouTube visível.')
       }
       const q = settings?.screenQuality || '720p'
-      const fr = settings?.screenFramerate || 30
+      const fr = settings?.screenFramerate || 15
       const started = await screenShare.startWithSource(sourceId, q, fr)
       if (started) await attachScreenTrack(started)
     } catch (err) {

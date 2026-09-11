@@ -18,7 +18,7 @@ export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
             <h2 id="share-title" className="text-[15px] font-semibold text-strong">
               Compartilhar tela
             </h2>
-            <p className="text-[12px] text-muted mt-0.5">Prefira uma tela — janelas de navegador ficam cinza.</p>
+            <p className="text-[12px] text-muted mt-0.5">Pra jogar: escolha a janela do jogo · qualidade leve.</p>
           </div>
           <button
             type="button"
@@ -33,7 +33,10 @@ export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
           <div className="flex gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2.5">
             <Info size={14} className="text-accent shrink-0 mt-0.5" />
             <p className="text-[12px] text-ink leading-snug">
-              YouTube e abas do Chrome ficam cinza ou borrados quando você volta pro VoiceCraft — o Windows para de desenhar o vídeo da janela oculta. Compartilhe a <span className="text-strong font-medium">tela inteira</span> e deixe o vídeo visível (janela ao lado ou segundo monitor).
+              <span className="text-strong font-medium">Jogando + call:</span> compartilhe a{' '}
+              <span className="text-strong font-medium">janela do jogo</span> (não a tela inteira),
+              use HD/Leve a 15 fps nas configurações e deixe áudio do sistema desligado se só forem falar no mic.
+              YouTube/Chrome em janela ficam cinza — aí sim use a tela inteira.
             </p>
           </div>
 
@@ -50,7 +53,8 @@ export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
                 Incluir áudio do sistema
               </span>
               <span className="block text-[11.5px] text-muted mt-0.5 leading-snug">
-                Para jogo/YouTube. Use fones — senão a call entra no loopback e o outro ouve a própria voz.
+                Captura o áudio do Windows inteiro (não só do app). Muitos jogos em modo exclusivo saem mudos.
+                Seu microfone da call é separado — use fones pra evitar eco.
               </span>
             </span>
           </label>
