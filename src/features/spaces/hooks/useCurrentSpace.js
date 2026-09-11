@@ -250,7 +250,9 @@ export function useCurrentSpace(selfProfile = null) {
       }
     }, 8000)
     try {
-      const { space: full } = await sig.joinSpace(spaceId)
+      const { space: full } = await sig.joinSpace(spaceId, {
+        keepVoice: !!opts.keepVoice,
+      })
       clearTimeout(timeoutId)
       if (pendingSpaceTokenRef.current !== spaceId) return
       pendingSpaceTokenRef.current = 0

@@ -130,6 +130,21 @@ export default function AppShell({ account }) {
   const [voiceStatus, setVoiceStatus] = useState('')
   const [localIP, setLocalIP] = useState('')
   const [hostname, setHostname] = useState('')
+  // Space that owns the active LiveKit call — keep stable while browsing UI.
+  const [callSpace, setCallSpace] = useState(null)
+
+  useEffect(() => {
+    if (!currentRoom) {
+      setCallSpace(null)
+      return
+    }
+    if (!currentSpace?.id) return
+    setCallSpace((prev) => {
+      if (!prev) return currentSpace
+      if (prev.id === currentSpace.id) return currentSpace
+      return prev
+    })
+  }, [currentRoom, currentSpace])
 
   // Reset contextual view when Space changes
   useEffect(() => {
@@ -223,16 +238,15 @@ export default function AppShell({ account }) {
       return
     }
 
-    // Switching Spaces leaves the current call, then opens the other Space.
-    if (currentRoom) {
-      leaveCall()
-    }
-
+    // Switch Spaces freely — call stays until leave or join another voice room.
     setActiveView('overview')
-    setSpaceSurface(null)
+    setSpaceSurface(currentRoom ? 'overview' : null)
     const preview = spaces.find((s) => s.id === spaceId) || null
-    await selectSpace(spaceId, preview ? { preview } : undefined)
-  }, [currentRoom, currentSpace?.id, leaveCall, selectSpace, setSelectedRoom, spaces])
+    await selectSpace(spaceId, {
+      preview: preview || undefined,
+      keepVoice: !!currentRoom,
+    })
+  }, [currentRoom, currentSpace?.id, selectSpace, setSelectedRoom, spaces])
 
   const handleHubJoined = useCallback(async (spaceId, { alreadyMember } = {}) => {
     await handleSelectSpace(spaceId)
@@ -333,14 +347,18 @@ export default function AppShell({ account }) {
     setSpaceSurface(null)
   }, [closeTextRoom])
 
-  const peer = useMemo(() => currentRoom && currentSpace ? {
-    id: currentRoom.id,
-    name: currentRoom.name,
-    spaceName: currentSpace.name,
-    roomId: currentRoom.id,
-    spaceId: currentSpace.id,
-    isCreator: currentRoom.createdBy === currentUserId,
-  } : null, [currentRoom, currentSpace, currentUserId])
+  const peer = useMemo(() => {
+    const space = callSpace || currentSpace
+    if (!currentRoom || !space) return null
+    return {
+      id: currentRoom.id,
+      name: currentRoom.name,
+      spaceName: space.name,
+      roomId: currentRoom.id,
+      spaceId: space.id,
+      isCreator: currentRoom.createdBy === currentUserId,
+    }
+  }, [currentRoom, callSpace, currentSpace, currentUserId])
 
   const [pendingNotifRoom, setPendingNotifRoom] = useState(null)
 
@@ -542,7 +560,7 @@ export default function AppShell({ account }) {
                 <Suspense fallback={<ViewLoader />}>
                   <VoiceRoomView
                     room={currentRoom}
-                    space={currentSpace}
+                    space={callSpace || currentSpace}
                     peer={peer}
                     signaling={signalingClient}
                     currentUserId={currentUserId}

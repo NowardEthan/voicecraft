@@ -204,6 +204,8 @@ export class SignalingClient {
     this._profile = {}
     this.spaceId = null
     this.roomId = null
+    /** Space that owns the active voice peer/LiveKit membership (may differ from browse spaceId). */
+    this.voiceSpaceId = null
     this.connected = false
     this._closed = false
     this._connectPromise = null
@@ -460,7 +462,13 @@ export class SignalingClient {
     }
     if (!this.userId || !spaceId) return
 
-    const handle = attachSpacePresence(this.userId, spaceId, this.roomId || null)
+    // While browsing another Space with a call still live, don't advertise
+    // the voice roomId on the browse Space's RTDB presence.
+    const roomForPresence = (
+      this.voiceSpaceId && this.voiceSpaceId !== spaceId
+    ) ? null : (this.roomId || null)
+
+    const handle = attachSpacePresence(this.userId, spaceId, roomForPresence)
     this._spacePresenceOff = handle
 
     const applyPresenceMap = (map) => {
@@ -512,7 +520,10 @@ export class SignalingClient {
   _updateSpacePresenceRoom() {
     const handle = this._spacePresenceOff
     if (handle && typeof handle.setRoomId === 'function') {
-      handle.setRoomId(this.roomId || null)
+      const roomForPresence = (
+        this.voiceSpaceId && this.voiceSpaceId !== this.spaceId
+      ) ? null : (this.roomId || null)
+      handle.setRoomId(roomForPresence)
       return
     }
     if (this.spaceId) this._bindSpacePresence(this.spaceId)
@@ -778,12 +789,20 @@ export class SignalingClient {
     })
   }
 
-  async joinSpace(spaceId) {
+  async joinSpace(spaceId, { keepVoice = false } = {}) {
     const snap = await getDoc(spaceRef(spaceId))
     if (!snap.exists()) throw new Error('space não encontrado')
     const data = snap.data() || {}
     const memberIds = Array.isArray(data.memberIds) ? data.memberIds : []
     const alreadyMember = !!this.userId && memberIds.includes(this.userId)
+
+    const voiceSpaceId = this.voiceSpaceId || (this.roomId ? this.spaceId : null)
+    const voiceRoomId = this.roomId
+    const preserving = !!(keepVoice && voiceRoomId && voiceSpaceId)
+
+    if (!preserving && this.roomId) {
+      try { await this.leaveRoom() } catch {}
+    }
 
     // Already a member: skip arrayUnion and hydrate without N user round-trips
     // (member/room listeners enrich profiles right after attach).
@@ -797,16 +816,32 @@ export class SignalingClient {
       online: true,
       lastSeen: Date.now(),
       ...(alreadyMember ? {} : { joinedAt: Date.now() }),
+      // Browse location — voice membership stays on voiceSpaceId when preserving.
       location: { spaceId, roomId: null },
     }, { merge: true })
 
+    const voicePresenceWrite = preserving
+      ? setDoc(memberRef(voiceSpaceId, this.userId), {
+        location: { spaceId: voiceSpaceId, roomId: voiceRoomId },
+        online: true,
+        lastSeen: Date.now(),
+      }, { merge: true }).catch(() => {})
+      : Promise.resolve()
+
     this.spaceId = spaceId
-    this.roomId = null
+    if (preserving) {
+      this.voiceSpaceId = voiceSpaceId
+      this.roomId = voiceRoomId
+    } else {
+      this.voiceSpaceId = null
+      this.roomId = null
+    }
 
     const [space] = await Promise.all([
       this._hydrateSpace(spaceId, snap, { enrichUsers: !alreadyMember }),
       membershipWrite,
       presenceWrite,
+      voicePresenceWrite,
     ])
 
     // Drop orphan member docs + prior-auth ghosts that share this account email.
@@ -824,7 +859,12 @@ export class SignalingClient {
 
     this._attachSpaceListeners(spaceId)
     this._bindSpacePresence(spaceId)
-    this._emit('spaceChanged', { space: fresh, currentSpace: fresh, currentRoom: null })
+    this._emit('spaceChanged', {
+      space: fresh,
+      currentSpace: fresh,
+      currentRoom: preserving ? { id: voiceRoomId } : null,
+      voicePreserved: preserving,
+    })
     return { space: fresh }
   }
 
@@ -872,20 +912,30 @@ export class SignalingClient {
   async leaveSpace(spaceId) {
     const id = spaceId || this.spaceId
     if (!id || !this.userId) return
-    this._clearSpacePresence()
-    this._clear(this._roomUnsubs)
-    this._clear(this._spaceUnsubs)
-    if (this.roomId) {
-      try { await deleteDoc(doc(peersCol(id, this.roomId), this.userId)) } catch {}
+
+    // Leaving the Space that owns the call also ends the call.
+    const voiceSpace = this.voiceSpaceId || this.spaceId
+    if (this.roomId && voiceSpace === id) {
+      try { await this.leaveRoom() } catch {}
     }
+
+    this._clearSpacePresence()
+    // Keep voice room listeners if call lives in another Space.
+    if (!this.roomId || this.voiceSpaceId === id || !this.voiceSpaceId) {
+      this._clear(this._roomUnsubs)
+    }
+    this._clear(this._spaceUnsubs)
     try {
       await updateDoc(spaceRef(id), { memberIds: arrayRemove(this.userId) })
       await deleteDoc(memberRef(id, this.userId))
     } catch (err) {
       console.warn('[leaveSpace]', err)
     }
-    this.spaceId = null
-    this.roomId = null
+    if (this.spaceId === id) this.spaceId = this.voiceSpaceId || null
+    if (this.voiceSpaceId === id) {
+      this.voiceSpaceId = null
+      this.roomId = null
+    }
     this._spaceCache = null
     this._emit('spaceChanged', {
       space: null,
@@ -1101,10 +1151,20 @@ export class SignalingClient {
     if (!this.spaceId) throw new Error('entre num space primeiro')
     const snap = await getDoc(roomRef(this.spaceId, roomId))
     if (!snap.exists()) throw new Error('room não encontrada')
-    if (this.roomId && this.roomId !== roomId) {
-      try { await deleteDoc(doc(peersCol(this.spaceId, this.roomId), this.userId)) } catch {}
+
+    const prevVoiceSpace = this.voiceSpaceId || this.spaceId
+    const prevRoom = this.roomId
+    if (prevRoom && (prevRoom !== roomId || prevVoiceSpace !== this.spaceId)) {
+      try { await deleteDoc(doc(peersCol(prevVoiceSpace, prevRoom), this.userId)) } catch {}
+      try {
+        await setDoc(memberRef(prevVoiceSpace, this.userId), {
+          location: { spaceId: prevVoiceSpace, roomId: null },
+        }, { merge: true })
+      } catch {}
       this._clear(this._roomUnsubs)
     }
+
+    this.voiceSpaceId = this.spaceId
     this.roomId = roomId
     await setDoc(doc(peersCol(this.spaceId, roomId), this.userId), {
       displayName: this.displayName,
@@ -1130,25 +1190,28 @@ export class SignalingClient {
   }
 
   async leaveRoom() {
-    if (!this.spaceId || !this.roomId) return
+    const spaceId = this.voiceSpaceId || this.spaceId
     const roomId = this.roomId
-    try { await deleteDoc(doc(peersCol(this.spaceId, roomId), this.userId)) } catch {}
+    if (!spaceId || !roomId) return
+    try { await deleteDoc(doc(peersCol(spaceId, roomId), this.userId)) } catch {}
     try {
-      await setDoc(memberRef(this.spaceId, this.userId), {
-        location: { spaceId: this.spaceId, roomId: null },
+      await setDoc(memberRef(spaceId, this.userId), {
+        location: { spaceId, roomId: null },
       }, { merge: true })
     } catch {}
     this._clear(this._roomUnsubs)
     this.roomId = null
+    this.voiceSpaceId = null
     this._updateSpacePresenceRoom()
     this._emit('roomChanged', { kind: 'left' })
   }
 
   async sendThought(text) {
-    if (!this.spaceId || !this.roomId) return
+    const spaceId = this.voiceSpaceId || this.spaceId
+    if (!spaceId || !this.roomId) return
     const trimmed = String(text || '').trim().slice(0, 180)
     if (!trimmed) return
-    await addDoc(thoughtsCol(this.spaceId, this.roomId), {
+    await addDoc(thoughtsCol(spaceId, this.roomId), {
       userId: this.userId,
       displayName: this.displayName,
       text: trimmed,
@@ -1166,8 +1229,9 @@ export class SignalingClient {
   }
 
   sendSignal(type, payload = {}) {
-    if (!this.spaceId || !this.roomId) return
-    addDoc(signalsCol(this.spaceId, this.roomId), {
+    const spaceId = this.voiceSpaceId || this.spaceId
+    if (!spaceId || !this.roomId) return
+    addDoc(signalsCol(spaceId, this.roomId), {
       from: this.userId,
       to: payload.to || null,
       type,
@@ -1187,9 +1251,10 @@ export class SignalingClient {
   }
 
   async uploadChatFile(file, roomId = null) {
+    const sid = this.voiceSpaceId || this.spaceId
     const rid = roomId || this.roomId
-    if (!this.spaceId || !rid || !file) return null
-    return uploadChatFile(this.spaceId, rid, file)
+    if (!sid || !rid || !file) return null
+    return uploadChatFile(sid, rid, file)
   }
 
   async sendChatMessage(message, roomId = null) {
