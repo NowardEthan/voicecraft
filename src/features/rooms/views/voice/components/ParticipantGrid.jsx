@@ -1,11 +1,11 @@
 /**
- * ParticipantGrid — people tiles + optional stage (screen or promoted camera).
+ * ParticipantGrid — people tiles + screen-share stage.
  *
- * Double-click a live camera to put it on the big stage. If a screen share
- * is already there, the two swap: camera goes Full HD, screen lands on
- * that person's card. Double-click again (card or stage) to swap back.
+ * When anyone shares, one share fills the main stage; others sit in a
+ * filmstrip. Double-click a share/thumbnail to promote it. Cameras can
+ * still take the stage the same way.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { UserPlus } from 'lucide-react'
 import { ParticipantCard } from './ParticipantCard'
 import { ScreenShareStage } from './ScreenShareStage'
@@ -20,24 +20,72 @@ export function ParticipantGrid({
   reducedMotion,
   onInvite,
   onStatusChange,
+  /** @deprecated prefer screenShares */
   screenStream = null,
   screenIsSelf = false,
+  screenShares = null,
   onStopShare,
   cameraStreams = {},
+  chromeVisible = true,
+  onImmersiveChange,
 }) {
-  const [sizeBucket, setSizeBucket] = useState('medium')
-  // null = grid. 'screen' = screen on the stage. userId = that camera on the stage.
-  const [featured, setFeatured] = useState(null)
-
-  useEffect(() => {
-    if (!screenStream && featured === 'screen') setFeatured(null)
-  }, [screenStream, featured])
-
-  useEffect(() => {
-    if (typeof featured === 'string' && featured !== 'screen' && !cameraStreams[featured]) {
-      setFeatured(screenStream ? 'screen' : null)
+  void onStatusChange
+  const shares = useMemo(() => {
+    const raw = Array.isArray(screenShares) && screenShares.length > 0
+      ? screenShares.filter((s) => s?.stream)
+      : screenStream
+        ? [{ id: screenIsSelf ? 'self' : 'remote', stream: screenStream, isSelf: !!screenIsSelf }]
+        : []
+    // Drop duplicates (same id / same MediaStream) — attaching one stream to
+    // many <video>s leaves black tiles.
+    const out = []
+    const seenIds = new Set()
+    const seenStreams = new Set()
+    for (const share of raw) {
+      if (!share?.stream || seenIds.has(share.id) || seenStreams.has(share.stream)) continue
+      seenIds.add(share.id)
+      seenStreams.add(share.stream)
+      out.push(share)
     }
-  }, [cameraStreams, featured, screenStream])
+    return out
+  }, [screenShares, screenStream, screenIsSelf])
+
+  const [sizeBucket, setSizeBucket] = useState('medium')
+  // null = people grid only. share:<id> | userId = stage content.
+  const [featured, setFeatured] = useState(null)
+  // Cinema: stage fills the whole content pane (hides filmstrip / people).
+  const [immersive, setImmersive] = useState(false)
+
+  useEffect(() => {
+    if (!immersive) return
+    const onKey = (e) => {
+      if (e.key === 'Escape') setImmersive(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [immersive])
+
+  useEffect(() => {
+    onImmersiveChange?.(immersive)
+  }, [immersive, onImmersiveChange])
+
+  // Always keep a share on the stage while shares exist so it can fill the layout.
+  useEffect(() => {
+    if (shares.length === 0) {
+      if (typeof featured === 'string' && featured.startsWith('share:')) setFeatured(null)
+      if (immersive) setImmersive(false)
+      return
+    }
+    if (typeof featured === 'string' && featured.startsWith('share:')) {
+      const id = featured.slice(6)
+      if (shares.some((s) => s.id === id)) return
+    }
+    if (typeof featured === 'string' && !featured.startsWith('share:') && cameraStreams[featured]) {
+      return
+    }
+    const preferred = shares.find((s) => !s.isSelf) || shares[0]
+    setFeatured(`share:${preferred.id}`)
+  }, [shares, featured, cameraStreams, immersive])
 
   useEffect(() => {
     const n = participants.length
@@ -48,36 +96,47 @@ export function ParticipantGrid({
     else setSizeBucket('large')
   }, [participants.length])
 
-  const featuredCameraId = typeof featured === 'string' && featured !== 'screen' ? featured : null
+  const featuredShareId = typeof featured === 'string' && featured.startsWith('share:')
+    ? featured.slice(6)
+    : null
+  const featuredCameraId = typeof featured === 'string' && !featured.startsWith('share:')
+    ? featured
+    : null
+  const featuredShare = featuredShareId
+    ? shares.find((s) => s.id === featuredShareId) || null
+    : null
   const stageIsCamera = !!featuredCameraId
-  const stageStream = stageIsCamera ? cameraStreams[featuredCameraId] : screenStream
+  const stageStream = stageIsCamera
+    ? cameraStreams[featuredCameraId]
+    : featuredShare?.stream || null
   const featuredMember = featuredCameraId
     ? participants.find((p) => p.userId === featuredCameraId)
     : null
+  const otherShares = featuredShareId
+    ? shares.filter((s) => s.id !== featuredShareId)
+    : shares
 
   const promoteCamera = (userId) => {
     if (!userId) return
     if (featured === userId) {
-      setFeatured(screenStream ? 'screen' : null)
+      const preferred = shares.find((s) => !s.isSelf) || shares[0]
+      setFeatured(preferred ? `share:${preferred.id}` : null)
       return
     }
-    if (cameraStreams[userId] || featured === userId) setFeatured(userId)
+    if (cameraStreams[userId]) setFeatured(userId)
   }
 
-  const toggleStage = () => {
-    if (featuredCameraId) {
-      setFeatured(screenStream ? 'screen' : null)
-      return
-    }
-    if (featured === 'screen') setFeatured(null)
-    else if (screenStream) setFeatured('screen')
+  const toggleShareFeatured = (shareId) => {
+    setFeatured(`share:${shareId}`)
   }
+
+  const toggleImmersive = () => setImmersive((v) => !v)
 
   const renderCard = (p) => {
     const isSelf = p.userId === currentUserId
-    const swapped = featuredCameraId === p.userId && !!screenStream
+    const swapped = featuredCameraId === p.userId && !!featuredShare
     const videoStream = swapped
-      ? screenStream
+      ? featuredShare.stream
       : featuredCameraId === p.userId
         ? null
         : (cameraStreams[p.userId] || null)
@@ -99,36 +158,79 @@ export function ParticipantGrid({
     )
   }
 
+  // —— Stage layout: featured share/camera fills the main pane ——
   if (featured && stageStream) {
     const stageSelf = stageIsCamera
       ? featuredCameraId === currentUserId
-      : screenIsSelf
+      : !!featuredShare?.isSelf
     const stageTitle = stageIsCamera
       ? (featuredMember?.displayName
         ? `${featuredCameraId === currentUserId ? 'Sua câmera' : `Câmera · ${featuredMember.displayName}`}`
         : 'Câmera')
-      : undefined
+      : featuredShare?.title
+
     return (
-      <div className="@container flex-1 min-h-0 overflow-y-auto overscroll-contain flex flex-col @[640px]:flex-row gap-3 px-3 sm:px-5 pt-1 pb-24">
-        <div className="flex-1 min-w-0 min-h-[40%] @[640px]:min-h-0">
-          <ScreenShareStage
-            stream={stageStream}
-            isSelf={stageSelf}
-            kind={stageIsCamera ? 'camera' : 'screen'}
-            title={stageTitle}
-            mirrored={stageIsCamera && stageSelf}
-            expanded
-            onToggleExpand={toggleStage}
-            onStop={stageIsCamera ? undefined : onStopShare}
-          />
+      <div
+        className={[
+          '@container flex-1 min-h-0 overflow-hidden flex',
+          immersive
+            ? 'relative flex-col p-0 h-full'
+            : 'flex-col @[720px]:flex-row gap-2 sm:gap-3 px-2 sm:px-3 pt-1 pb-24',
+        ].join(' ')}
+      >
+        {/* Main stage — immersive = edge-to-edge under overlays */}
+        <div className={immersive ? 'absolute inset-0' : 'relative flex-1 min-w-0 min-h-0'}>
+          <div className="absolute inset-0">
+            <ScreenShareStage
+              stream={stageStream}
+              isSelf={stageSelf}
+              kind={stageIsCamera ? 'camera' : 'screen'}
+              title={stageTitle}
+              mirrored={stageIsCamera && stageSelf}
+              expanded={immersive}
+              fill
+              immersive={immersive}
+              chromeVisible={chromeVisible}
+              onToggleExpand={toggleImmersive}
+              onStop={stageIsCamera ? undefined : (featuredShare?.isSelf ? onStopShare : undefined)}
+            />
+          </div>
         </div>
-        <aside className="flex @[640px]:flex-col gap-2.5 overflow-x-auto @[640px]:overflow-y-auto @[640px]:overflow-x-visible shrink-0 @[640px]:w-[168px] @[720px]:w-[196px] @[640px]:h-full pb-1 @[640px]:pb-0 @[640px]:pr-0.5">
-          {participants.map((p) => (
-            <div key={p.userId || p.id} className="w-[140px] shrink-0 @[640px]:w-auto">
-              {renderCard(p)}
-            </div>
-          ))}
-        </aside>
+
+        {/* Filmstrip + people — hidden in immersive cinema mode */}
+        {!immersive && (
+          <aside className="shrink-0 flex flex-row @[720px]:flex-col gap-2 overflow-x-auto @[720px]:overflow-y-auto @[720px]:overflow-x-hidden @[720px]:w-[180px] @[900px]:w-[220px] @[720px]:h-full max-h-[28%] @[720px]:max-h-none pb-1">
+            {otherShares.map((share) => (
+              <div
+                key={share.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => toggleShareFeatured(share.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    toggleShareFeatured(share.id)
+                  }
+                }}
+                className="relative w-[160px] @[720px]:w-full aspect-video shrink-0 rounded-[12px] overflow-hidden border border-white/10 hover:border-accent/50 focus-visible:ring-2 focus-visible:ring-accent/50 cursor-pointer"
+                title="Mostrar em destaque"
+              >
+                <ScreenShareStage
+                  stream={share.stream}
+                  isSelf={!!share.isSelf}
+                  title={share.title}
+                  compact
+                  onStop={share.isSelf ? onStopShare : undefined}
+                />
+              </div>
+            ))}
+            {participants.map((p) => (
+              <div key={p.userId || p.id} className="w-[140px] @[720px]:w-auto shrink-0">
+                {renderCard(p)}
+              </div>
+            ))}
+          </aside>
+        )}
       </div>
     )
   }
@@ -156,43 +258,17 @@ export function ParticipantGrid({
     const me = participants[0]
     return (
       <div className="@container flex-1 min-h-0 flex items-center justify-center px-3 sm:px-6 py-4 sm:py-6">
-        <div
-          className="w-full max-w-[720px] min-w-0 grid gap-4 sm:gap-5 grid-cols-1 @[540px]:grid-cols-[minmax(0,340px)_minmax(0,1fr)]"
-        >
+        <div className="w-full max-w-[720px] min-w-0">
           {renderCard(me)}
-          {screenStream ? (
-            <ScreenShareStage
-              stream={screenStream}
-              isSelf={screenIsSelf}
-              onToggleExpand={() => setFeatured('screen')}
-              onStop={onStopShare}
-            />
-          ) : (
-          <div
-            className="
-              relative rounded-[16px] border border-white/[0.08] overflow-hidden
-              bg-[#15171d]
-              p-6 flex flex-col items-center justify-center text-center gap-3
-              shadow-[0_18px_44px_-16px_rgba(0,0,0,0.6)]
-            "
-          >
+          {!shares.length && (
             <div
-              aria-hidden
-              className="absolute inset-0 opacity-50"
-              style={{
-                background:
-                  'radial-gradient(60% 80% at 50% 0%, color-mix(in srgb, var(--space-accent) 18%, transparent) 0%, transparent 70%)',
-              }}
-            />
-            <div className="relative">
-              <div
-                className="w-14 h-14 rounded-full flex items-center justify-center bg-accent/15 text-accent ring-1 ring-accent/30"
-                aria-hidden
-              >
-                <UserPlus size={20} strokeWidth={1.8} />
-              </div>
-            </div>
-            <div className="relative">
+              className="
+                relative mt-4 rounded-[16px] border border-white/[0.08] overflow-hidden
+                bg-[#15171d]
+                p-6 flex flex-col items-center justify-center text-center gap-3
+                shadow-[0_18px_44px_-16px_rgba(0,0,0,0.6)]
+              "
+            >
               <p
                 className="text-[16px] font-semibold text-strong tracking-tight"
                 style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontStyle: 'italic' }}
@@ -202,25 +278,15 @@ export function ParticipantGrid({
               <p className="text-[12.5px] text-muted mt-1.5 max-w-[280px] leading-snug">
                 Convide alguém para começar a conversa.
               </p>
+              <button
+                type="button"
+                onClick={onInvite}
+                className="inline-flex items-center gap-2 h-10 px-5 rounded-pill bg-accent text-strong text-[12.5px] font-semibold"
+              >
+                <UserPlus size={14} strokeWidth={1.9} />
+                Convidar pessoas
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={onInvite}
-              className="
-                relative inline-flex items-center gap-2 h-10 px-5 rounded-pill
-                bg-gradient-to-r from-accent to-[#ff5a82]
-                text-strong text-[12.5px] font-semibold
-                shadow-[0_8px_22px_-8px_var(--space-accent-glow-32),inset_0_0_0_1px_rgba(255,255,255,0.10)]
-                transition-[transform,box-shadow] duration-200
-                hover:scale-[1.03] hover:shadow-[0_10px_28px_-8px_var(--space-accent-glow-40),inset_0_0_0_1px_rgba(255,255,255,0.18)]
-                active:scale-[0.97]
-                focus-visible:ring-2 focus-visible:ring-accent/60
-              "
-            >
-              <UserPlus size={14} strokeWidth={1.9} />
-              Convidar pessoas
-            </button>
-          </div>
           )}
         </div>
       </div>
@@ -236,16 +302,6 @@ export function ParticipantGrid({
                 : 4
   return (
     <div className="@container flex-1 min-h-0 overflow-y-auto overscroll-contain px-3 sm:px-6 lg:px-8 py-4 sm:py-6 pb-24">
-      {screenStream && (
-        <div className="mb-4 max-w-4xl mx-auto aspect-video">
-          <ScreenShareStage
-            stream={screenStream}
-            isSelf={screenIsSelf}
-            onToggleExpand={() => setFeatured('screen')}
-            onStop={onStopShare}
-          />
-        </div>
-      )}
       <div
         className="grid gap-3.5 mx-auto"
         style={{

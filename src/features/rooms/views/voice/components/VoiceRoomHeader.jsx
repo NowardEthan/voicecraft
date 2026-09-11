@@ -25,13 +25,19 @@ export function VoiceRoomHeader({
   onCoverChange,
   onOpenSettings,
   onLeave,
+  cinema = false,
 }) {
   const themeBtnRef = useRef(null)
   const accent = roomAccentColor(room)
   const nameStyle = resolveRoomNameStyle(room?.nameStyle).style
   return (
-    <header className="@container shrink-0 px-3 sm:px-5 pt-4 sm:pt-6 pb-2 sm:pb-3">
-      <div className="flex items-center gap-1.5 text-[11px] text-muted">
+    <header
+      className={[
+        '@container shrink-0 px-3 sm:px-5 pt-4 sm:pt-6 pb-2 sm:pb-3 relative',
+        cinema ? 'text-white' : '',
+      ].filter(Boolean).join(' ')}
+    >
+      <div className={['flex items-center gap-1.5 text-[11px]', cinema ? 'text-white/75' : 'text-muted'].join(' ')}>
         <span
           className="inline-flex items-center gap-1.5 min-w-0"
           title={space?.name || 'Espaço'}
@@ -39,8 +45,9 @@ export function VoiceRoomHeader({
           <span
             className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-semibold shrink-0"
             style={{
-              backgroundColor: 'var(--space-accent-soft)',
-              color: 'var(--space-accent)',
+              backgroundColor: cinema ? 'rgba(0,0,0,0.55)' : 'var(--space-accent-soft)',
+              color: cinema ? '#fff' : 'var(--space-accent)',
+              border: cinema ? '1px solid rgba(255,255,255,0.18)' : undefined,
             }}
             aria-hidden
           >
@@ -48,16 +55,21 @@ export function VoiceRoomHeader({
           </span>
           <span className="truncate max-w-[10rem] sm:max-w-[180px]">{space?.name || 'Espaço'}</span>
         </span>
-        <ChevronRight size={11} className="text-muted/60 shrink-0" />
+        <ChevronRight size={11} className={cinema ? 'text-white/50 shrink-0' : 'text-muted/60 shrink-0'} />
       </div>
 
       <div className="mt-2 sm:mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
         <div
           className="hidden @[420px]:flex w-11 h-11 sm:w-12 sm:h-12 rounded-2xl items-center justify-center shrink-0"
           style={{
-            backgroundColor: `color-mix(in srgb, ${accent} 18%, transparent)`,
-            color: accent,
-            boxShadow: `0 8px 24px -10px color-mix(in srgb, ${accent} 40%, transparent)`,
+            backgroundColor: cinema
+              ? 'rgba(0,0,0,0.55)'
+              : `color-mix(in srgb, ${accent} 18%, transparent)`,
+            color: cinema ? '#fff' : accent,
+            boxShadow: cinema
+              ? '0 8px 24px -10px rgba(0,0,0,0.65)'
+              : `0 8px 24px -10px color-mix(in srgb, ${accent} 40%, transparent)`,
+            border: cinema ? '1px solid rgba(255,255,255,0.16)' : undefined,
           }}
           aria-hidden
         >
@@ -66,17 +78,26 @@ export function VoiceRoomHeader({
 
         <div className="flex-1 min-w-0 basis-[8rem]">
           <h1
-            className="text-[clamp(1.15rem,3.4vw,1.85rem)] font-bold text-strong tracking-tight leading-tight truncate"
-            style={{ ...nameStyle, ...(room?.color ? { color: accent } : null) }}
+            className={[
+              'text-[clamp(1.15rem,3.4vw,1.85rem)] font-bold tracking-tight leading-tight truncate',
+              cinema ? 'text-white drop-shadow-[0_2px_12px_rgba(0,0,0,0.85)]' : 'text-strong',
+            ].join(' ')}
+            style={{ ...nameStyle, ...(room?.color && !cinema ? { color: accent } : null) }}
           >
             {room?.name || 'sala de voz'}
           </h1>
-          <p className="text-[12px] text-muted mt-0.5 truncate hidden @[380px]:block">
+          <p className={[
+            'text-[12px] mt-0.5 truncate hidden @[380px]:block',
+            cinema ? 'text-white/70' : 'text-muted',
+          ].join(' ')}>
             Sala de voz ao vivo, baixa latência.
           </p>
         </div>
 
-        <div className="hidden @[720px]:flex items-center gap-3 text-[12px] text-ink shrink-0">
+        <div className={[
+          'hidden @[720px]:flex items-center gap-3 text-[12px] shrink-0',
+          cinema ? 'text-white/90' : 'text-ink',
+        ].join(' ')}>
           <ConnectionStatus state={connectionState} />
           {connectionState === 'connected' ? (
             <span className="inline-flex items-center gap-1.5 tabular-nums">
@@ -85,9 +106,9 @@ export function VoiceRoomHeader({
             </span>
           ) : null}
           <span className="inline-flex items-center gap-1.5">
-            <UserPlus size={11} className="text-muted" />
+            <UserPlus size={11} className={cinema ? 'text-white/70' : 'text-muted'} />
             <span>
-              <span className="font-semibold text-strong">{participantsCount}</span> na conversa
+              <span className={cinema ? 'font-semibold text-white' : 'font-semibold text-strong'}>{participantsCount}</span> na conversa
             </span>
           </span>
         </div>
@@ -104,15 +125,15 @@ export function VoiceRoomHeader({
           <button
             type="button"
             onClick={onInvite}
-            className="
-              h-9 w-9 @[520px]:w-auto @[520px]:px-3.5 rounded-full text-[12.5px] font-medium
-              bg-black/35 hover:bg-black/50 backdrop-blur-md
-              text-white/90 hover:text-white
-              shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]
-              inline-flex items-center justify-center gap-1.5
-              transition-[background-color,color,transform] duration-150
-              hover:scale-[1.03] active:scale-[0.97]
-            "
+            className={[
+              'h-9 w-9 @[520px]:w-auto @[520px]:px-3.5 rounded-full text-[12.5px] font-medium',
+              'inline-flex items-center justify-center gap-1.5',
+              'transition-[background-color,color,transform] duration-150',
+              'hover:scale-[1.03] active:scale-[0.97]',
+              cinema
+                ? 'bg-black/65 hover:bg-black/80 backdrop-blur-md text-white border border-white/20 shadow-[0_10px_28px_-12px_rgba(0,0,0,0.9)]'
+                : 'bg-black/35 hover:bg-black/50 backdrop-blur-md text-white/90 hover:text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]',
+            ].join(' ')}
           >
             <UserPlus size={14} strokeWidth={1.9} />
             <span className="hidden @[520px]:inline">Convidar</span>
@@ -126,7 +147,10 @@ export function VoiceRoomHeader({
         </div>
       </div>
 
-      <div className="mt-2 flex @[720px]:hidden items-center gap-3 text-[11px] text-ink min-w-0">
+      <div className={[
+        'mt-2 flex @[720px]:hidden items-center gap-3 text-[11px] min-w-0',
+        cinema ? 'text-white/90' : 'text-ink',
+      ].join(' ')}>
         <ConnectionStatus state={connectionState} />
         {connectionState === 'connected' ? (
           <span className="inline-flex items-center gap-1.5 tabular-nums shrink-0">
@@ -135,7 +159,7 @@ export function VoiceRoomHeader({
           </span>
         ) : null}
         <span className="truncate">
-          <span className="font-semibold text-strong">{participantsCount}</span> na conversa
+          <span className={cinema ? 'font-semibold text-white' : 'font-semibold text-strong'}>{participantsCount}</span> na conversa
         </span>
       </div>
     </header>

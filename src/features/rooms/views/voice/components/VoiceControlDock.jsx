@@ -25,21 +25,23 @@ export function VoiceControlDock({
   onToggleCamera, cameraOn,
   reducedMotion,
   mediaEnabled = true,
+  cinema = false,
 }) {
   const mediaLocked = !mediaEnabled
   return (
     <div
       role="toolbar"
       aria-label="Controles da chamada"
-      className="
-        pointer-events-auto
-        inline-flex items-center gap-1 sm:gap-1.5
-        max-w-full
-        rounded-full
-        bg-black/45 backdrop-blur-xl
-        shadow-[0_22px_50px_-18px_rgba(0,0,0,0.75),inset_0_1px_0_rgba(255,255,255,0.06)]
-        p-1.5 sm:pl-2 sm:pr-2
-      "
+      className={[
+        'pointer-events-auto',
+        'inline-flex items-center gap-1 sm:gap-1.5',
+        'max-w-full',
+        'rounded-full',
+        'p-1.5 sm:pl-2 sm:pr-2',
+        cinema
+          ? 'bg-black/75 backdrop-blur-xl border border-white/20 shadow-[0_22px_50px_-14px_rgba(0,0,0,0.9),inset_0_1px_0_rgba(255,255,255,0.08)]'
+          : 'bg-black/45 backdrop-blur-xl shadow-[0_22px_50px_-18px_rgba(0,0,0,0.75),inset_0_1px_0_rgba(255,255,255,0.06)]',
+      ].join(' ')}
     >
       <div className={`flex items-center gap-0.5 ${mediaLocked ? 'opacity-40 pointer-events-none' : ''}`}>
         <MicrophoneControl

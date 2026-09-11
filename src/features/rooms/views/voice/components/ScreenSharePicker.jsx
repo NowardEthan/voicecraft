@@ -1,10 +1,14 @@
-import { Monitor, AppWindow, X, Info } from 'lucide-react'
+import { useState } from 'react'
+import { Monitor, AppWindow, X, Info, Volume2 } from 'lucide-react'
 import { ModalShell } from '../../../../../shared/motion/ModalShell.jsx'
 import { looksLikeBrowserWindow } from '../../../../../hooks/useScreenShare'
 
 export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
   const screens = sources.filter((s) => s.isScreen)
   const windows = sources.filter((s) => !s.isScreen)
+  const [withSystemAudio, setWithSystemAudio] = useState(false)
+
+  const pick = (sourceId) => onPick?.(sourceId, { withAudio: withSystemAudio })
 
   return (
     <ModalShell open={open} onClose={onClose} labelledBy="share-title" maxWidth="lg">
@@ -32,8 +36,27 @@ export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
               YouTube e abas do Chrome ficam cinza ou borrados quando você volta pro VoiceCraft — o Windows para de desenhar o vídeo da janela oculta. Compartilhe a <span className="text-strong font-medium">tela inteira</span> e deixe o vídeo visível (janela ao lado ou segundo monitor).
             </p>
           </div>
-          <SourceGroup title="Telas" icon={Monitor} items={screens} onPick={onPick} />
-          <SourceGroup title="Janelas" icon={AppWindow} items={windows} onPick={onPick} warnBrowser />
+
+          <label className="flex items-start gap-3 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2.5 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={withSystemAudio}
+              onChange={(e) => setWithSystemAudio(e.target.checked)}
+              className="mt-0.5 accent-[var(--space-accent)]"
+            />
+            <span className="min-w-0">
+              <span className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-strong">
+                <Volume2 size={13} />
+                Incluir áudio do sistema
+              </span>
+              <span className="block text-[11.5px] text-muted mt-0.5 leading-snug">
+                Para jogo/YouTube. Use fones — senão a call entra no loopback e o outro ouve a própria voz.
+              </span>
+            </span>
+          </label>
+
+          <SourceGroup title="Telas" icon={Monitor} items={screens} onPick={pick} />
+          <SourceGroup title="Janelas" icon={AppWindow} items={windows} onPick={pick} warnBrowser />
           {sources.length === 0 && (
             <p className="text-[13px] text-muted text-center py-8">Nenhuma fonte encontrada.</p>
           )}

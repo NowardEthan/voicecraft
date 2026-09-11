@@ -8,6 +8,7 @@ import {
   RoomEvent,
   Track,
   LocalVideoTrack,
+  LocalAudioTrack,
   createLocalTracks,
   ConnectionState,
   ScreenSharePresets,
@@ -17,6 +18,7 @@ import { enumerateMics, watchDeviceChanges } from '../../../../utils/devices'
 import { flashToast } from '../../../../shared/utils/toast'
 import { playCallSound, unlockCallSounds, configureCallSounds } from '../../../../shared/audio/callSounds'
 import { useScreenShare, looksLikeBrowserWindow } from '../../../../hooks/useScreenShare'
+import { getSharedSignaling } from '../../../../shared/connection/useSignaling'
 import { makeActivityEvent } from './useVoiceRoom'
 import {
   sessionKey as liveKitSessionKey,
@@ -84,6 +86,7 @@ export function useLiveKitRoom({
   onInvite,
   onStatusChange,
 }) {
+  const sig = getSharedSignaling()
   const [settings] = useSettings()
   const screenShare = useScreenShare()
   const preferredMicId = settings?.microphoneId || settings?.inputDeviceId || null
@@ -106,7 +109,7 @@ export function useLiveKitRoom({
   const [peerInRoom, setPeerInRoom] = useState(false)
   const [error, setError] = useState(null)
   const [permissionDenied, setPermissionDenied] = useState(false)
-  const [remoteScreenStream, setRemoteScreenStream] = useState(null)
+  const [remoteScreenStreams, setRemoteScreenStreams] = useState({})
   const [remoteCameras, setRemoteCameras] = useState({})
   const [isMuted, setIsMuted] = useState(false)
   const [isDeafened, setIsDeafened] = useState(false)
@@ -118,6 +121,8 @@ export function useLiveKitRoom({
   const [cameraOn, setCameraOn] = useState(false)
   const [screenSharing, setScreenSharing] = useState(false)
   const [joinPhase, setJoinPhase] = useState('token')
+  // Identities currently in the LiveKit room (and/or Firestore peers doc).
+  const [livePeerIds, setLivePeerIds] = useState([])
   const [activity, setActivity] = useState(() => [
     makeActivityEvent({
       kind: 'self-joined',
@@ -126,20 +131,58 @@ export function useLiveKitRoom({
     }),
   ])
 
+  const syncLivePeers = useCallback((lkRoom) => {
+    const lkIds = lkRoom
+      ? [...lkRoom.remoteParticipants.values()].map((p) => p.identity).filter(Boolean)
+      : []
+    setLivePeerIds((prev) => [...new Set([...lkIds, ...prev])])
+    setPeerInRoom(lkIds.length > 0)
+  }, [])
+
   const joinedAtRef = useRef(Date.now())
   const roomRef = useRef(null)
   const localAudioTrackRef = useRef(null)
   const localVideoTrackRef = useRef(null)
   const localScreenTrackRef = useRef(null)
+  const localScreenAudioTrackRef = useRef(null)
   const screenPublishingRef = useRef(false)
   const callReadyRef = useRef(false)
   const remoteAudiosRef = useRef(new Map())
   const initCancelledRef = useRef(false)
   const isMutedRef = useRef(false)
   const isDeafenedRef = useRef(false)
+  // Desktop loopback captures call playback → remote hears themselves. Duck remotes while active.
+  const screenAudioCaptureRef = useRef(false)
 
   isMutedRef.current = isMuted
   isDeafenedRef.current = isDeafened
+
+  // Firestore peers collection — survives presence `online` flicker.
+  useEffect(() => {
+    const offJoined = sig.onPeerJoined?.((msg) => {
+      const id = msg.peerId || msg.userId
+      if (!id || id === currentUserId) return
+      setLivePeerIds((prev) => (prev.includes(id) ? prev : [...prev, id]))
+      setPeerInRoom(true)
+    })
+    const offLeft = sig.onPeerLeft?.((msg) => {
+      const id = msg.peerId || msg.userId
+      if (!id) return
+      setLivePeerIds((prev) => {
+        const next = prev.filter((x) => x !== id)
+        // Keep anyone still in LiveKit.
+        const lk = roomRef.current
+        if (lk) {
+          for (const p of lk.remoteParticipants.values()) {
+            if (p.identity && !next.includes(p.identity)) next.push(p.identity)
+          }
+        }
+        setPeerInRoom(next.length > 0)
+        return next
+      })
+    })
+    return () => { offJoined?.(); offLeft?.() }
+  }, [sig, currentUserId])
 
   const pushActivity = useCallback((evt) => {
     setActivity((prev) => [evt, ...prev].slice(0, 30))
@@ -148,11 +191,23 @@ export function useLiveKitRoom({
   const applyOutputToAudio = useCallback((audio) => {
     if (!audio) return
     const vol = Math.max(0, Math.min(100, Number(settings?.outputVolume ?? 80))) / 100
-    audio.volume = isDeafenedRef.current ? 0 : vol
+    // While capturing system audio, mute remote *mic* playback so loopback
+    // doesn't send their voice back to them. Still play remote screen-audio.
+    const duckMic = screenAudioCaptureRef.current && audio.dataset?.vcSource !== 'screen'
+    audio.volume = (isDeafenedRef.current || duckMic) ? 0 : vol
     if (typeof audio.setSinkId === 'function') {
       audio.setSinkId(settings?.speakerId || '').catch(() => {})
     }
   }, [settings?.outputVolume, settings?.speakerId])
+
+  const refreshRemoteAudioLevels = useCallback(() => {
+    remoteAudiosRef.current.forEach((audio) => applyOutputToAudio(audio))
+  }, [applyOutputToAudio])
+
+  const setScreenAudioCaptureActive = useCallback((active) => {
+    screenAudioCaptureRef.current = !!active
+    refreshRemoteAudioLevels()
+  }, [refreshRemoteAudioLevels])
 
   useEffect(() => {
     remoteAudiosRef.current.forEach((audio) => applyOutputToAudio(audio))
@@ -195,6 +250,9 @@ export function useLiveKitRoom({
     const key = `${participant.identity}:${track.sid || 'audio'}`
     detachRemoteAudio(participant.identity, track.sid)
     const audio = new Audio()
+    try {
+      audio.dataset.vcSource = track.source === Track.Source.ScreenShareAudio ? 'screen' : 'mic'
+    } catch {}
     track.attach(audio)
     applyOutputToAudio(audio)
     remoteAudiosRef.current.set(key, audio)
@@ -288,7 +346,7 @@ export function useLiveKitRoom({
     }
 
     const onParticipantConnected = (p) => {
-      setPeerInRoom(true)
+      syncLivePeers(lkRoom)
       if (callReadyRef.current) sfx('peerJoin')
       pushActivity(makeActivityEvent({
         kind: 'peer-joined',
@@ -303,8 +361,12 @@ export function useLiveKitRoom({
         userId: p.identity,
         displayName: p.name || p.identity,
       }))
-      const others = [...lkRoom.remoteParticipants.values()]
-      setPeerInRoom(others.length > 0)
+      setLivePeerIds((prev) => {
+        const lkIds = [...lkRoom.remoteParticipants.values()].map((x) => x.identity).filter(Boolean)
+        const next = [...new Set(lkIds)]
+        setPeerInRoom(next.length > 0)
+        return next
+      })
       setRemoteSpeaking((prev) => {
         if (!(p.identity in prev)) return prev
         const next = { ...prev }
@@ -312,6 +374,12 @@ export function useLiveKitRoom({
         return next
       })
       setRemoteCameras((prev) => {
+        if (!(p.identity in prev)) return prev
+        const next = { ...prev }
+        delete next[p.identity]
+        return next
+      })
+      setRemoteScreenStreams((prev) => {
         if (!(p.identity in prev)) return prev
         const next = { ...prev }
         delete next[p.identity]
@@ -327,7 +395,7 @@ export function useLiveKitRoom({
       if (track.kind === Track.Kind.Video) {
         const media = new MediaStream([track.mediaStreamTrack])
         if (track.source === Track.Source.ScreenShare) {
-          setRemoteScreenStream(media)
+          setRemoteScreenStreams((prev) => ({ ...prev, [participant.identity]: media }))
         } else {
           setRemoteCameras((prev) => ({ ...prev, [participant.identity]: media }))
         }
@@ -341,7 +409,12 @@ export function useLiveKitRoom({
       }
       if (track.kind === Track.Kind.Video) {
         if (track.source === Track.Source.ScreenShare) {
-          setRemoteScreenStream(null)
+          setRemoteScreenStreams((prev) => {
+            if (!(participant.identity in prev)) return prev
+            const next = { ...prev }
+            delete next[participant.identity]
+            return next
+          })
         } else {
           setRemoteCameras((prev) => {
             if (!(participant.identity in prev)) return prev
@@ -383,11 +456,11 @@ export function useLiveKitRoom({
         if (settingsId) setActiveDeviceId(settingsId)
       }
       for (const p of lkRoom.remoteParticipants.values()) {
-        setPeerInRoom(true)
         for (const pub of p.trackPublications.values()) {
           if (pub.track) onTrackSubscribed(pub.track, pub, p)
         }
       }
+      syncLivePeers(lkRoom)
       callReadyRef.current = true
       setJoinPhase('ready')
       setConnectionState('connected')
@@ -492,6 +565,8 @@ export function useLiveKitRoom({
         audio.srcObject = null
       })
       remoteAudiosRef.current.clear()
+      setRemoteScreenStreams({})
+      setRemoteCameras({})
 
       // Do NOT stop mic / disconnect here — releaseSession defers dispose so
       // remounts (Strict Mode / navigation flicker) keep the same PC alive.
@@ -500,8 +575,10 @@ export function useLiveKitRoom({
         onDispose: () => {
           try { localVideoTrackRef.current?.stop() } catch {}
           try { localScreenTrackRef.current?.stop() } catch {}
+          try { localScreenAudioTrackRef.current?.stop() } catch {}
           localVideoTrackRef.current = null
           localScreenTrackRef.current = null
+          localScreenAudioTrackRef.current = null
           try { screenShare.stop() } catch {}
         },
       })
@@ -590,20 +667,23 @@ export function useLiveKitRoom({
 
   const stopScreenShare = useCallback(async () => {
     const lkRoom = roomRef.current
-    const track = localScreenTrackRef.current
+    const videoTrack = localScreenTrackRef.current
+    const audioTrack = localScreenAudioTrackRef.current
     localScreenTrackRef.current = null
+    localScreenAudioTrackRef.current = null
     screenPublishingRef.current = false
     setScreenSharing(false)
-    if (track) {
+    setScreenAudioCaptureActive(false)
+    const connected = lkRoom?.state === ConnectionState.Connected
+    for (const track of [videoTrack, audioTrack]) {
+      if (!track) continue
       try {
-        if (lkRoom?.state === ConnectionState.Connected) {
-          await lkRoom.localParticipant.unpublishTrack(track, true)
-        }
+        if (connected) await lkRoom.localParticipant.unpublishTrack(track, true)
       } catch {}
       try { track.stop() } catch {}
     }
     try { screenShare.stop() } catch {}
-  }, [screenShare])
+  }, [screenShare, setScreenAudioCaptureActive])
 
   const publishScreenStream = useCallback(async (mediaStream) => {
     const lkRoom = roomRef.current
@@ -648,16 +728,52 @@ export function useLiveKitRoom({
       })
 
       localScreenTrackRef.current = publication?.track || localTrack
+
+      // System / display audio (YouTube, game, etc.) — separate LiveKit source.
+      // Desktop loopback also hears the call → duck remote mics while active.
+      const audioMedia = mediaStream.getAudioTracks()[0]
+      if (audioMedia) {
+        try {
+          audioMedia.contentHint = 'music'
+        } catch {}
+        audioMedia.addEventListener('ended', () => {
+          if (localScreenAudioTrackRef.current) stopScreenShare()
+        })
+        try {
+          const localAudio = new LocalAudioTrack(audioMedia, undefined, true)
+          const audioPub = await lkRoom.localParticipant.publishTrack(localAudio, {
+            source: Track.Source.ScreenShareAudio,
+            name: 'screen-audio',
+            dtx: false,
+            red: true,
+          })
+          localScreenAudioTrackRef.current = audioPub?.track || localAudio
+          setScreenAudioCaptureActive(true)
+          flashToast('Áudio do sistema ligado — use fones; a call fica muda pra evitar eco')
+        } catch (audioErr) {
+          console.warn('[screenShare] failed to publish display audio', audioErr?.message || audioErr)
+          try { audioMedia.stop() } catch {}
+          setScreenAudioCaptureActive(false)
+        }
+      } else {
+        setScreenAudioCaptureActive(false)
+      }
+
       setScreenSharing(true)
     } catch (err) {
       localScreenTrackRef.current = null
+      localScreenAudioTrackRef.current = null
+      setScreenAudioCaptureActive(false)
       setScreenSharing(false)
       try { mediaTrack.stop() } catch {}
+      mediaStream.getAudioTracks().forEach((t) => {
+        try { t.stop() } catch {}
+      })
       throw err
     } finally {
       screenPublishingRef.current = false
     }
-  }, [settings, stopScreenShare])
+  }, [settings, stopScreenShare, setScreenAudioCaptureActive])
 
   const handleShareScreen = useCallback(async () => {
     const lkRoom = roomRef.current
@@ -674,7 +790,7 @@ export function useLiveKitRoom({
       const q = settings?.screenQuality || '720p'
       const fr = settings?.screenFramerate || 30
       // Electron: opens picker (returns null). Browser: getDisplayMedia stream.
-      const started = await screenShare.start(q, fr)
+      const started = await screenShare.start(q, fr, { withAudio: false })
       if (started) await publishScreenStream(started)
     } catch (err) {
       const msg = err?.message || 'Falha ao compartilhar a tela'
@@ -683,7 +799,7 @@ export function useLiveKitRoom({
     }
   }, [screenShare, settings, stopScreenShare, publishScreenStream, screenSharing])
 
-  const handlePickShareSource = useCallback(async (sourceId) => {
+  const handlePickShareSource = useCallback(async (sourceId, opts = {}) => {
     try {
       const lkRoom = roomRef.current
       if (!lkRoom || lkRoom.state !== ConnectionState.Connected) {
@@ -697,7 +813,8 @@ export function useLiveKitRoom({
       }
       const q = settings?.screenQuality || '720p'
       const fr = settings?.screenFramerate || 30
-      const started = await screenShare.startWithSource(sourceId, q, fr)
+      const withAudio = opts.withAudio === true
+      const started = await screenShare.startWithSource(sourceId, q, fr, { withAudio })
       if (started) await publishScreenStream(started)
     } catch (err) {
       const msg = err?.message || 'Falha ao compartilhar a tela'
@@ -754,13 +871,14 @@ export function useLiveKitRoom({
     sendThought: () => false,
     screenSharing: screenSharing || !!screenShare.stream,
     screenStream: screenShare.stream,
-    remoteScreenStream,
+    remoteScreenStreams,
     cameraOn,
     cameraStream: localVideoTrackRef.current?.mediaStream || null,
     remoteCameras,
     shareNeedsPicker: screenShare.needsPicker,
     shareSources: screenShare.availableSources,
     remoteSpeaking,
+    livePeerIds,
     onLeave: handleLeave,
     onInvite,
   }

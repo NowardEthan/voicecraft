@@ -53,7 +53,8 @@ export function useScreenShare() {
   }, [])
 
   const start = useCallback(async (q = '720p', fr = framerate, opts = {}) => {
-    const captureAudio = !!opts.withAudio
+    // Browser: follow getDisplayMedia audio checkbox. Electron: opt-in via picker.
+    const captureAudio = opts.withAudio === true
     if (IS_ELECTRON) {
       await listSources()
       setNeedsPicker(true)
@@ -64,12 +65,13 @@ export function useScreenShare() {
     }
     try {
       setError(null)
+      // Browser UI has its own "Share audio" checkbox when audio: true.
       const constraints = {
         video: {
           ...((constraintsForQuality(q, fr)).video),
           frameRate: { ideal: fr, max: fr },
         },
-        audio: captureAudio,
+        audio: true,
         preferCurrentTab: false,
       }
       const s = await navigator.mediaDevices.getDisplayMedia(constraints)
@@ -84,7 +86,7 @@ export function useScreenShare() {
       setStream(s)
       setQuality(q)
       setFramerate(fr)
-      setWithAudio(captureAudio)
+      setWithAudio(s.getAudioTracks().length > 0)
       return s
     } catch (err) {
       console.error('[screenShare] failed:', err)
@@ -99,22 +101,46 @@ export function useScreenShare() {
   }, [stop, listSources, framerate])
 
   const startWithSource = useCallback(async (sourceId, q = quality, fr = framerate, opts = {}) => {
-    const captureAudio = IS_ELECTRON ? false : !!opts.withAudio
+    const wantAudio = opts.withAudio === true
     try {
       setError(null)
       const c = constraintsForQuality(q, fr)
-      const captured = await navigator.mediaDevices.getUserMedia({
-        video: {
-          mandatory: {
-            chromeMediaSource: 'desktop',
-            chromeMediaSourceId: sourceId,
-            maxWidth: c.video.width.ideal,
-            maxHeight: c.video.height.ideal,
-            maxFrameRate: fr,
-          },
+      const videoConstraints = {
+        mandatory: {
+          chromeMediaSource: 'desktop',
+          chromeMediaSourceId: sourceId,
+          maxWidth: c.video.width.ideal,
+          maxHeight: c.video.height.ideal,
+          maxFrameRate: fr,
         },
-        audio: captureAudio,
-      })
+      }
+
+      let captured = null
+      let captureAudio = false
+      // Opt-in only: desktop loopback re-captures call playback (echo / "voz duplicada").
+      if (wantAudio) {
+        try {
+          captured = await navigator.mediaDevices.getUserMedia({
+            video: videoConstraints,
+            audio: {
+              mandatory: {
+                chromeMediaSource: 'desktop',
+              },
+            },
+          })
+          captureAudio = captured.getAudioTracks().length > 0
+        } catch (audioErr) {
+          console.warn('[screenShare] desktop audio unavailable, falling back to video-only', audioErr?.message || audioErr)
+        }
+      }
+      if (!captured) {
+        captured = await navigator.mediaDevices.getUserMedia({
+          video: videoConstraints,
+          audio: false,
+        })
+        captureAudio = false
+      }
+
       decorateShareTrack(captured, q)
       const track = captured.getVideoTracks()[0]
       if (track) {

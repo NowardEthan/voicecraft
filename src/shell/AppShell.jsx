@@ -174,13 +174,38 @@ export default function AppShell({ account }) {
 
   const handleSelectSpace = useCallback(async (spaceId) => {
     setShowAccount(false)
-    if (currentRoom) leaveCall()
     setSelectedRoom(null)
+
+    // Home / same Space while in a call: browse UI, keep the LiveKit session.
+    // Only explicit "Sair" (leaveCall) should disconnect.
+    if (!spaceId) {
+      if (currentRoom) {
+        setActiveView('overview')
+        setSpaceSurface('overview')
+        return
+      }
+      setActiveView('overview')
+      setSpaceSurface(null)
+      await selectSpace(null)
+      return
+    }
+
+    if (spaceId === currentSpace?.id) {
+      setActiveView('overview')
+      setSpaceSurface('overview')
+      return
+    }
+
+    if (currentRoom) {
+      flashToast('Saia da call para mudar de Space')
+      return
+    }
+
     setActiveView('overview')
     setSpaceSurface(null)
-    const preview = spaceId ? spaces.find((s) => s.id === spaceId) : null
+    const preview = spaces.find((s) => s.id === spaceId) || null
     await selectSpace(spaceId, preview ? { preview } : undefined)
-  }, [currentRoom, leaveCall, selectSpace, setSelectedRoom, spaces])
+  }, [currentRoom, currentSpace?.id, selectSpace, setSelectedRoom, spaces])
 
   const handleHubJoined = useCallback(async (spaceId, { alreadyMember } = {}) => {
     await handleSelectSpace(spaceId)
