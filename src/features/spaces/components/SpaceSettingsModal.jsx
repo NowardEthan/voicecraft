@@ -28,13 +28,22 @@ import {
 } from '../model/spacePreferences'
 import { normalizeVisibility } from '../model/spaceInvite'
 import { bannerGradient, bannerOverlay, identitySurfaceStyle, spaceTokens } from '../model/spaceTokens'
+import { SpaceRolesPanel } from './SpaceRolesPanel'
+import { FontFieldSelect, FontUploadRow } from './FontFieldSelect'
+import {
+  ensureSpaceFontFaces,
+  fieldFontStyle,
+  normalizeSpaceFonts,
+  normalizeTypography,
+} from '../model/spaceTypography'
+import { uploadSpaceFont } from '../model/spaceFontsStore'
 
 function isCoverSrc(src) {
   return typeof src === 'string'
     && (src.startsWith('data:image/') || /^https?:\/\//.test(src))
 }
 
-function snapshotOf({ icon, name, description, slogan, color, cover, coverFit, visibility, notify }) {
+function snapshotOf({ icon, name, description, slogan, color, cover, coverFit, visibility, notify, typography, fonts }) {
   return JSON.stringify({
     icon: serializeSpaceIcon(icon),
     name,
@@ -45,10 +54,13 @@ function snapshotOf({ icon, name, description, slogan, color, cover, coverFit, v
     coverFit: normalizeCoverFit(coverFit),
     visibility,
     notify,
+    typography: normalizeTypography(typography),
+    fonts: normalizeSpaceFonts(fonts).map((f) => f.id),
   })
 }
 
-export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
+export default function SpaceSettingsModal({ open, space, onSave, onClose, isCreator = false }) {
+  const [tab, setTab] = useState('general') // 'general' | 'roles'
   const [icon, setIcon] = useState(() => normalizeSpaceIcon(null))
   const [recents, setRecents] = useState(() => getRecentIcons())
   const iconButtonRef = useRef(null)
@@ -60,6 +72,9 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
   const [coverFit, setCoverFit] = useState(DEFAULT_COVER_FIT)
   const [visibility, setVisibilityState] = useState('public')
   const [notify, setNotifyState] = useState('on')
+  const [typography, setTypography] = useState(() => normalizeTypography(null))
+  const [fonts, setFonts] = useState([])
+  const [fontUploading, setFontUploading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(null)
   const [iconOpen, setIconOpen] = useState(false)
@@ -80,6 +95,8 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
     const nextFit = normalizeCoverFit(space.coverFit)
     const nextVis = normalizeVisibility(space.visibility ?? getVisibility(space.id))
     const nextNotify = getNotify(space.id)
+    const nextTypography = normalizeTypography(space.typography)
+    const nextFonts = normalizeSpaceFonts(space.fonts)
     setIcon(nextIcon)
     setName(nextName)
     setDescription(nextDesc)
@@ -89,10 +106,14 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
     setCoverFit(nextFit)
     setVisibilityState(nextVis)
     setNotifyState(nextNotify)
+    setTypography(nextTypography)
+    setFonts(nextFonts)
+    ensureSpaceFontFaces(nextFonts)
     setError(null)
     setSubmitting(false)
     setIconOpen(false)
     setColorOpen(false)
+    setTab('general')
     baselineRef.current = snapshotOf({
       icon: nextIcon,
       name: nextName,
@@ -103,19 +124,48 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
       coverFit: nextFit,
       visibility: nextVis,
       notify: nextNotify,
+      typography: nextTypography,
+      fonts: nextFonts,
     })
   }, [open, space])
 
   const dirty = useMemo(() => {
     if (!open) return false
     return snapshotOf({
-      icon, name, description, slogan, color, cover: coverDataUrl, coverFit, visibility, notify,
+      icon, name, description, slogan, color, cover: coverDataUrl, coverFit, visibility, notify, typography, fonts,
     }) !== baselineRef.current
-  }, [open, icon, name, description, slogan, color, coverDataUrl, coverFit, visibility, notify])
+  }, [open, icon, name, description, slogan, color, coverDataUrl, coverFit, visibility, notify, typography, fonts])
 
   if (!open || !space) return null
 
   const hasCover = isCoverSrc(coverDataUrl)
+  const draftSpace = { typography, fonts }
+  const nameFont = fieldFontStyle(draftSpace, 'name')
+  const descFont = fieldFontStyle(draftSpace, 'description')
+  const sloganFont = fieldFontStyle(draftSpace, 'slogan')
+
+  const setFieldFont = (field, fontId) => {
+    setTypography((prev) => ({
+      ...normalizeTypography(prev),
+      [field]: { fontId },
+    }))
+  }
+
+  const handleFontUpload = async (file) => {
+    if (!space?.id || fontUploading) return
+    setFontUploading(true)
+    try {
+      const created = await uploadSpaceFont(space.id, file)
+      setFonts((prev) => [...normalizeSpaceFonts(prev), created])
+      ensureSpaceFontFaces([created])
+      flashToast(`Fonte “${created.label}” enviada`)
+    } catch (err) {
+      flashToast(err?.message || 'Falha ao enviar fonte')
+    } finally {
+      setFontUploading(false)
+    }
+  }
+
   const handlePickCover = () => fileInputRef.current?.click()
   const handleFile = async (e) => {
     const file = e.target.files?.[0]
@@ -131,6 +181,7 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
 
   const handleSubmit = async (e) => {
     e?.preventDefault?.()
+    if (tab !== 'general') return
     if (!name.trim()) {
       setError('O nome do Space é obrigatório.')
       return
@@ -151,6 +202,8 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
         cover: coverDataUrl || null,
         coverFit: coverDataUrl ? coverFit : null,
         visibility,
+        typography: normalizeTypography(typography),
+        fonts: normalizeSpaceFonts(fonts),
       }
       // Keep a local copy so the banner still works if Storage upload fails.
       if (space.id && typeof coverDataUrl === 'string' && coverDataUrl.startsWith('data:image/')) {
@@ -220,7 +273,22 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
           </button>
         </header>
 
+        <div className="shrink-0 px-6 pb-3 flex items-center gap-1 border-b border-white/[0.06]">
+          <TabButton active={tab === 'general'} onClick={() => setTab('general')}>
+            Geral
+          </TabButton>
+          <TabButton active={tab === 'roles'} onClick={() => setTab('roles')}>
+            Cargos
+          </TabButton>
+        </div>
+
         <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-5 space-y-6">
+          {tab === 'roles' ? (
+            <div className="pt-4">
+              <SpaceRolesPanel spaceId={space.id} enabled={!!isCreator} />
+            </div>
+          ) : (
+          <>
           <div className="relative overflow-hidden rounded-2xl border border-white/[0.06] min-h-[132px]">
             {hasCover ? (
               <SpaceCoverLayer src={coverDataUrl} fit={coverFit} />
@@ -245,17 +313,23 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
                   <SpaceIcon value={icon} size={24} className="text-white" />
                 </span>
                 <div className="min-w-0">
-                  <p className="text-[18px] font-semibold text-white tracking-tight truncate">
+                  <p
+                    className="text-[18px] font-semibold text-white tracking-tight truncate"
+                    style={nameFont}
+                  >
                     {name.trim() || 'Sem nome'}
                   </p>
-                  <p className="text-[12.5px] text-white/70 mt-0.5 line-clamp-2">
+                  <p
+                    className="text-[12.5px] text-white/70 mt-0.5 line-clamp-2"
+                    style={descFont}
+                  >
                     {description.trim() || 'Um lugar para jogar, conversar e criar junto.'}
                   </p>
                 </div>
               </div>
               <p
                 className="hidden sm:block text-right text-[18px] leading-tight font-semibold text-white/85 max-w-[140px] shrink-0 select-none"
-                style={{ fontFamily: '"Segoe Script", "Apple Chancery", cursive', whiteSpace: 'pre-line' }}
+                style={{ ...sloganFont, whiteSpace: 'pre-line' }}
               >
                 {(slogan.trim() || 'Good Games\nBetter People.')}
               </p>
@@ -379,6 +453,14 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
                   maxLength={64}
                   className="w-full h-10 px-3 rounded-xl text-[13.5px] bg-[#0d0e12] border border-white/[0.08] text-strong focus:outline-none focus:border-accent/50 placeholder:text-muted"
                   placeholder="Nome do Space"
+                  style={nameFont}
+                />
+                <FontFieldSelect
+                  label="Fonte do nome"
+                  value={typography.name?.fontId}
+                  onChange={(id) => setFieldFont('name', id)}
+                  customFonts={fonts}
+                  previewText={name.trim() || 'Nome'}
                 />
                 <p className="text-[11px] text-muted mt-1 text-right tabular-nums">{name.length}/64</p>
               </label>
@@ -393,6 +475,14 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
                   rows={3}
                   className="w-full min-h-[72px] px-3 py-2 rounded-xl text-[13px] resize-none bg-[#0d0e12] border border-white/[0.08] text-strong focus:outline-none focus:border-accent/50 placeholder:text-muted"
                   placeholder="Do que se trata este Space?"
+                  style={descFont}
+                />
+                <FontFieldSelect
+                  label="Fonte da descrição"
+                  value={typography.description?.fontId}
+                  onChange={(id) => setFieldFont('description', id)}
+                  customFonts={fonts}
+                  previewText={description.trim() || 'Descrição'}
                 />
                 <p className="text-[11px] text-muted mt-1 text-right tabular-nums">{description.length}/256</p>
               </label>
@@ -407,12 +497,24 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
                   rows={2}
                   className="w-full min-h-[56px] px-3 py-2 rounded-xl text-[13px] resize-none bg-[#0d0e12] border border-white/[0.08] text-strong focus:outline-none focus:border-accent/50 placeholder:text-muted"
                   placeholder={'Good Games\nBetter People.'}
+                  style={sloganFont}
+                />
+                <FontFieldSelect
+                  label="Fonte da frase"
+                  value={typography.slogan?.fontId}
+                  onChange={(id) => setFieldFont('slogan', id)}
+                  customFonts={fonts}
+                  previewText={(slogan.trim() || 'Frase').split('\n')[0]}
                 />
                 <p className="text-[11px] text-muted mt-1">
-                  Aparece em cursiva no lado direito do hero. Use Enter para quebrar linha.
+                  Aparece no lado direito do hero. Use Enter para quebrar linha.
                   <span className="float-right tabular-nums">{slogan.length}/80</span>
                 </p>
               </label>
+              <FontUploadRow onUpload={handleFontUpload} busy={fontUploading} />
+              <p className="text-[11px] text-muted leading-snug">
+                Fontes enviadas ficam neste Space — todo mundo vê o mesmo estilo.
+              </p>
             </div>
           </section>
 
@@ -453,8 +555,11 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
           {error && (
             <p className="text-[12px] text-danger" role="alert">{error}</p>
           )}
+          </>
+          )}
         </div>
 
+        {tab === 'general' && (
         <footer className="shrink-0 flex items-center justify-between gap-3 px-6 py-3.5 border-t border-white/[0.06]">
           <p className={`text-[12px] ${dirty ? 'text-[#F0B429]' : 'text-transparent'}`}>
             <span className="inline-block w-1.5 h-1.5 rounded-full bg-current mr-1.5 align-middle" />
@@ -478,12 +583,14 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
             </button>
           </div>
         </footer>
+        )}
       </form>
     </ModalShell>
     <SpaceIconPicker
       open={iconOpen}
       current={icon}
       recents={recents}
+      enableEmojis={false}
       onPick={(next) => {
         setIcon(next)
         setRecents(pushRecentIcon(next))
@@ -494,6 +601,21 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose }) {
     />
     </>,
     document.body,
+  )
+}
+
+function TabButton({ active, onClick, children }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        'h-8 px-3 rounded-lg text-[12.5px] font-semibold transition-colors',
+        active ? 'bg-white/[0.08] text-strong' : 'text-muted hover:text-strong hover:bg-white/[0.04]',
+      ].join(' ')}
+    >
+      {children}
+    </button>
   )
 }
 

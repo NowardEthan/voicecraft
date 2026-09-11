@@ -2,6 +2,7 @@
  * Room name cosmetics — light Discord-ish fonts / effects for sidebar + headers.
  * Stored as a style id on the room doc (not free-form CSS).
  */
+import { resolveFontFamily } from '../../spaces/model/spaceTypography'
 
 export const ROOM_NAME_STYLES = [
   {
@@ -99,6 +100,28 @@ export const ROOM_NAME_STYLE_BY_ID = Object.fromEntries(
 
 export function resolveRoomNameStyle(id) {
   return ROOM_NAME_STYLE_BY_ID[id] || ROOM_NAME_STYLE_BY_ID.default
+}
+
+/**
+ * Merge cosmetic nameStyle effects with a Space catalog fontId.
+ * fontId wins for fontFamily when provided.
+ */
+export function resolveLabeledNameStyle({
+  nameStyle = 'default',
+  fontId = null,
+  fonts = [],
+} = {}) {
+  const base = { ...resolveRoomNameStyle(nameStyle).style }
+  if (typeof fontId === 'string' && fontId) {
+    base.fontFamily = resolveFontFamily(fontId, fonts)
+  }
+  return base
+}
+
+export function normalizeFontId(value, fallback = 'default') {
+  if (typeof value !== 'string') return fallback
+  const id = value.trim().slice(0, 64)
+  return id || fallback
 }
 
 /** Small emoji chips for quick room markers (optional alternative to Phosphor). */

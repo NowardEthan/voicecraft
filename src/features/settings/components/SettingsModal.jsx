@@ -27,7 +27,17 @@ function diffSettings(from, to) {
 /**
  * Call settings modal — draft until Aplicar; matches the VoiceCraft mockup.
  */
-export default function SettingsModal({ settings, onChange, onClose, account, onSignOut }) {
+export default function SettingsModal({
+  settings,
+  onChange,
+  onClose,
+  account,
+  onSignOut,
+  accountProfile = null,
+  isPrincipal = false,
+  canClaimPrincipal = false,
+  onClaimPrincipal = null,
+}) {
   const [draft, setDraft] = useState(() => cloneSettings(settings))
   const [tab, setTab] = useState('audio')
   const [mics, setMics] = useState([])
@@ -153,7 +163,16 @@ export default function SettingsModal({ settings, onChange, onClose, account, on
           )}
           {tab === 'video' && <VideoTab draft={draft} setDraft={setDraft} />}
           {tab === 'app' && <AppTab draft={draft} setDraft={setDraft} />}
-          {tab === 'account' && <AccountTab account={account} onSignOut={onSignOut} />}
+          {tab === 'account' && (
+            <AccountTab
+              account={account}
+              onSignOut={onSignOut}
+              profile={accountProfile}
+              isPrincipal={isPrincipal}
+              canClaimPrincipal={canClaimPrincipal}
+              onClaimPrincipal={onClaimPrincipal}
+            />
+          )}
         </div>
 
         <div className="px-5 sm:px-6 py-4 border-t border-white/[0.07] flex items-center justify-between gap-3 shrink-0 flex-wrap">

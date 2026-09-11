@@ -34,6 +34,11 @@ import {
   listenSpacePresence,
   isPresenceLastFresh,
 } from '../firebase/presence'
+import { canSpacePermission, normalizePerms } from '../../features/spaces/model/spaceRoles'
+import {
+  normalizeSpaceFonts,
+  normalizeTypography,
+} from '../../features/spaces/model/spaceTypography'
 
 const ONLINE_MS = 45_000
 
@@ -105,6 +110,8 @@ function toMemberView(id, data = {}) {
     lastSeen: data.lastSeen || null,
     location: data.location || null,
     status: data.status || data.statusText || null,
+    roleIds: Array.isArray(data.roleIds) ? data.roleIds.filter(Boolean) : [],
+    perms: data.perms && typeof data.perms === 'object' ? data.perms : null,
   }
 }
 
@@ -139,10 +146,13 @@ function toRoomView(id, data = {}) {
     emoji: data.emoji || null,
     color: data.color || null,
     nameStyle: data.nameStyle || 'default',
+    fontId: typeof data.fontId === 'string' ? data.fontId.slice(0, 64) : 'default',
     cover: data.cover || null,
     coverFit: data.coverFit || null,
     createdBy: data.createdBy || null,
     createdAt: data.createdAt || Date.now(),
+    groupId: data.groupId || null,
+    sortOrder: typeof data.sortOrder === 'number' ? data.sortOrder : null,
     lastMessageAt: data.lastMessageAt || null,
     lastMessageId: data.lastMessageId || null,
     lastMessagePreview: data.lastMessagePreview || '',
@@ -167,6 +177,8 @@ function toSpaceSummary(id, data = {}, joined = true) {
     coverFit: data.coverFit || null,
     themeId: data.themeId || null,
     visibility: normalizeVisibility(data.visibility),
+    typography: data.typography || null,
+    fonts: Array.isArray(data.fonts) ? data.fonts : [],
     memberCount: Array.isArray(data.memberIds) ? data.memberIds.length : 0,
     roomCount: Number(data.roomCount) || 0,
     joined,
@@ -257,6 +269,29 @@ export class SignalingClient {
     for (const fn of this._listeners[name]) {
       try { fn(payload) } catch (e) { console.error(`[${name}]`, e) }
     }
+  }
+
+  _selfMember() {
+    const members = this._spaceCache?.members
+    if (!Array.isArray(members) || !this.userId) return null
+    return members.find((m) => m.userId === this.userId) || null
+  }
+
+  _selfPerms() {
+    return normalizePerms(this._selfMember()?.perms)
+  }
+
+  can(permission) {
+    return canSpacePermission(
+      this._spaceCache,
+      { userId: this.userId, perms: this._selfPerms() },
+      permission,
+    )
+  }
+
+  _assertCan(permission, message) {
+    if (this.can(permission)) return
+    throw new Error(message || 'Sem permissão neste Space')
   }
 
   _loadDisplayName(uid = null) {
@@ -703,6 +738,9 @@ export class SignalingClient {
       memberIds: [this.userId],
       roomCount: 0,
     }
+    if (extras.typography) {
+      payload.typography = normalizeTypography(extras.typography)
+    }
     await setDoc(spaceRef(spaceId), payload)
     await setDoc(memberRef(spaceId, this.userId), {
       ...this._memberProfileFields(),
@@ -893,6 +931,17 @@ export class SignalingClient {
   async updateSpace(spaceId, updates = {}) {
     const id = spaceId || this.spaceId
     if (!id) return
+
+    const keys = Object.keys(updates || {}).filter((k) => updates[k] !== undefined)
+    const onlyEvents = keys.length > 0 && keys.every((k) => k === 'events')
+    if (onlyEvents) {
+      if (!this.can('manage_events') && !this.can('edit_space')) {
+        throw new Error('só quem tem permissão de eventos pode alterar')
+      }
+    } else {
+      this._assertCan('edit_space', 'só o criador ou quem tem permissão pode alterar este Space')
+    }
+
     const next = {}
     if (typeof updates.name === 'string') next.name = updates.name.slice(0, 64).trim()
     if (typeof updates.description === 'string') next.description = updates.description.slice(0, 256)
@@ -902,6 +951,12 @@ export class SignalingClient {
     if (Array.isArray(updates.events)) next.events = updates.events
     if (updates.coverFit !== undefined) next.coverFit = updates.coverFit
     if (updates.visibility !== undefined) next.visibility = normalizeVisibility(updates.visibility)
+    if (updates.typography !== undefined) {
+      next.typography = normalizeTypography(updates.typography)
+    }
+    if (updates.fonts !== undefined) {
+      next.fonts = normalizeSpaceFonts(updates.fonts).slice(0, 24)
+    }
     if (updates.cover === null) {
       await deleteSpaceCover(id)
       next.cover = null
@@ -919,6 +974,7 @@ export class SignalingClient {
 
   async createRoom(name, type = 'voice', purpose, cosmetics = {}) {
     if (!this.spaceId) throw new Error('entre num space primeiro')
+    this._assertCan('manage_rooms', 'só o criador ou quem tem permissão pode criar salas neste Space')
     const roomType = type === 'voice' ? 'voice' : 'text'
     const payload = {
       name: String(name || '').trim() || 'sem nome',
@@ -931,9 +987,12 @@ export class SignalingClient {
     if (cosmetics?.emoji) payload.emoji = String(cosmetics.emoji).slice(0, 16)
     if (cosmetics?.color) payload.color = String(cosmetics.color).slice(0, 16)
     if (cosmetics?.nameStyle) payload.nameStyle = String(cosmetics.nameStyle).slice(0, 24)
+    if (cosmetics?.fontId) payload.fontId = String(cosmetics.fontId).slice(0, 64)
     if (cosmetics?.coverFit && typeof cosmetics.coverFit === 'object') {
       payload.coverFit = cosmetics.coverFit
     }
+    if (cosmetics?.groupId) payload.groupId = String(cosmetics.groupId).slice(0, 64)
+    payload.sortOrder = typeof cosmetics?.sortOrder === 'number' ? cosmetics.sortOrder : Date.now()
 
     const ref = await addDoc(roomsCol(this.spaceId), payload)
     let coverUrl = null
@@ -956,6 +1015,7 @@ export class SignalingClient {
 
   async updateRoom(roomId, updates = {}) {
     if (!this.spaceId || !roomId) return
+    this._assertCan('manage_rooms', 'só o criador ou quem tem permissão pode editar salas neste Space')
     const next = {}
     if (typeof updates.name === 'string') {
       next.name = updates.name.slice(0, 64).trim() || 'sem nome'
@@ -974,8 +1034,12 @@ export class SignalingClient {
     if (updates.color === null) next.color = null
     else if (typeof updates.color === 'string') next.color = updates.color.slice(0, 16)
     if (typeof updates.nameStyle === 'string') next.nameStyle = updates.nameStyle.slice(0, 24)
+    if (typeof updates.fontId === 'string') next.fontId = updates.fontId.slice(0, 64)
     if (updates.coverFit === null) next.coverFit = null
     else if (updates.coverFit && typeof updates.coverFit === 'object') next.coverFit = updates.coverFit
+    if (updates.groupId === null) next.groupId = null
+    else if (typeof updates.groupId === 'string') next.groupId = updates.groupId.slice(0, 64)
+    if (typeof updates.sortOrder === 'number') next.sortOrder = updates.sortOrder
 
     if (updates.cover === null) {
       try { await deleteRoomCover(this.spaceId, roomId) } catch {}
@@ -998,6 +1062,7 @@ export class SignalingClient {
 
   async deleteRoom(roomId) {
     if (!this.spaceId || !roomId) return
+    this._assertCan('manage_rooms', 'só o criador ou quem tem permissão pode excluir salas neste Space')
     try { await deleteRoomCover(this.spaceId, roomId) } catch {}
     await deleteDoc(roomRef(this.spaceId, roomId))
     try {
@@ -1007,6 +1072,28 @@ export class SignalingClient {
     if (this.roomId === roomId) {
       this._clear(this._roomUnsubs)
       this.roomId = null
+    }
+  }
+
+  /** Remove a member from the current Space (kick permission). */
+  async kickMember(targetUid) {
+    const spaceId = this.spaceId
+    if (!spaceId || !targetUid) return
+    if (targetUid === this.userId) throw new Error('use sair do Space para se remover')
+    this._assertCan('kick', 'sem permissão para expulsar membros')
+    if (this._spaceCache?.createdBy === targetUid) {
+      throw new Error('não dá pra expulsar o criador')
+    }
+    await updateDoc(spaceRef(spaceId), { memberIds: arrayRemove(targetUid) })
+    try { await deleteDoc(memberRef(spaceId, targetUid)) } catch {}
+    if (this._spaceCache) {
+      this._spaceCache = {
+        ...this._spaceCache,
+        memberIds: (this._spaceCache.memberIds || []).filter((id) => id !== targetUid),
+        members: (this._spaceCache.members || []).filter((m) => m.userId !== targetUid),
+      }
+      this._emit('spaceChanged', { space: this._spaceCache, updated: true })
+      this._emit('memberLeft', { userId: targetUid, spaceId })
     }
   }
 

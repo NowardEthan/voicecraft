@@ -30,6 +30,8 @@ export default function SpaceHome({
   onOpenEvents,
   onEditSpace,
   isCreator,
+  canEditSpace = false,
+  canManageRooms = false,
   connected,
   hostname,
   optimisticFirstRoom,
@@ -70,6 +72,8 @@ export default function SpaceHome({
       onOpenEvents={onOpenEvents}
       onEditSpace={onEditSpace}
       isCreator={isCreator}
+      canEditSpace={canEditSpace || isCreator}
+      canManageRooms={canManageRooms || isCreator}
       optimisticFirstRoom={optimisticFirstRoom}
     />
   )
@@ -314,6 +318,8 @@ function OverviewMain({
   onOpenEvents,
   onEditSpace,
   isCreator,
+  canEditSpace = false,
+  canManageRooms = false,
   optimisticFirstRoom,
 }) {
   return (
@@ -330,6 +336,8 @@ function OverviewMain({
           onOpenEvents={onOpenEvents}
           onEditSpace={onEditSpace}
           isCreator={isCreator}
+          canEditSpace={canEditSpace}
+          canManageRooms={canManageRooms}
           optimisticFirstRoom={optimisticFirstRoom}
         />
       </div>

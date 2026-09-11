@@ -17,6 +17,7 @@ import { flashToast } from '../../../shared/utils/toast'
 import { serializeSpaceIcon } from '../model/spaceIcons'
 import { markSpaceJoined, markSpaceLeft, markSpaceVisited } from '../model/spacePreferences'
 import { clearSpaceCover, setSpaceCover } from '../model/spaceCover'
+import { canSpacePermission, fullPerms, normalizePerms } from '../model/spaceRoles'
 
 // Map a UI purpose key to the backend's binary 'voice' | 'text' discriminator.
 // All non-voice purposes ride on type='text' plus an explicit `purpose` field.
@@ -53,6 +54,8 @@ function enrichMembers(members, space) {
       location: loc,
       roomName,
       status: isString ? null : (m.status || m.statusText || null),
+      roleIds: isString ? [] : (Array.isArray(m.roleIds) ? m.roleIds : []),
+      perms: isString ? null : (m.perms || null),
     })
   }
   return out
@@ -316,7 +319,7 @@ export function useCurrentSpace(selfProfile = null) {
     }
   }, [currentSpace, sig])
 
-  const createSpace = useCallback(async ({ name, description, icon, color, cover, coverFit, themeId, firstRoom }) => {
+  const createSpace = useCallback(async ({ name, description, icon, color, cover, coverFit, themeId, typography, firstRoom }) => {
     if (firstRoom?.purpose) {
       setOptimisticFirstRoom({
         name: firstRoom.name,
@@ -325,7 +328,12 @@ export function useCurrentSpace(selfProfile = null) {
       })
     }
     const packedIcon = serializeSpaceIcon(icon)
-    const { space } = await sig.createSpace(name, description, packedIcon, color, { cover, coverFit, themeId })
+    const { space } = await sig.createSpace(name, description, packedIcon, color, {
+      cover,
+      coverFit,
+      themeId,
+      typography,
+    })
     markSpaceJoined(space.id)
     const { space: full } = await sig.joinSpace(space.id)
     setCurrentSpace(full)
@@ -340,6 +348,19 @@ export function useCurrentSpace(selfProfile = null) {
     [spaceMembers, selfProfile],
   )
 
+  const selfPerms = useMemo(() => {
+    const self = enrichedMembers.find((m) => m.userId === sig.userId)
+    return normalizePerms(self?.perms)
+  }, [enrichedMembers, sig.userId])
+
+  const can = useCallback((permission) => (
+    canSpacePermission(
+      currentSpace,
+      { userId: sig.userId, perms: selfPerms },
+      permission,
+    )
+  ), [currentSpace, sig.userId, selfPerms])
+
   return {
     currentSpace,
     spaceMembers: enrichedMembers,
@@ -352,6 +373,8 @@ export function useCurrentSpace(selfProfile = null) {
     editSpace,
     createSpace,
     isCreator: currentSpace?.createdBy === sig.userId,
+    can,
+    selfPerms: currentSpace?.createdBy === sig.userId ? fullPerms() : selfPerms,
     currentUserId: sig.userId,
     currentUserName: selfProfile?.displayName || sig.displayName,
   }

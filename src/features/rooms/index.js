@@ -22,8 +22,16 @@ export {
   ROOM_NAME_STYLES,
   ROOM_EMOJI_PRESETS,
   resolveRoomNameStyle,
+  resolveLabeledNameStyle,
   normalizeRoomEmoji,
 } from './model/roomCosmetics'
+
+export { SpaceRoomsNav } from './views/SpaceRoomsNav'
+export {
+  buildRoomSections,
+  sortRooms,
+  GROUP_COLOR_PRESETS,
+} from './model/roomGroups'
 
 // hooks
 export { useRoomActions } from './hooks/useRoomActions'

@@ -1,8 +1,11 @@
 // People feature — public surface.
-// Wraps the ProfilePopover component + hook so other features can pull
-// them through a single import. The component renders at App-level and
-// exposes window.__vcOpenProfile for any avatar click anywhere in the tree.
 export { default as ProfilePopover } from './components/ProfilePopover'
 export { PersonAvatar } from './components/PersonAvatar'
+export { UserTagChips } from './components/UserTagChips'
+export { TagAssignPanel } from './components/TagAssignPanel'
 export { useProfilePopover } from './hooks/useProfilePopover'
+export { useMemberTags, tagsFor } from './hooks/useMemberTags'
+export { usePrincipal } from './hooks/usePrincipal'
 export { getLocalMemberStatus, setLocalMemberStatus } from './model/memberStatus'
+export { TAG_CATALOG, normalizeTags, orderTags } from './model/userTags'
+export { RoleAssignPanel } from './components/RoleAssignPanel'

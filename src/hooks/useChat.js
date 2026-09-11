@@ -607,14 +607,13 @@ export function useChat({ channel, signaling, username, roomKey, userId, authorP
     })
   }, [roomKey])
 
-  // ----- Delete (own message only) -----------------------------------------
-  // We mark the message as deleted (preserve the slot for grouping) rather
-  // than splicing it out — that way the conversation timeline stays stable.
-  const deleteMessage = useCallback((msgId) => {
+  // ----- Delete -----------------------------------------------------------
+  // Own messages always; moderators may delete anyone's when canModerate.
+  const deleteMessage = useCallback((msgId, { moderate = false } = {}) => {
     setMessages(prev => {
       const next = prev.map(m => {
         if (m.id !== msgId) return m
-        if (m.direction !== 'out') return m
+        if (m.direction !== 'out' && !moderate) return m
         return { ...m, deleted: true, text: '' }
       })
       saveHistory(roomKey, next)

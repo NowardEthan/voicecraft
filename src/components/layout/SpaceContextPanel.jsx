@@ -19,17 +19,16 @@ import { useState, useRef, useEffect, forwardRef } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Settings, LogOut, Trash2, Plus, Mic, Headphones,
-  LayoutGrid, Calendar, UserPlus, PanelLeftClose, Pencil,
+  LayoutGrid, Calendar, UserPlus, PanelLeftClose,
 } from 'lucide-react'
 import SpaceAvatar from '../SpaceAvatar'
 import { PersonAvatar } from '../../features/people'
 import { resolveSpaceCover, spaceTokens } from '../../features/spaces'
 import { SpaceCoverLayer } from '../../features/spaces/components/SpaceCoverLayer'
 import SpaceSettingsModal from '../../features/spaces/components/SpaceSettingsModal'
-import { RoomIconMark, roomAccentColor, roomSoftColor } from '../../features/rooms/components/RoomIconMark'
-import { resolveRoomNameStyle } from '../../features/rooms/model/roomCosmetics'
-import { useNotifications, RoomUnreadPill } from '../../features/notifications'
+import { useNotifications } from '../../features/notifications'
 import VoiceActiveBar from '../../features/rooms/views/voice/components/VoiceActiveBar'
+import { SpaceRoomsNav } from '../../features/rooms/views/SpaceRoomsNav'
 
 const NAV_ITEMS = [
   { key: 'overview', label: 'Visão geral', icon: LayoutGrid },
@@ -50,6 +49,8 @@ export default function SpaceContextPanel({
   currentRoomId,
   selectedRoomId,
   isCreator,
+  canEditSpace = false,
+  canManageRooms = false,
   onLeaveSpace,
   onDeleteSpace,
   onEditSpace,
@@ -124,6 +125,7 @@ export default function SpaceContextPanel({
           <SettingsPopover
             ref={popoverRef}
             isCreator={isCreator}
+            canEditSpace={canEditSpace || isCreator}
             position={menuPos}
             onClose={() => setMenuOpen(false)}
             onLeave={() => { setMenuOpen(false); onLeaveSpace?.() }}
@@ -185,7 +187,7 @@ export default function SpaceContextPanel({
                 <p className="text-[11.5px] text-ink/65 line-clamp-2 mt-0.5 leading-snug">
                   {space.description}
                 </p>
-              ) : isCreator ? (
+              ) : (canEditSpace || isCreator) ? (
                 <button
                   type="button"
                   onClick={() => setSpaceSettingsOpen(true)}
@@ -277,137 +279,23 @@ export default function SpaceContextPanel({
         </ul>
       </nav>
 
-      {/* === Salas section (always visible, with room list) === */}
+      {/* === Salas section (groups + reorder) === */}
       <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
-        <div className="px-3 pt-2 pb-3">
-          <div className="flex items-center justify-between mb-1.5 px-1">
-            <h4 className="text-[10.5px] font-semibold text-muted uppercase tracking-[0.10em]">
-              Salas
-            </h4>
-            <button
-              type="button"
-              onClick={() => onCreateRoom?.()}
-              className="
-                inline-flex items-center gap-1 text-[11px] font-medium
-                text-accent hover:opacity-80
-                transition-[transform,opacity] duration-200
-                hover:scale-[1.04] active:scale-[0.96]
-              "
-            >
-              <Plus size={11} strokeWidth={2.5} />
-              Criar sala
-            </button>
-          </div>
-          {rooms.length === 0 ? (
-            <p className="text-[11.5px] text-muted px-1 py-1.5 italic">
-              Nenhuma sala ainda.
-            </p>
-          ) : (
-            <ul className="space-y-1">
-              {rooms.map(room => {
-                const isActive = currentRoomId === room.id || selectedRoomId === room.id
-                const isOptimistic = room.id === '__optimistic__'
-                const confirming = confirmDeleteId === room.id
-                const hasUnread = !!(space?.id && unreadByRoom[roomKey(space.id, room.id)])
-                const accent = roomAccentColor(room)
-                const soft = roomSoftColor(room)
-                const nameStyle = resolveRoomNameStyle(room.nameStyle).style
-                return (
-                  <li key={room.id} className="group relative">
-                    <button
-                      type="button"
-                      onClick={() => onSelectRoom?.(room)}
-                      aria-current={isActive ? 'true' : undefined}
-                      className={
-                        'relative w-full flex items-center gap-2.5 pl-3 pr-14 py-2 rounded-[10px] text-left overflow-hidden ' +
-                        'transition-[transform,background-color,color] duration-200 ' +
-                        'hover:translate-x-0.5 active:scale-[0.98] ' +
-                        (isActive
-                          ? 'bg-accent/[0.12] text-strong'
-                          : hasUnread
-                            ? 'text-strong hover:bg-surface2'
-                            : 'text-ink hover:bg-surface2 hover:text-strong')
-                      }
-                    >
-                      {isActive && (
-                        <span
-                          className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r-full"
-                          style={{ background: accent }}
-                          aria-hidden
-                        />
-                      )}
-                      <span
-                        className="w-7 h-7 rounded-[8px] flex items-center justify-center shrink-0"
-                        style={
-                          isActive
-                            ? { background: `color-mix(in srgb, ${accent} 18%, transparent)`, color: accent }
-                            : { background: soft, color: accent }
-                        }
-                      >
-                        <RoomIconMark room={room} size={13} />
-                      </span>
-                      <p
-                        className={
-                          'min-w-0 flex-1 text-[13px] leading-tight truncate ' +
-                          (hasUnread && !isActive ? 'font-bold' : 'font-semibold')
-                        }
-                        style={{
-                          ...nameStyle,
-                          ...(room.color ? { color: isActive || hasUnread ? accent : undefined } : null),
-                        }}
-                      >
-                        {room.name}
-                      </p>
-                      {!isActive && <RoomUnreadPill show={hasUnread} />}
-                    </button>
-                    {!isOptimistic && (
-                      <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
-                        {confirming ? (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              onDeleteRoom?.(room.id)
-                              setConfirmDeleteId(null)
-                            }}
-                            className="px-1.5 h-6 rounded-md bg-danger/20 text-danger text-[10px] font-semibold hover:bg-danger/30 transition-colors"
-                          >
-                            excluir?
-                          </button>
-                        ) : (
-                          <div className={'flex items-center transition-opacity ' + (isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100')}>
-                            <button
-                              type="button"
-                              onClick={() => onEditRoom?.(room)}
-                              title="Editar sala"
-                              aria-label={`Editar ${room.name}`}
-                              className="w-6 h-6 rounded-md flex items-center justify-center text-muted hover:text-strong hover:bg-white/[0.06] transition-colors"
-                            >
-                              <Pencil size={11} strokeWidth={2} />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setConfirmDeleteId(room.id)
-                                window.setTimeout(() => {
-                                  setConfirmDeleteId((id) => (id === room.id ? null : id))
-                                }, 2500)
-                              }}
-                              title="Excluir sala"
-                              aria-label={`Excluir ${room.name}`}
-                              className="w-6 h-6 rounded-md flex items-center justify-center text-muted hover:text-danger hover:bg-danger/15 transition-colors"
-                            >
-                              <Trash2 size={11} strokeWidth={2} />
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </li>
-                )
-              })}
-            </ul>
-          )}
-        </div>
+        <SpaceRoomsNav
+          space={space}
+          rooms={rooms}
+          currentRoomId={currentRoomId}
+          selectedRoomId={selectedRoomId}
+          canManage={canManageRooms || isCreator}
+          unreadByRoom={unreadByRoom}
+          roomKey={roomKey}
+          onSelectRoom={onSelectRoom}
+          onCreateRoom={onCreateRoom}
+          onEditRoom={onEditRoom}
+          onDeleteRoom={onDeleteRoom}
+          confirmDeleteId={confirmDeleteId}
+          setConfirmDeleteId={setConfirmDeleteId}
+        />
       </div>
 
       {/* Voice connected — above SelfControls (Discord-style) */}
@@ -429,12 +317,13 @@ export default function SpaceContextPanel({
       />
       {settingsPortalNode}
 
-      {/* Space identity editor — only mount when open. Creator only. */}
+      {/* Space identity editor — open for edit_space or creator. */}
       <SpaceSettingsModal
-        open={spaceSettingsOpen && isCreator}
+        open={spaceSettingsOpen && (canEditSpace || isCreator)}
         space={space}
         onSave={onEditSpace}
         onClose={() => setSpaceSettingsOpen(false)}
+        isCreator={isCreator}
       />
     </aside>
   )
@@ -519,7 +408,7 @@ function SelfControls({
 // the parent can detect clicks inside the popover and not close it.
 // ----------------------------------------------------------------------
 const SettingsPopover = forwardRef(function SettingsPopover(
-  { isCreator, position, onClose, onLeave, onDelete, onInvite, onSettings },
+  { isCreator, canEditSpace = false, position, onClose, onLeave, onDelete, onInvite, onSettings },
   ref,
 ) {
   return (
@@ -535,7 +424,7 @@ const SettingsPopover = forwardRef(function SettingsPopover(
       <PopItem icon={UserPlus} onClick={() => { onClose(); onInvite?.() }}>
         Convidar pro Space
       </PopItem>
-      {isCreator && (
+      {(canEditSpace || isCreator) && (
         <PopItem icon={Settings} onClick={() => { onClose(); onSettings?.() }}>
           Configurações do Space
         </PopItem>

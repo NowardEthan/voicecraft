@@ -146,7 +146,7 @@ export function ParticipantGrid({
         key={p.userId}
         member={p}
         isSelf={isSelf}
-        isCreator={isCreator && isSelf}
+        isCreator={!!p.isCreator}
         isSpeaking={isSelf ? !!selfSpeaking : !!remoteSpeaking?.[p.userId]}
         isMuted={isSelf ? selfMuted : false}
         isListening={true}

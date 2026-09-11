@@ -12,7 +12,7 @@ import { ConnectionStatus } from './ConnectionStatus'
 import { RoomThemeControl } from './RoomThemeControl'
 import { VoiceMoreMenu } from './VoiceMoreMenu'
 import { RoomIconMark, roomAccentColor } from '../../../components/RoomIconMark'
-import { resolveRoomNameStyle } from '../../../model/roomCosmetics'
+import { resolveLabeledNameStyle } from '../../../model/roomCosmetics'
 
 export function VoiceRoomHeader({
   space,
@@ -29,7 +29,11 @@ export function VoiceRoomHeader({
 }) {
   const themeBtnRef = useRef(null)
   const accent = roomAccentColor(room)
-  const nameStyle = resolveRoomNameStyle(room?.nameStyle).style
+  const nameStyle = resolveLabeledNameStyle({
+    nameStyle: room?.nameStyle,
+    fontId: room?.fontId,
+    fonts: space?.fonts,
+  })
   return (
     <header
       className={[

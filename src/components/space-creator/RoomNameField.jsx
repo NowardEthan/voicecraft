@@ -12,7 +12,7 @@ import { useId } from 'react'
 
 export const ROOM_NAME_MAX = 64
 
-export function RoomNameField({ value, onChange, placeholder = 'geral' }) {
+export function RoomNameField({ value, onChange, placeholder = 'geral', style }) {
   const id = useId()
   const count = (value || '').length
   return (
@@ -32,6 +32,7 @@ export function RoomNameField({ value, onChange, placeholder = 'geral' }) {
         onChange={(e) => onChange(e.target.value)}
         maxLength={ROOM_NAME_MAX}
         placeholder={placeholder}
+        style={style}
         className="
           w-full h-[50px] px-3.5 rounded-[10px]
           bg-[#0f1014] border border-line

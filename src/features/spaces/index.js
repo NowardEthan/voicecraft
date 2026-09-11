@@ -76,4 +76,17 @@ export {
 // hooks
 export { useCurrentSpace } from './hooks/useCurrentSpace'
 export { useSpacesList } from './hooks/useSpacesList'
+export { useSpaceFonts } from './hooks/useSpaceFonts'
 export { default as SpaceEventsView } from './views/SpaceEventsView'
+export {
+  SPACE_PERMISSIONS,
+  SPACE_PERMISSION_KEYS,
+  canSpacePermission,
+  fullPerms,
+  emptyPerms,
+} from './model/spaceRoles'
+export {
+  fieldFontStyle,
+  normalizeTypography,
+  normalizeSpaceFonts,
+} from './model/spaceTypography'

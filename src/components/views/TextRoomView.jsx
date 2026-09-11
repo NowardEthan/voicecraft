@@ -12,7 +12,7 @@ import { useChat } from '../../hooks/useChat'
 import { useTextRoomChannel } from '../../hooks/useTextRoomChannel'
 import { purposeOf } from '../../features/rooms'
 import { RoomIconMark, roomAccentColor } from '../../features/rooms/components/RoomIconMark'
-import { resolveRoomNameStyle } from '../../features/rooms/model/roomCosmetics'
+import { resolveLabeledNameStyle } from '../../features/rooms/model/roomCosmetics'
 import { colorFromId, spaceTokens } from '../../features/spaces'
 import { PersonAvatar } from '../../features/people'
 
@@ -26,10 +26,15 @@ export default function ConversationRoom({
   onClose,
   onInvite,
   voiceActive = false,
+  canModerateChat = false,
 }) {
   const purpose = purposeOf(room)
   const accent = roomAccentColor(room)
-  const nameStyle = resolveRoomNameStyle(room?.nameStyle).style
+  const nameStyle = resolveLabeledNameStyle({
+    nameStyle: room?.nameStyle,
+    fontId: room?.fontId,
+    fonts: space?.fonts,
+  })
 
   const { channel } = useTextRoomChannel({
     signaling,
@@ -266,7 +271,8 @@ export default function ConversationRoom({
           onReply={handleReply}
           onToggleReaction={chat.toggleReaction}
           onEdit={chat.editMessage}
-          onDelete={chat.deleteMessage}
+          onDelete={(id) => chat.deleteMessage(id, { moderate: canModerateChat })}
+          canModerate={canModerateChat}
           members={members}
           density={density}
         />

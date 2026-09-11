@@ -37,6 +37,8 @@ import {
 } from '../features/spaces'
 import { SpaceIconPicker } from '../features/spaces/components/SpaceIconPicker'
 import { ColorIdentityPicker, PALETTE, normalizeHex, paletteColorFor } from '../features/spaces/components/ColorIdentityPicker'
+import { FontFieldSelect } from '../features/spaces/components/FontFieldSelect'
+import { resolveFontFamily, normalizeTypography } from '../features/spaces/model/spaceTypography'
 import { SpaceCoverFitControls, SpaceCoverLayer } from '../features/spaces/components/SpaceCoverLayer'
 import { FirstRoomStep, DEFAULT_ROOM_NAMES } from './space-creator/FirstRoomStep.jsx'
 import { ReviewStep } from './space-creator/review/ReviewStep.jsx'
@@ -104,6 +106,7 @@ export default function SpaceCreator({ onCreate, onClose }) {
   const [step, setStep] = useState(1)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+  const [typography, setTypography] = useState(() => normalizeTypography(null))
   // iconValue is the canonical {id, collection, name, style} shape that
   // gets saved with the Space. See spaceIcons.jsx for the contract.
   const [iconValue, setIconValue] = useState({
@@ -276,6 +279,7 @@ export default function SpaceCreator({ onCreate, onClose }) {
         themeId: theme.id,
         cover: cover || undefined,
         coverFit: cover ? coverFit : undefined,
+        typography,
         firstRoom,
       })
       // On success: onCreate handles closing the modal in App.jsx.
@@ -343,6 +347,8 @@ export default function SpaceCreator({ onCreate, onClose }) {
                 <Step1Identity
                   name={name} setName={(v) => { setName(v); if (error) setError('') }}
                   description={description} setDescription={setDescription}
+                  typography={typography}
+                  setTypography={setTypography}
                   iconValue={iconValue} setIconValue={setIconValue}
                   color={color}
                   setColor={setColor}
@@ -430,6 +436,7 @@ export default function SpaceCreator({ onCreate, onClose }) {
         open={iconPickerOpen}
         current={iconValue}
         recents={recents}
+        enableEmojis={false}
         onPick={handlePickIcon}
         onClose={() => setIconPickerOpen(false)}
         anchorRef={iconButtonRef}
@@ -443,12 +450,15 @@ export default function SpaceCreator({ onCreate, onClose }) {
 // --------------------------------------------------------------------------
 function Step1Identity({
   name, setName, description, setDescription,
+  typography, setTypography,
   iconValue, color, setColor, colorOpen, setColorOpen, nameRef,
   onOpenIconPicker, iconButtonRef,
   cover, setCover,
   coverFit, setCoverFit,
 }) {
   const theme = paletteColorFor(color)
+  const nameFamily = { fontFamily: resolveFontFamily(typography?.name?.fontId || 'default') }
+  const descFamily = { fontFamily: resolveFontFamily(typography?.description?.fontId || 'default') }
 
   return (
     <div className="pt-4 pb-1">
@@ -461,6 +471,7 @@ function Step1Identity({
         cover={cover}
         coverFit={coverFit}
         onCoverFitChange={setCoverFit}
+        nameStyle={nameFamily}
       />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5 mt-5">
@@ -478,7 +489,14 @@ function Step1Identity({
               onChange={e => setName(e.target.value)}
               maxLength={64}
               placeholder="ex: Trabalho, Família, Gamers…"
+              style={nameFamily}
               className="w-full h-[46px] px-3.5 bg-[#0f1014] border border-line rounded-[10px] text-[14px] text-strong placeholder:text-muted focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/25 transition-colors"
+            />
+            <FontFieldSelect
+              label="Fonte do nome"
+              value={typography?.name?.fontId || 'default'}
+              onChange={(fontId) => setTypography((t) => ({ ...t, name: { fontId } }))}
+              previewText={name.trim() || 'Nome do Space'}
             />
           </div>
 
@@ -495,8 +513,14 @@ function Step1Identity({
               maxLength={256}
               rows={3}
               placeholder="do que se trata este Space?"
+              style={{ ...descFamily, height: '76px' }}
               className="w-full px-3.5 py-3 bg-[#0f1014] border border-line rounded-[10px] text-[14px] text-strong placeholder:text-muted resize-none focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/25 transition-colors"
-              style={{ height: '76px' }}
+            />
+            <FontFieldSelect
+              label="Fonte da descrição"
+              value={typography?.description?.fontId || 'default'}
+              onChange={(fontId) => setTypography((t) => ({ ...t, description: { fontId } }))}
+              previewText={description.trim() || 'Descrição'}
             />
           </div>
 
@@ -596,7 +620,7 @@ function Step1Identity({
 // follow the theme color family. Mirrors the "abstract waves" feel in
 // the v1 reference.
 // ----------------------------------------------------------------------
-function PreviewCardWide({ name, subtitle, iconValue, theme, cover, coverFit, onCoverFitChange }) {
+function PreviewCardWide({ name, subtitle, iconValue, theme, cover, coverFit, onCoverFitChange, nameStyle }) {
   const base = theme.css
   return (
     <div className="relative overflow-hidden h-[150px] flex items-end px-5 rounded-[12px]">
@@ -678,7 +702,7 @@ function PreviewCardWide({ name, subtitle, iconValue, theme, cover, coverFit, on
           <SpaceIcon value={iconValue} size={30} className="text-strong" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-[18px] font-bold text-strong tracking-tight truncate">
+          <p className="text-[18px] font-bold text-strong tracking-tight truncate" style={nameStyle}>
             {name}
           </p>
           <p className="text-[13px] text-strong/80 truncate">

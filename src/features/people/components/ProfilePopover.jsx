@@ -10,12 +10,16 @@ import {
 } from 'lucide-react'
 import { SpaceCoverLayer } from '../../spaces/components/SpaceCoverLayer'
 import { PersonAvatar } from './PersonAvatar'
+import { UserTagChips } from './UserTagChips'
+import { TagAssignPanel } from './TagAssignPanel'
+import { RoleAssignPanel } from './RoleAssignPanel'
 import { PURPOSE_BY_KEY } from '../../rooms'
 import { ModalShell } from '../../../shared/motion/ModalShell.jsx'
 import { flashToast } from '../../../shared/utils/toast'
 import { monthLabel } from '../../account/model/profile'
 import { resolveCardTheme } from '../../account/model/profileCardThemes'
 import { CardThemeFx } from '../../account/components/CardThemeFx'
+import { subscribeUserTags } from '../model/userTagsStore'
 
 const PURPOSE_ICON = {
   voice: Radio,
@@ -32,10 +36,15 @@ export default function ProfilePopover({
   member,
   space = null,
   isCreator = false,
+  canAssignRoles = false,
+  canKick = false,
+  selfPerms = null,
   currentUserId = null,
+  currentUserProfile = null,
   onClose = PLACEHOLDER,
   onInvite = PLACEHOLDER,
   onOpenAccount = null,
+  onKick = null,
 }) {
   useEffect(() => {
     if (!open) return
@@ -45,7 +54,16 @@ export default function ProfilePopover({
   }, [open, onClose])
 
   const [copied, setCopied] = useState(false)
+  const [liveTags, setLiveTags] = useState(() => member?.tags || [])
   useEffect(() => { if (!open) setCopied(false) }, [open])
+
+  useEffect(() => {
+    if (!open || !member?.userId) {
+      setLiveTags(member?.tags || [])
+      return undefined
+    }
+    return subscribeUserTags(member.userId, setLiveTags)
+  }, [open, member?.userId, member?.tags])
 
   const derived = useMemo(() => {
     if (!member) return null
@@ -96,8 +114,9 @@ export default function ProfilePopover({
       panelClassName="rounded-[28px]"
     >
       <div
-        className="relative w-full max-w-[380px] rounded-[28px] overflow-hidden shadow-2xl vc-card-shell"
+        className="relative w-full max-w-[380px] flex flex-col rounded-[28px] overflow-hidden shadow-2xl vc-card-shell"
         style={{
+          maxHeight: 'min(720px, calc(100vh - 48px))',
           background: theme.bodyBg || '#0e1016',
           border: `1.5px solid ${theme.popoverBorder}`,
           boxShadow: `0 24px 64px -16px ${theme.popoverGlow}, 0 0 48px -8px ${theme.popoverGlow}, 0 0 0 1px ${theme.popoverBorder}`,
@@ -105,69 +124,71 @@ export default function ProfilePopover({
       >
         <CardThemeFx themeId={theme.id || member.cardThemeId} variant="card" />
 
-        {/* Banner */}
-        <div
-          className="relative h-[118px] shrink-0 overflow-hidden z-[2]"
-          style={{ background: bannerBg }}
-        >
-          {hasCover && <SpaceCoverLayer src={member.cover} fit={member.coverFit} />}
-          {!hasCover && <CosmicDecor accent={accent} />}
+        {/* Banner + avatar stay outside scroll so the ring isn't clipped */}
+        <div className="relative shrink-0 z-[2]">
           <div
-            className="absolute inset-0 z-[1] pointer-events-none"
-            style={{ background: theme.coverTint || `linear-gradient(135deg, ${hexAlpha(accent, 0.4)}, transparent 60%)` }}
-          />
-          <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-transparent z-[2]"
-            style={{ background: `linear-gradient(to bottom, transparent 40%, ${theme.bodyBg || '#0e1016'})` }}
-          />
-
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Fechar"
-            title="Fechar"
-            className="absolute top-3 right-3 z-10 w-8 h-8 rounded-xl bg-black/45 hover:bg-black/65 backdrop-blur flex items-center justify-center text-strong/85 hover:text-strong transition-colors"
+            className="relative h-[118px] overflow-hidden"
+            style={{ background: bannerBg }}
           >
-            <X size={14} strokeWidth={2} />
-          </button>
-        </div>
-
-        {/* Avatar overlapping banner */}
-        <div className="px-5 -mt-[42px] relative z-10 isolate">
-          <div className="relative inline-block">
+            {hasCover && <SpaceCoverLayer src={member.cover} fit={member.coverFit} />}
+            {!hasCover && <CosmicDecor accent={accent} />}
             <div
-              className="rounded-full p-[3px] vc-card-avatar-ring"
-              style={{
-                background: `linear-gradient(145deg, ${accent}, ${hexAlpha(accent, 0.35)})`,
-                boxShadow: `0 0 0 4px #0e1016, 0 10px 28px ${hexAlpha(accent, 0.55)}`,
-                ['--vc-avatar-glow']: hexAlpha(accent, 0.55),
-              }}
-            >
-              <PersonAvatar
-                src={member.photoURL}
-                name={name}
-                userId={member.userId}
-                size={84}
-                className="relative z-[1] bg-[#1a1c22]"
-              />
-            </div>
-            <span
-              className={
-                'absolute bottom-1 left-1 w-3.5 h-3.5 rounded-full border-[3px] border-[#0e1016] ' +
-                (member.online ? 'bg-positive' : 'bg-line')
-              }
-              title={member.online ? 'online' : 'offline'}
+              className="absolute inset-0 z-[1] pointer-events-none"
+              style={{ background: theme.coverTint || `linear-gradient(135deg, ${hexAlpha(accent, 0.4)}, transparent 60%)` }}
             />
-            <span
-              className="absolute bottom-0.5 right-0.5 w-7 h-7 rounded-full bg-[#0e1016] border border-white/10 flex items-center justify-center"
-              title="Conta Lunar"
+            <div
+              className="absolute inset-0 z-[2] pointer-events-none"
+              style={{ background: `linear-gradient(to bottom, transparent 40%, ${theme.bodyBg || '#0e1016'})` }}
+            />
+
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Fechar"
+              title="Fechar"
+              className="absolute top-3 right-3 z-10 w-8 h-8 rounded-xl bg-black/45 hover:bg-black/65 backdrop-blur flex items-center justify-center text-strong/85 hover:text-strong transition-colors"
             >
-              <Moon size={12} strokeWidth={2} style={{ color: accent }} />
-            </span>
+              <X size={14} strokeWidth={2} />
+            </button>
+          </div>
+
+          <div className="px-5 -mt-[42px] relative z-10 isolate">
+            <div className="relative inline-block">
+              <div
+                className="rounded-full p-[3px] vc-card-avatar-ring"
+                style={{
+                  background: `linear-gradient(145deg, ${accent}, ${hexAlpha(accent, 0.35)})`,
+                  boxShadow: `0 0 0 4px #0e1016, 0 10px 28px ${hexAlpha(accent, 0.55)}`,
+                  ['--vc-avatar-glow']: hexAlpha(accent, 0.55),
+                }}
+              >
+                <PersonAvatar
+                  src={member.photoURL}
+                  name={name}
+                  userId={member.userId}
+                  size={84}
+                  className="relative z-[1] bg-[#1a1c22]"
+                />
+              </div>
+              <span
+                className={
+                  'absolute bottom-1 left-1 w-3.5 h-3.5 rounded-full border-[3px] border-[#0e1016] ' +
+                  (member.online ? 'bg-positive' : 'bg-line')
+                }
+                title={member.online ? 'online' : 'offline'}
+              />
+              <span
+                className="absolute bottom-0.5 right-0.5 w-7 h-7 rounded-full bg-[#0e1016] border border-white/10 flex items-center justify-center"
+                title="Conta Lunar"
+              >
+                <Moon size={12} strokeWidth={2} style={{ color: accent }} />
+              </span>
+            </div>
           </div>
         </div>
 
-        {/* Identity */}
-        <div className="relative z-[2] px-5 pt-3 pb-5">
+        {/* Everything below avatar scrolls when the card hits max height */}
+        <div className="relative z-[2] flex-1 min-h-0 overflow-y-auto overscroll-contain px-5 pt-3 pb-5">
           <div className="flex items-center gap-2 min-w-0 flex-wrap">
             <h2 id="profile-name" className="text-[20px] font-bold text-strong tracking-tight truncate">
               {name}
@@ -186,6 +207,7 @@ export default function ProfilePopover({
                 Criador
               </span>
             )}
+            <UserTagChips tags={liveTags} />
           </div>
 
           {member.handle ? (
@@ -209,7 +231,6 @@ export default function ProfilePopover({
             )}
           </div>
 
-          {/* Status card */}
           <div className="mt-4 flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-white/[0.03] border border-white/[0.07]">
             <div className="min-w-0 flex-1">
               <p className="flex items-center gap-1.5 text-[13px] font-semibold text-strong">
@@ -240,7 +261,6 @@ export default function ProfilePopover({
             </p>
           ) : null}
 
-          {/* Primary CTA */}
           <button
             type="button"
             onClick={() => {
@@ -261,7 +281,6 @@ export default function ProfilePopover({
             {isSelf ? 'Editar perfil' : 'Enviar mensagem'}
           </button>
 
-          {/* Secondary row */}
           <div className="mt-2.5 flex items-center gap-2">
             <button
               type="button"
@@ -297,7 +316,6 @@ export default function ProfilePopover({
             </button>
           </div>
 
-          {/* Spaces + Badges */}
           <div className="mt-5 pt-4 border-t border-white/[0.06] grid grid-cols-2 gap-4">
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted mb-2.5">
@@ -319,10 +337,13 @@ export default function ProfilePopover({
               <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted mb-2.5">
                 Badges
               </p>
-              <div className="flex items-start gap-2.5">
+              <div className="flex items-start gap-2.5 flex-wrap">
                 {subjectIsCreator && (
                   <BadgeChip label="Criador" color="#e8b84a" icon={Crown} />
                 )}
+                {liveTags.map((tag) => (
+                  <BadgeChip key={tag.id} label={tag.label} color={tag.color} icon={Moon} />
+                ))}
                 <BadgeChip label="Lunar" color={accent} icon={Moon} />
                 {(inRoom && purposeOfRoom?.type === 'voice') && (
                   <BadgeChip label="Voz" color={accent} icon={Mic} />
@@ -331,7 +352,33 @@ export default function ProfilePopover({
             </div>
           </div>
 
-          {/* Copy ID footer */}
+          <TagAssignPanel
+            targetUserId={member.userId}
+            currentUserId={currentUserId}
+            selfProfile={currentUserProfile}
+          />
+
+          <RoleAssignPanel
+            space={space}
+            member={member}
+            currentUserId={currentUserId}
+            canAssign={canAssignRoles}
+            actorPerms={selfPerms}
+          />
+
+          {canKick && !isSelf && !subjectIsCreator && (
+            <button
+              type="button"
+              onClick={async () => {
+                if (!window.confirm(`Expulsar ${name} deste Space?`)) return
+                await onKick?.(member.userId)
+              }}
+              className="mt-3 w-full h-9 rounded-xl text-[12.5px] font-semibold text-danger bg-danger/10 border border-danger/25 hover:bg-danger/15"
+            >
+              Expulsar do Space
+            </button>
+          )}
+
           <button
             type="button"
             onClick={handleCopy}

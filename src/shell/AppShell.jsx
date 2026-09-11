@@ -12,9 +12,11 @@ import SpaceContextPanel from '../components/layout/SpaceContextPanel'
 import SpaceHome from '../components/views/SpaceHome'
 
 import { useCurrentSpace, useSpacesList, isSpaceInRail, spaceTokens, ensureFullSpaceIcons } from '../features/spaces'
+import { useSpaceFonts } from '../features/spaces/hooks/useSpaceFonts'
 import { parseSpaceInvite } from '../features/spaces/model/spaceInvite'
 import { useRoomActions } from '../features/rooms'
-import { useProfilePopover } from '../features/people'
+import { useProfilePopover, useMemberTags } from '../features/people'
+import { usePrincipal } from '../features/people/hooks/usePrincipal'
 import { useSettings } from '../features/settings'
 import { useAccountProfile } from '../features/account'
 import { NotificationsProvider } from '../features/notifications'
@@ -69,9 +71,22 @@ export default function AppShell({ account }) {
   const {
     currentSpace, spaceMembers, optimisticFirstRoom,
     switchingSpaceId,
-    selectSpace, clearSpace, editSpace, createSpace, isCreator,
+    selectSpace, clearSpace, editSpace, createSpace, isCreator, can: canPerm, selfPerms,
+
     currentUserId, currentUserName, setOptimisticFirstRoom,
   } = useCurrentSpace(accountProfile.profile)
+
+  useSpaceFonts(currentSpace)
+
+  const tagsByUser = useMemberTags(spaceMembers)
+  const membersWithTags = useMemo(
+    () => (spaceMembers || []).map((m) => ({
+      ...m,
+      tags: tagsByUser.get(m.userId) || m.tags || [],
+    })),
+    [spaceMembers, tagsByUser],
+  )
+  const { isPrincipal, canClaim, claim } = usePrincipal(currentUserId, accountProfile.profile)
   // Rooms
   const {
     selectedRoom, currentRoom, transitioning,
@@ -152,14 +167,27 @@ export default function AppShell({ account }) {
   // Profile popover data feed — keep deps primitive so we don't re-fire every render
   useEffect(() => {
     const member = profile.userId
-      ? spaceMembers.find((m) => m.userId === profile.userId) || null
+      ? membersWithTags.find((m) => m.userId === profile.userId) || null
       : null
     profile.setData({
       member,
       space: currentSpace,
       isCreator,
+      canAssignRoles: canPerm('assign_roles'),
+      canKick: canPerm('kick'),
+      selfPerms,
     })
-  }, [profile.userId, profile.setData, spaceMembers, currentSpace, isCreator])
+  }, [profile.userId, profile.setData, membersWithTags, currentSpace, isCreator, canPerm, selfPerms])
+
+  const handleKickMember = useCallback(async (userId) => {
+    try {
+      await signalingClient?.kickMember?.(userId)
+      flashToast('Membro removido do Space')
+      profile.closeProfile?.()
+    } catch (err) {
+      flashToast(err?.message || 'Não deu pra expulsar')
+    }
+  }, [signalingClient, profile])
 
   // Handlers wired to feature hooks
   const handleCreateSpace = useCallback(async (payload) => {
@@ -177,7 +205,6 @@ export default function AppShell({ account }) {
     setSelectedRoom(null)
 
     // Home / same Space while in a call: browse UI, keep the LiveKit session.
-    // Only explicit "Sair" (leaveCall) should disconnect.
     if (!spaceId) {
       if (currentRoom) {
         setActiveView('overview')
@@ -196,16 +223,16 @@ export default function AppShell({ account }) {
       return
     }
 
+    // Switching Spaces leaves the current call, then opens the other Space.
     if (currentRoom) {
-      flashToast('Saia da call para mudar de Space')
-      return
+      leaveCall()
     }
 
     setActiveView('overview')
     setSpaceSurface(null)
     const preview = spaces.find((s) => s.id === spaceId) || null
     await selectSpace(spaceId, preview ? { preview } : undefined)
-  }, [currentRoom, currentSpace?.id, selectSpace, setSelectedRoom, spaces])
+  }, [currentRoom, currentSpace?.id, leaveCall, selectSpace, setSelectedRoom, spaces])
 
   const handleHubJoined = useCallback(async (spaceId, { alreadyMember } = {}) => {
     await handleSelectSpace(spaceId)
@@ -401,12 +428,14 @@ export default function AppShell({ account }) {
             onCreateRoom={() => setRoomEditor({ mode: 'create' })}
             onEditRoom={(room) => setRoomEditor({ mode: 'edit', room })}
             onDeleteRoom={deleteRoom}
-            members={spaceMembers}
+            members={membersWithTags}
             currentUserId={currentUserId}
             currentUserName={currentUserName}
             currentRoomId={currentRoom?.id || null}
             selectedRoomId={selectedRoom?.id || null}
             isCreator={isCreator}
+            canEditSpace={canPerm('edit_space')}
+            canManageRooms={canPerm('manage_rooms')}
             onEditSpace={editSpace}
             onLeaveSpace={handleLeaveSpace}
             onDeleteSpace={deleteSpace}
@@ -518,7 +547,7 @@ export default function AppShell({ account }) {
                     signaling={signalingClient}
                     currentUserId={currentUserId}
                     currentUserName={currentUserName}
-                    members={spaceMembers}
+                    members={membersWithTags}
                     onLeave={leaveCall}
                     onInvite={handleOpenInvite}
                     onStatusChange={setVoiceStatus}
@@ -546,10 +575,11 @@ export default function AppShell({ account }) {
                     signaling={signalingClient}
                     currentUserId={currentUserId}
                     currentUserName={currentUserName}
-                    members={spaceMembers}
+                    members={membersWithTags}
                     onClose={leaveTextToOverview}
                     onInvite={handleOpenInvite}
                     voiceActive={!!currentRoom}
+                    canModerateChat={canPerm('mod_chat')}
                   />
                 </Suspense>
               </ErrorBoundary>
@@ -571,12 +601,13 @@ export default function AppShell({ account }) {
                     space={currentSpace}
                     onEditSpace={editSpace}
                     isCreator={isCreator}
+                    canManageEvents={canPerm('manage_events')}
                   />
                 </Suspense>
               ) : (
                 <SpaceHome
                   space={currentSpace}
-                  members={spaceMembers}
+                  members={membersWithTags}
                   spaces={visibleSpaces}
                   accountName={accountProfile.profile.displayName}
                   accountPhoto={accountProfile.profile.photoURL}
@@ -596,6 +627,8 @@ export default function AppShell({ account }) {
                   onOpenEvents={() => openSpaceView('events')}
                   onEditSpace={editSpace}
                   isCreator={isCreator}
+                  canEditSpace={canPerm('edit_space')}
+                  canManageRooms={canPerm('manage_rooms')}
                   connected={connStatus === 'connected'}
                   hostname={hostname}
                   optimisticFirstRoom={optimisticFirstRoom}
@@ -627,7 +660,7 @@ export default function AppShell({ account }) {
           <Suspense fallback={null}>
             <PeoplePanel
               space={currentSpace}
-              members={spaceMembers}
+              members={membersWithTags}
               currentUserId={currentUserId}
               onInvite={handleOpenInvite}
               onOpenProfile={(member) => profile.openProfile(member.userId)}
@@ -682,6 +715,7 @@ export default function AppShell({ account }) {
           open={!!roomEditor}
           mode={roomEditor?.mode || 'create'}
           room={roomEditor?.room || null}
+          space={currentSpace}
           submitting={creatingRoom}
           onClose={() => setRoomEditor(null)}
           onCreate={createRoom}
@@ -696,6 +730,10 @@ export default function AppShell({ account }) {
             onChange={updateSettings}
             onClose={() => setShowSettingsModal(false)}
             account={account}
+            accountProfile={accountProfile.profile}
+            isPrincipal={isPrincipal}
+            canClaimPrincipal={canClaim}
+            onClaimPrincipal={claim}
             onSignOut={handleSignOut}
           />
         </Suspense>
@@ -723,10 +761,15 @@ export default function AppShell({ account }) {
           member={profile.data?.member}
           space={profile.data?.space}
           isCreator={profile.data?.isCreator}
+          canAssignRoles={!!profile.data?.canAssignRoles}
+          canKick={!!profile.data?.canKick}
+          selfPerms={profile.data?.selfPerms}
           currentUserId={currentUserId}
+          currentUserProfile={accountProfile.profile}
           onClose={profile.closeProfile}
           onInvite={() => handleOpenInvite(currentRoom || selectedRoom)}
           onOpenAccount={() => { setAccountPage('profile'); setShowAccount(true) }}
+          onKick={handleKickMember}
         />
       </Suspense>
 

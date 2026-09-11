@@ -18,11 +18,12 @@ import {
   ROOM_EMOJI_PRESETS,
   ROOM_NAME_STYLES,
   normalizeRoomEmoji,
-  resolveRoomNameStyle,
+  resolveLabeledNameStyle,
 } from '../model/roomCosmetics'
 import { RoomIconMark } from './RoomIconMark'
 import { SpaceIconPicker } from '../../spaces/components/SpaceIconPicker'
 import { ColorIdentityPicker, PALETTE, normalizeHex } from '../../spaces/components/ColorIdentityPicker'
+import { FontFieldSelect } from '../../spaces/components/FontFieldSelect'
 import { identitySurfaceStyle, serializeSpaceIcon } from '../../spaces'
 import { readFileAsDataUrl } from '../model/roomCover'
 
@@ -30,6 +31,7 @@ export default function RoomEditorModal({
   open,
   mode = 'create',
   room = null,
+  space = null,
   submitting = false,
   onClose,
   onCreate,
@@ -47,6 +49,7 @@ export default function RoomEditorModal({
   const [emoji, setEmoji] = useState(null)
   const [color, setColor] = useState(null)
   const [nameStyle, setNameStyle] = useState('default')
+  const [fontId, setFontId] = useState('default')
   const [cover, setCover] = useState(null)
   const [coverRemoved, setCoverRemoved] = useState(false)
 
@@ -66,6 +69,7 @@ export default function RoomEditorModal({
       setEmoji(room.emoji || null)
       setColor(room.color || null)
       setNameStyle(room.nameStyle || 'default')
+      setFontId(room.fontId || 'default')
       setCover(room.cover || null)
       setCoverRemoved(false)
     } else {
@@ -76,6 +80,7 @@ export default function RoomEditorModal({
       setEmoji(null)
       setColor(null)
       setNameStyle('default')
+      setFontId('default')
       setCover(null)
       setCoverRemoved(false)
     }
@@ -94,9 +99,15 @@ export default function RoomEditorModal({
     emoji,
     color,
     nameStyle,
+    fontId,
   }
   const accent = color ? normalizeHex(color) : selected.color
-  const nameCss = resolveRoomNameStyle(nameStyle).style
+  const spaceFonts = space?.fonts || []
+  const nameCss = resolveLabeledNameStyle({
+    nameStyle,
+    fontId,
+    fonts: spaceFonts,
+  })
 
   const handleSelectType = (next) => {
     setPurposeKey(next)
@@ -111,6 +122,7 @@ export default function RoomEditorModal({
       emoji: emoji || null,
       color: color || null,
       nameStyle: nameStyle || 'default',
+      fontId: fontId || 'default',
     }
     if (coverRemoved) {
       payload.cover = null
@@ -205,6 +217,7 @@ export default function RoomEditorModal({
           <RoomNameField
             value={name}
             placeholder={DEFAULT_ROOM_NAMES[purposeKey] || 'geral'}
+            style={nameCss}
             onChange={(value) => {
               setName(value)
               setManuallyRenamed(true)
@@ -318,7 +331,17 @@ export default function RoomEditorModal({
             )}
 
             <div>
-              <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted mb-1.5">Estilo do nome</p>
+              <FontFieldSelect
+                label="Fonte do nome"
+                value={fontId}
+                onChange={setFontId}
+                customFonts={spaceFonts}
+                previewText={name.trim() || 'Nome da sala'}
+              />
+            </div>
+
+            <div>
+              <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted mb-1.5">Efeito do nome</p>
               <div className="flex flex-wrap gap-1.5">
                 {ROOM_NAME_STYLES.map((style) => {
                   const active = nameStyle === style.id
@@ -334,7 +357,11 @@ export default function RoomEditorModal({
                           ? 'bg-accent/20 text-accent ring-1 ring-accent/40'
                           : 'bg-white/[0.04] text-ink hover:bg-white/[0.08] hover:text-strong')
                       }
-                      style={style.style}
+                      style={resolveLabeledNameStyle({
+                        nameStyle: style.id,
+                        fontId,
+                        fonts: spaceFonts,
+                      })}
                       aria-pressed={active}
                     >
                       {style.preview}
@@ -460,9 +487,16 @@ export default function RoomEditorModal({
       <SpaceIconPicker
         open={iconOpen}
         current={icon}
+        enableEmojis
+        currentEmoji={emoji}
         onPick={(next) => {
           setIcon(serializeSpaceIcon(next))
           setEmoji(null)
+          setIconOpen(false)
+        }}
+        onPickEmoji={(next) => {
+          setEmoji(next)
+          setIcon(null)
           setIconOpen(false)
         }}
         onClose={() => setIconOpen(false)}

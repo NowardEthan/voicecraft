@@ -6,6 +6,7 @@
 import { memo, useEffect, useRef } from 'react'
 import { MicOff, Mic, Crown, Video, Monitor } from 'lucide-react'
 import { PersonAvatar } from '../../../../people'
+import { UserTagChips } from '../../../../people/components/UserTagChips'
 import { SpaceCoverLayer } from '../../../../spaces/components/SpaceCoverLayer'
 import { SpeakingIndicator } from './SpeakingIndicator'
 
@@ -86,7 +87,7 @@ export const ParticipantCard = memo(function ParticipantCard({
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 flex-wrap justify-end max-w-[55%]">
             {isCreator && (
               <span
                 className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-pill text-[9.5px] font-semibold uppercase tracking-wider bg-warning/15 text-warning border border-warning/30"
@@ -96,6 +97,7 @@ export const ParticipantCard = memo(function ParticipantCard({
                 <Crown size={9} strokeWidth={2.25} />
               </span>
             )}
+            <UserTagChips tags={member.tags} size="xs" />
             {isSelf && (
               <span
                 className="px-1.5 py-0.5 rounded-pill text-[9.5px] font-semibold uppercase tracking-wider bg-accent/15 text-accent border border-accent/30"

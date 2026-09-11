@@ -67,6 +67,7 @@ export default function MessageList({
   onReply,
   onEdit,
   onDelete,
+  canModerate = false,
   members = [],
   density = 'compacto',
 }) {
@@ -261,6 +262,7 @@ export default function MessageList({
                     onToggleReaction={onToggleReaction}
                     onEdit={onEdit}
                     onDelete={onDelete}
+                    canModerate={canModerate}
                     author={resolveChatAuthor(m, members, currentUserId, currentUserName)}
                     replyTo={m.replyToId ? (messagesById.get(m.replyToId) || { id: m.replyToId, missing: true }) : null}
                     replyAuthor={m.replyToId ? resolveChatAuthor(messagesById.get(m.replyToId), members, currentUserId, currentUserName) : null}

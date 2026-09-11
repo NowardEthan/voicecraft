@@ -9,6 +9,7 @@ import {
   ChevronLeft, MoreHorizontal,
 } from 'lucide-react'
 import { PersonAvatar } from '../../features/people'
+import { UserTagChips } from '../../features/people/components/UserTagChips'
 import { PURPOSE_BY_KEY } from '../../features/rooms'
 import { resolveCardTheme } from '../../features/account/model/profileCardThemes'
 import { CardThemeFx } from '../../features/account/components/CardThemeFx'
@@ -401,7 +402,7 @@ function PersonRow({ member, space, isSelf, isCreator, accent, onOpenProfile }) 
         </div>
 
         <div className="relative min-w-0 flex-1 z-[1]">
-          <p className="text-[13px] font-semibold text-strong leading-tight truncate flex items-center gap-1">
+          <p className="text-[13px] font-semibold text-strong leading-tight truncate flex items-center gap-1 flex-wrap">
             <span className="truncate">{name}</span>
             {isSelf && (
               <span className="text-muted font-normal shrink-0">(você)</span>
@@ -409,6 +410,7 @@ function PersonRow({ member, space, isSelf, isCreator, accent, onOpenProfile }) 
             {isCreator && !isSelf && (
               <Crown size={11} className="shrink-0" style={{ color: ringAccent }} strokeWidth={2.4} />
             )}
+            <UserTagChips tags={member.tags} size="xs" />
           </p>
           <p className={`text-[11px] leading-tight mt-0.5 truncate flex items-center gap-1 ${status.textColor}`}>
             {StatusIcon && (

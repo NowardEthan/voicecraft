@@ -5,30 +5,168 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function principalUid() {
+      return get(/databases/$(database)/documents/vc_config/admins).data.principalUid;
+    }
+
+    function isPrincipal() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/vc_config/admins)
+        && request.auth.uid == principalUid();
+    }
+
+    function spaceCreator(spaceId) {
+      return get(/databases/$(database)/documents/vc_spaces/$(spaceId)).data.createdBy;
+    }
+
+    function isSpaceCreator(spaceId) {
+      return signedIn() && request.auth.uid == spaceCreator(spaceId);
+    }
+
+    function memberPath(spaceId) {
+      return /databases/$(database)/documents/vc_spaces/$(spaceId)/members/$(request.auth.uid);
+    }
+
+    function memberDoc(spaceId) {
+      return get(memberPath(spaceId));
+    }
+
+    function memberHasPerm(spaceId, perm) {
+      return signedIn()
+        && exists(memberPath(spaceId))
+        && memberDoc(spaceId).data.perms[perm] == true;
+    }
+
+    function canEditSpace(spaceId) {
+      return isSpaceCreator(spaceId) || memberHasPerm(spaceId, 'edit_space');
+    }
+
+    function canManageRooms(spaceId) {
+      return isSpaceCreator(spaceId) || memberHasPerm(spaceId, 'manage_rooms');
+    }
+
+    function canModChat(spaceId) {
+      return isSpaceCreator(spaceId) || memberHasPerm(spaceId, 'mod_chat');
+    }
+
+    function canAssignRoles(spaceId) {
+      return isSpaceCreator(spaceId) || memberHasPerm(spaceId, 'assign_roles');
+    }
+
+    // Creator / edit_space: any fields.
+    // Members without edit_space: only memberIds / roomCount (join/leave).
+    // manage_events holders may also touch events.
+    function spaceUpdateAllowed(spaceId) {
+      return signedIn() && (
+        request.auth.uid == resource.data.createdBy
+        || memberHasPerm(spaceId, 'edit_space')
+        || (
+          memberHasPerm(spaceId, 'manage_events')
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['events'])
+        )
+        || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberIds', 'roomCount'])
+      );
+    }
+
+    function tagOwnerOrderOnly(uid) {
+      return signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['displayOrder', 'displayOrderUpdatedAt']);
+    }
+
+    // Role assigners may only change roleIds / perms on members (not the creator).
+    function memberRoleAssignUpdate(spaceId, uid) {
+      return canAssignRoles(spaceId)
+        && uid != spaceCreator(spaceId)
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['roleIds', 'perms']);
+    }
+
     match /vc_users/{uid} {
       allow read: if signedIn();
       allow write: if signedIn() && request.auth.uid == uid;
     }
 
+    match /vc_user_tags/{uid} {
+      allow read: if signedIn();
+      allow create, delete: if isPrincipal();
+      allow update: if isPrincipal() || tagOwnerOrderOnly(uid);
+    }
+
+    match /vc_config/admins {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && !exists(/databases/$(database)/documents/vc_config/admins)
+        && request.resource.data.principalUid == request.auth.uid;
+      allow update: if isPrincipal()
+        && request.resource.data.principalUid == resource.data.principalUid;
+      allow delete: if false;
+    }
+
+    match /vc_config/tag_catalog {
+      allow read: if signedIn();
+      allow create, update: if isPrincipal();
+      allow delete: if false;
+    }
+
     match /vc_spaces/{spaceId} {
       allow read: if signedIn();
-      allow create: if signedIn();
-      allow update, delete: if signedIn() && (
-        request.auth.uid == resource.data.createdBy
-        || request.auth.uid in resource.data.memberIds
-        || request.auth.uid in request.resource.data.memberIds
-      );
+      allow create: if signedIn()
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update: if spaceUpdateAllowed(spaceId);
+      allow delete: if isSpaceCreator(spaceId);
+
+      match /roles/{roleId} {
+        allow read: if signedIn();
+        allow create, update, delete: if isSpaceCreator(spaceId);
+      }
+
+      match /room_groups/{groupId} {
+        allow read: if signedIn();
+        allow create, update, delete: if canManageRooms(spaceId);
+      }
 
       match /members/{uid} {
         allow read: if signedIn();
-        allow write: if signedIn();
+        allow create, delete: if signedIn();
+        allow update: if signedIn() && (
+          isSpaceCreator(spaceId)
+          || memberRoleAssignUpdate(spaceId, uid)
+          || (
+            request.auth.uid == uid
+            && !request.resource.data.diff(resource.data).affectedKeys()
+              .hasAny(['roleIds', 'perms'])
+          )
+        );
       }
 
       match /rooms/{roomId} {
-        allow read, write: if signedIn();
+        allow read: if signedIn();
+        allow create, update, delete: if canManageRooms(spaceId);
 
-        match /{document=**} {
+        match /messages/{messageId} {
+          allow read: if signedIn();
+          allow create: if signedIn();
+          allow update, delete: if signedIn() && (
+            resource.data.userId == request.auth.uid
+            || canModChat(spaceId)
+          );
+        }
+
+        match /peers/{peerId} {
+          allow read: if signedIn();
+          allow write: if signedIn() && request.auth.uid == peerId;
+        }
+
+        match /signals/{signalId} {
           allow read, write: if signedIn();
+        }
+
+        match /thoughts/{thoughtId} {
+          allow read, create: if signedIn();
+          allow update, delete: if signedIn()
+            && resource.data.userId == request.auth.uid;
         }
       }
     }

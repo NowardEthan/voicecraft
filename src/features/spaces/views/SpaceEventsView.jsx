@@ -6,11 +6,12 @@ function uid() {
   return 'ev_' + Math.random().toString(36).slice(2, 10)
 }
 
-export default function SpaceEventsView({ space, onEditSpace, isCreator }) {
+export default function SpaceEventsView({ space, onEditSpace, isCreator, canManageEvents = false }) {
   const events = Array.isArray(space?.events) ? space.events : []
   const [title, setTitle] = useState('')
   const [at, setAt] = useState('')
   const [note, setNote] = useState('')
+  const canEdit = !!(canManageEvents || isCreator)
 
   const sorted = useMemo(
     () => [...events].sort((a, b) => (a.at || 0) - (b.at || 0)),
@@ -52,7 +53,7 @@ export default function SpaceEventsView({ space, onEditSpace, isCreator }) {
           </div>
         </div>
 
-        {isCreator && (
+        {canEdit && (
           <form
             onSubmit={addEvent}
             className="mb-6 rounded-[16px] border border-line bg-surface1/80 backdrop-blur p-4 space-y-3"
@@ -95,7 +96,7 @@ export default function SpaceEventsView({ space, onEditSpace, isCreator }) {
             <Calendar size={22} className="mx-auto text-muted mb-3" />
             <p className="text-[14px] font-semibold text-strong">Nenhum evento ainda</p>
             <p className="text-[12.5px] text-muted mt-1">
-              {isCreator ? 'Crie o primeiro encontro do Space.' : 'Quando alguém marcar um evento, ele aparece aqui.'}
+              {canEdit ? 'Crie o primeiro encontro do Space.' : 'Quando alguém marcar um evento, ele aparece aqui.'}
             </p>
           </div>
         ) : (
@@ -115,7 +116,7 @@ export default function SpaceEventsView({ space, onEditSpace, isCreator }) {
                   </p>
                   {ev.note && <p className="text-[12px] text-ink mt-1">{ev.note}</p>}
                 </div>
-                {isCreator && (
+                {canEdit && (
                   <button
                     type="button"
                     onClick={() => removeEvent(ev.id)}

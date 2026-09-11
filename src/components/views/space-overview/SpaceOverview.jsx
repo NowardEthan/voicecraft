@@ -33,6 +33,8 @@ const SpaceOverview = memo(function SpaceOverview({
   onOpenEvents,
   onEditSpace,
   isCreator = false,
+  canEditSpace: canEditSpaceProp = false,
+  canManageRooms = false,
   optimisticFirstRoom,
 }) {
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -69,7 +71,8 @@ const SpaceOverview = memo(function SpaceOverview({
       : `Abrir ${activeRoom.name || 'sala'}`)
     : 'Criar sala de voz'
 
-  const canEditSpace = isCreator && typeof onEditSpace === 'function'
+  const canEditSpace = (canEditSpaceProp || isCreator) && typeof onEditSpace === 'function'
+  const canCreateRoom = canManageRooms || isCreator
 
   return (
     <div className="@container space-y-4 sm:space-y-5">
@@ -88,7 +91,7 @@ const SpaceOverview = memo(function SpaceOverview({
           icon={MessageCircle}
           title="Crie sua primeira sala"
           body="Adicione uma sala de conversa ou voz para o Space ganhar vida."
-          action={{ label: 'Criar sala', onClick: () => onCreateRoom?.('conversation') }}
+          action={canCreateRoom ? { label: 'Criar sala', onClick: () => onCreateRoom?.('conversation') } : undefined}
           accent
         />
       ) : (
@@ -138,6 +141,7 @@ const SpaceOverview = memo(function SpaceOverview({
           space={space}
           onSave={onEditSpace}
           onClose={() => setSettingsOpen(false)}
+          isCreator={isCreator}
         />
       )}
     </div>

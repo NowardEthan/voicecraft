@@ -21,6 +21,7 @@ import {
   MicOff, Radio, MessageCircle, BookOpen, Gamepad2, Music, Crown,
 } from 'lucide-react'
 import { PersonAvatar } from '../../features/people'
+import { UserTagChips } from '../../features/people/components/UserTagChips'
 import { PURPOSE_BY_KEY } from '../../features/rooms'
 
 const PURPOSE_BADGE_ICON = {
@@ -169,6 +170,7 @@ export default function PersonCard({
               criador
             </span>
           )}
+          <UserTagChips tags={member.tags} size="xs" />
         </div>
         {!hideStatus && (
           <p className="text-[10.5px] truncate leading-tight mt-0.5">

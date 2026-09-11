@@ -30,4 +30,6 @@ export const storage = getStorage(app)
 export const VC = {
   users: 'vc_users',
   spaces: 'vc_spaces',
+  userTags: 'vc_user_tags',
+  config: 'vc_config',
 }

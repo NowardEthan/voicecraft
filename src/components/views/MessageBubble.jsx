@@ -26,6 +26,7 @@ export default function MessageBubble({
   onToggleReaction,
   onEdit,
   onDelete,
+  canModerate = false,
   replyTo,
   author,
   replyAuthor,
@@ -363,7 +364,7 @@ export default function MessageBubble({
               Editar
             </MenuItem>
           )}
-          {isMine && (
+          {(isMine || canModerate) && (
             <MenuItem
               icon={Trash2}
               danger

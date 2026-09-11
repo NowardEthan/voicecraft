@@ -6,6 +6,8 @@ import SpaceAvatar from '../../SpaceAvatar'
 import { resolveSpaceCover, bannerGradient, bannerOverlay } from '../../../features/spaces'
 import { SpaceCoverLayer } from '../../../features/spaces/components/SpaceCoverLayer'
 import { getVisibility } from '../../../features/spaces/model/spacePreferences'
+import { useSpaceFonts } from '../../../features/spaces/hooks/useSpaceFonts'
+import { fieldFontStyle } from '../../../features/spaces/model/spaceTypography'
 
 const SpaceHero = memo(function SpaceHero({
   space,
@@ -16,6 +18,7 @@ const SpaceHero = memo(function SpaceHero({
   onInvite,
   onMore,
 }) {
+  useSpaceFonts(space)
   const base = space.color || '#ff3f6c'
   const cover = resolveSpaceCover(space)
   const visibility = getVisibility(space.id)
@@ -23,6 +26,9 @@ const SpaceHero = memo(function SpaceHero({
   const description = (space.description || '').trim()
     || 'Aquele lugar pra jogar, conversar e compartilhar. Boa gameplay, melhores pessoas.'
   const slogan = (space.slogan || space.tagline || '').trim() || 'Good Games\nBetter People.'
+  const nameFont = fieldFontStyle(space, 'name')
+  const descFont = fieldFontStyle(space, 'description')
+  const sloganFont = fieldFontStyle(space, 'slogan')
 
   return (
     <div
@@ -66,13 +72,22 @@ const SpaceHero = memo(function SpaceHero({
               className="shadow-[0_14px_32px_-8px_rgba(0,0,0,0.55)] ring-[3px] ring-white/12 shrink-0"
             />
             <div className="min-w-0 flex-1 pt-0.5">
-              <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-white/70 truncate">
+              <p
+                className="text-[10px] font-bold uppercase tracking-[0.24em] text-white/70 truncate"
+                style={nameFont}
+              >
                 {String(space.name || '').replace(/\s+/g, '')}
               </p>
-              <h1 className="text-[26px] sm:text-[32px] font-bold text-white tracking-tight leading-[1.1] break-words mt-1">
+              <h1
+                className="text-[26px] sm:text-[32px] font-bold text-white tracking-tight leading-[1.1] break-words mt-1"
+                style={nameFont}
+              >
                 {space.name}
               </h1>
-              <p className="text-[13px] sm:text-[14px] text-white/75 mt-2 leading-relaxed max-w-xl">
+              <p
+                className="text-[13px] sm:text-[14px] text-white/75 mt-2 leading-relaxed max-w-xl"
+                style={descFont}
+              >
                 {description}
               </p>
             </div>
@@ -141,7 +156,7 @@ const SpaceHero = memo(function SpaceHero({
           <p
             className="text-right text-[28px] xl:text-[34px] leading-[1.15] font-semibold text-accent/90 max-w-[220px] select-none"
             style={{
-              fontFamily: '"Segoe Script", "Apple Chancery", "Comic Sans MS", cursive',
+              ...sloganFont,
               textShadow: '0 8px 28px rgba(0,0,0,0.45)',
               whiteSpace: 'pre-line',
             }}
