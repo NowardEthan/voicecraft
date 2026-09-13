@@ -294,15 +294,22 @@ if (app.isPackaged) {
 // outputs (Release/Debug, app.asar sibling) so we don't hard-code one.
 function resolveAudioServiceBinary() {
   const candidates = []
+  const exeName = process.platform === 'win32' ? 'voicecraft-audio.exe' : 'voicecraft-audio'
+  // Packaged installer: electron-builder extraResources next to the app.
+  if (process.resourcesPath) {
+    candidates.push(path.join(process.resourcesPath, exeName))
+    candidates.push(path.join(process.resourcesPath, 'bin', exeName))
+  }
   const roots = [
     path.join(__dirname, '..', 'audio-service', 'build'),
     path.join(__dirname, '..', '..', 'audio-service', 'build'),
     path.join(app.getAppPath(), 'audio-service', 'build'),
+    path.join(__dirname, '..', 'resources', 'bin'),
   ]
   for (const root of roots) {
-    candidates.push(path.join(root, 'Release', process.platform === 'win32' ? 'voicecraft-audio.exe' : 'voicecraft-audio'))
-    candidates.push(path.join(root, 'Debug', process.platform === 'win32' ? 'voicecraft-audio.exe' : 'voicecraft-audio'))
-    candidates.push(path.join(root, process.platform === 'win32' ? 'voicecraft-audio.exe' : 'voicecraft-audio'))
+    candidates.push(path.join(root, 'Release', exeName))
+    candidates.push(path.join(root, 'Debug', exeName))
+    candidates.push(path.join(root, exeName))
   }
   for (const p of candidates) {
     if (fs.existsSync(p)) return p
@@ -525,7 +532,9 @@ function startAudioService() {
         const wc = mainWindow.webContents
         if (wc && !wc.isDestroyed()) {
           try {
-            wc.send('audio:frame', { type: 'mic', payload })
+            // Tag loopback frames so renderer can filter mic vs app-audio.
+            const frameType = activeLoopbackSessions.size > 0 ? 'loopback' : 'mic'
+            wc.send('audio:frame', { type: frameType, payload })
           } catch (err) {
             // Swallow — renderer just disposed, nothing to do.
           }
@@ -539,6 +548,13 @@ function startAudioService() {
       if (!line.trim()) continue
       try {
         const msg = JSON.parse(line)
+        if (msg?.type === 'error' && activeLoopbackSessions.size > 0) {
+          // C++ failed after we registered a session — drop so frames aren't mis-tagged.
+          activeLoopbackSessions.clear()
+        }
+        if (msg?.type === 'loopback-stopped') {
+          activeLoopbackSessions.clear()
+        }
         if (mainWindow && !mainWindow.isDestroyed()) {
           const wc = mainWindow.webContents
           if (wc && !wc.isDestroyed()) {
@@ -715,6 +731,10 @@ ipcMain.handle('audio-service:start-loopback', (_e, payload) => {
   const processId = payload?.processId
   if (typeof processId !== 'number' || processId <= 0) {
     return { ok: false, error: 'pid-not-found' }
+  }
+  const started = startAudioService()
+  if (!started?.ok && !started?.alreadyRunning) {
+    return { ok: false, error: started?.error || 'audio-service-unavailable' }
   }
   for (const [id, sess] of activeLoopbackSessions.entries()) {
     if (sess.processId === processId) {

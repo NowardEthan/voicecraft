@@ -10,6 +10,7 @@ import ErrorBoundary from '../components/ErrorBoundary'
 import SpacesRail from '../components/SpacesRail'
 import SpaceContextPanel from '../components/layout/SpaceContextPanel'
 import SpaceHome from '../components/views/SpaceHome'
+import VoiceActiveBar from '../features/rooms/views/voice/components/VoiceActiveBar'
 
 import { useCurrentSpace, useSpacesList, isSpaceInRail, spaceTokens, ensureFullSpaceIcons } from '../features/spaces'
 import { useSpaceFonts } from '../features/spaces/hooks/useSpaceFonts'
@@ -112,9 +113,6 @@ export default function AppShell({ account }) {
 
   // UI state
   const [activeView, setActiveView] = useState('overview')
-  // When set to overview/events, main area shows that page even if a call is live.
-  // null = follow room focus (text / voice UI).
-  const [spaceSurface, setSpaceSurface] = useState(null)
   const [showSettingsModal, setShowSettingsModal] = useState(false)
   const [roomEditor, setRoomEditor] = useState(null)
   const [showSpaceCreator, setShowSpaceCreator] = useState(false)
@@ -150,10 +148,10 @@ export default function AppShell({ account }) {
     })
   }, [currentRoom, currentSpace])
 
-  // Reset contextual view when Space changes
+  // Reset contextual view when Space changes. activeView drives whether
+  // overview/events beat the live call in the main pane (see browsingSpacePage).
   useEffect(() => {
     setActiveView('overview')
-    setSpaceSurface(null)
     setSelectedRoom(null)
   }, [currentSpace?.id, setSelectedRoom])
 
@@ -195,8 +193,9 @@ export default function AppShell({ account }) {
       canAssignRoles: canPerm('assign_roles'),
       canKick: canPerm('kick'),
       selfPerms,
+      selfMember: membersWithTags.find((m) => m.userId === currentUserId) || null,
     })
-  }, [profile.userId, profile.setData, membersWithTags, currentSpace, isCreator, canPerm, selfPerms])
+  }, [profile.userId, profile.setData, membersWithTags, currentSpace, isCreator, canPerm, selfPerms, currentUserId])
 
   const handleKickMember = useCallback(async (userId) => {
     try {
@@ -223,28 +222,21 @@ export default function AppShell({ account }) {
     setShowAccount(false)
     setSelectedRoom(null)
 
-    // Home / same Space while in a call: browse UI, keep the LiveKit session.
+    // Home: always show Início. Call stays alive (LiveKit is independent of
+    // which Space is selected in the shell).
     if (!spaceId) {
-      if (currentRoom) {
-        setActiveView('overview')
-        setSpaceSurface('overview')
-        return
-      }
       setActiveView('overview')
-      setSpaceSurface(null)
       await selectSpace(null)
       return
     }
 
     if (spaceId === currentSpace?.id) {
       setActiveView('overview')
-      setSpaceSurface('overview')
       return
     }
 
     // Switch Spaces freely — call stays until leave or join another voice room.
     setActiveView('overview')
-    setSpaceSurface(currentRoom ? 'overview' : null)
     const preview = spaces.find((s) => s.id === spaceId) || null
     await selectSpace(spaceId, {
       preview: preview || undefined,
@@ -322,7 +314,9 @@ export default function AppShell({ account }) {
     && selectedRoom.type !== 'voice'
     && selectedRoom.id !== currentRoom.id
   )
-  const browsingSpacePage = spaceSurface === 'overview' || spaceSurface === 'events'
+  // Prefer activeView so overview/events stay visible while in a call
+  // (Discord-style browse — room focus only when activeView === 'room').
+  const browsingSpacePage = activeView === 'overview' || activeView === 'events'
   const showVoiceFullscreen = !!(currentRoom && !browsingTextWhileInVoice && !browsingSpacePage)
   const showTextRoom = !!(
     selectedRoom
@@ -331,10 +325,11 @@ export default function AppShell({ account }) {
     && (browsingTextWhileInVoice || !currentRoom)
   )
   const showSpacePage = !showVoiceFullscreen && !showTextRoom
+  // When Início has no Space panel, still offer return-to-call controls.
+  const showHomeVoiceBar = !!(currentRoom && showSpacePage && !panelVisible)
 
   const openSpaceView = useCallback((view) => {
     setActiveView(view)
-    setSpaceSurface(view)
     closeTextRoom()
   }, [closeTextRoom])
 
@@ -353,14 +348,12 @@ export default function AppShell({ account }) {
       if (!isRules) {
         flashToast('Aceite as regras para liberar o Space')
         if (rulesRoom) {
-          setSpaceSurface(null)
           setActiveView('room')
           selectRoom(rulesRoom)
         }
         return
       }
     }
-    setSpaceSurface(null)
     setActiveView('room')
     selectRoom(room)
   }, [
@@ -373,7 +366,6 @@ export default function AppShell({ account }) {
   ])
 
   const returnToVoice = useCallback(() => {
-    setSpaceSurface(null)
     setActiveView('room')
     focusVoiceRoom()
   }, [focusVoiceRoom])
@@ -381,7 +373,6 @@ export default function AppShell({ account }) {
   const leaveTextToOverview = useCallback(() => {
     closeTextRoom()
     setActiveView('overview')
-    setSpaceSurface(null)
   }, [closeTextRoom])
 
   const peer = useMemo(() => {
@@ -634,6 +625,15 @@ export default function AppShell({ account }) {
               transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
               className="absolute inset-0 min-h-0 flex flex-col overflow-hidden z-[1]"
             >
+              {showHomeVoiceBar && (
+                <div className="shrink-0 border-b border-line">
+                  <VoiceActiveBar
+                    room={currentRoom}
+                    onReturn={returnToVoice}
+                    onLeave={leaveCall}
+                  />
+                </div>
+              )}
               {activeView === 'events' && currentSpace ? (
                 <Suspense fallback={<ViewLoader />}>
                   <SpaceEventsView
@@ -804,6 +804,7 @@ export default function AppShell({ account }) {
           canAssignRoles={!!profile.data?.canAssignRoles}
           canKick={!!profile.data?.canKick}
           selfPerms={profile.data?.selfPerms}
+          selfMember={profile.data?.selfMember}
           currentUserId={currentUserId}
           currentUserProfile={accountProfile.profile}
           onClose={profile.closeProfile}

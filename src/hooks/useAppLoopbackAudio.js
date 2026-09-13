@@ -66,9 +66,12 @@ export function useAppLoopbackAudio({ processId = null, enabled = false } = {}) 
         if (!AudioContextClass) throw new Error('AudioContext unavailable')
         const ctx = new AudioContextClass({ sampleRate: SAMPLE_RATE, latencyHint: 'interactive' })
         audioCtxRef.current = ctx
+        try { await ctx.resume() } catch {}
 
         const proc = ctx.createScriptProcessor(FRAME_SIZE, CHANNELS, CHANNELS)
         const dest = ctx.createMediaStreamDestination()
+        const silent = ctx.createGain()
+        silent.gain.value = 0
 
         proc.onaudioprocess = (e) => {
           if (unmounted || !isRunningRef.current) return
@@ -98,6 +101,8 @@ export function useAppLoopbackAudio({ processId = null, enabled = false } = {}) 
         }
 
         proc.connect(dest)
+        proc.connect(silent)
+        silent.connect(ctx.destination)
 
         unsubFrame = window.electronAPI.audioService.onFrame((floats, _samples, meta) => {
           if (unmounted || !isRunningRef.current) return

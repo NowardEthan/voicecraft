@@ -2,72 +2,135 @@
 
 #ifdef _WIN32
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
+#include "audioclientactivationparams_compat.h"
 #include <audiopolicy.h>
 #include <psapi.h>
+#include <propidl.h>
 
 #include <atomic>
 #include <chrono>
-#include <iostream>
+#include <cstdio>
+#include <string>
 #include <thread>
 #include <unordered_set>
+#include <vector>
+
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "mmdevapi.lib")
 
 template<typename T>
 class ComPtr {
 public:
   ComPtr() : p_(nullptr) {}
-  ComPtr(T* p) : p_(p) { if (p_) p_->AddRef(); }
+  explicit ComPtr(T* p) : p_(p) { if (p_) p_->AddRef(); }
   ~ComPtr() { reset(); }
-  ComPtr(const ComPtr& o) : p_(o.p_) { if (p_) p_->AddRef(); }
+  ComPtr(const ComPtr&) = delete;
+  ComPtr& operator=(const ComPtr&) = delete;
   ComPtr(ComPtr&& o) noexcept : p_(o.p_) { o.p_ = nullptr; }
-  ComPtr& operator=(const ComPtr& o) {
-    if (this != &o) { reset(); p_ = o.p_; if (p_) p_->AddRef(); }
-    return *this;
-  }
   ComPtr& operator=(ComPtr&& o) noexcept {
     if (this != &o) { reset(); p_ = o.p_; o.p_ = nullptr; }
     return *this;
   }
   T* get() const { return p_; }
   T* operator->() const { return p_; }
-  T** operator&() { reset(); return &p_; }
   T** GetAddressOf() { reset(); return &p_; }
   void** put_void() { reset(); return reinterpret_cast<void**>(&p_); }
   void reset() { if (p_) { T* tmp = p_; p_ = nullptr; tmp->Release(); } }
   explicit operator bool() const { return p_ != nullptr; }
-  template<typename U>
-  HRESULT As(ComPtr<U>* out) const {
-    if (!p_ || !out) return E_POINTER;
-    return p_->QueryInterface(__uuidof(U), out->put_void());
-  }
 private:
   T* p_{nullptr};
 };
 
 namespace voicecraft::audio {
-
 namespace {
 
 std::string get_process_name_from_pid(DWORD pid) {
   char filename[MAX_PATH] = {0};
   HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-  if (hProcess) {
-    DWORD size = MAX_PATH;
-    if (QueryFullProcessImageNameA(hProcess, 0, filename, &size)) {
-      CloseHandle(hProcess);
-      std::string fullPath(filename);
-      size_t lastSlash = fullPath.find_last_of("\\/");
-      if (lastSlash != std::string::npos) {
-        return fullPath.substr(lastSlash + 1);
-      }
-      return fullPath;
-    }
-    CloseHandle(hProcess);
+  if (!hProcess) return "";
+  DWORD size = MAX_PATH;
+  std::string result;
+  if (QueryFullProcessImageNameA(hProcess, 0, filename, &size)) {
+    std::string fullPath(filename);
+    size_t lastSlash = fullPath.find_last_of("\\/");
+    result = (lastSlash != std::string::npos) ? fullPath.substr(lastSlash + 1) : fullPath;
   }
-  return "";
+  CloseHandle(hProcess);
+  return result;
 }
+
+class ActivateCompletionHandler : public IActivateAudioInterfaceCompletionHandler {
+public:
+  explicit ActivateCompletionHandler(HANDLE done_event)
+    : ref_(1), done_event_(done_event), activate_hr_(E_FAIL), audio_client_(nullptr) {}
+
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override {
+    if (!ppv) return E_POINTER;
+    if (riid == __uuidof(IUnknown) || riid == __uuidof(IActivateAudioInterfaceCompletionHandler)) {
+      *ppv = static_cast<IActivateAudioInterfaceCompletionHandler*>(this);
+      AddRef();
+      return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+  }
+
+  ULONG STDMETHODCALLTYPE AddRef() override {
+    return static_cast<ULONG>(InterlockedIncrement(&ref_));
+  }
+
+  ULONG STDMETHODCALLTYPE Release() override {
+    LONG v = InterlockedDecrement(&ref_);
+    if (v == 0) delete this;
+    return static_cast<ULONG>(v);
+  }
+
+  HRESULT STDMETHODCALLTYPE ActivateCompleted(IActivateAudioInterfaceAsyncOperation* operation) override {
+    HRESULT hrActivate = E_FAIL;
+    IUnknown* unk = nullptr;
+    if (operation) {
+      operation->GetActivateResult(&hrActivate, &unk);
+    }
+    activate_hr_ = hrActivate;
+    if (SUCCEEDED(hrActivate) && unk) {
+      IAudioClient* client = nullptr;
+      if (SUCCEEDED(unk->QueryInterface(__uuidof(IAudioClient), reinterpret_cast<void**>(&client)))) {
+        if (audio_client_) audio_client_->Release();
+        audio_client_ = client;
+      } else {
+        activate_hr_ = E_NOINTERFACE;
+      }
+      unk->Release();
+    }
+    if (done_event_) SetEvent(done_event_);
+    return S_OK;
+  }
+
+  HRESULT activate_hr() const { return activate_hr_; }
+
+  IAudioClient* take_client() {
+    IAudioClient* c = audio_client_;
+    audio_client_ = nullptr;
+    return c;
+  }
+
+private:
+  ~ActivateCompletionHandler() {
+    if (audio_client_) audio_client_->Release();
+  }
+
+  LONG ref_;
+  HANDLE done_event_;
+  HRESULT activate_hr_;
+  IAudioClient* audio_client_;
+};
 
 } // namespace
 
@@ -78,91 +141,173 @@ public:
 
   bool start(uint32_t process_id, uint32_t target_sample_rate, uint16_t target_channels, AudioCallback cb) {
     stop();
+    if (process_id == 0) {
+      last_error_ = "pid-not-found";
+      return false;
+    }
     callback_ = std::move(cb);
-    target_sr_ = target_sample_rate;
-    target_ch_ = target_channels;
+    target_sr_ = target_sample_rate ? target_sample_rate : 48000;
+    target_ch_ = target_channels ? target_channels : 1;
     target_pid_ = process_id;
     is_running_ = true;
+    start_ok_ = false;
+    start_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
 
     worker_thread_ = std::thread([this]() {
       HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-      bool co_inited = SUCCEEDED(hr);
-
+      bool co_inited = SUCCEEDED(hr) || hr == S_FALSE;
       run_capture_loop();
-
-      if (co_inited) {
-        CoUninitialize();
-      }
+      if (co_inited) CoUninitialize();
     });
 
+    if (start_event_) {
+      WaitForSingleObject(start_event_, 5000);
+    }
+    if (!start_ok_) {
+      is_running_ = false;
+      if (worker_thread_.joinable()) worker_thread_.join();
+      if (start_event_) { CloseHandle(start_event_); start_event_ = nullptr; }
+      if (last_error_.empty()) last_error_ = "wasapi-activate-failed";
+      return false;
+    }
     return true;
   }
 
   void stop() {
     is_running_ = false;
-    if (worker_thread_.joinable()) {
-      worker_thread_.join();
-    }
+    if (worker_thread_.joinable()) worker_thread_.join();
+    if (start_event_) { CloseHandle(start_event_); start_event_ = nullptr; }
   }
 
   bool is_running() const { return is_running_; }
   const std::string& last_error() const { return last_error_; }
 
 private:
+  void signal_start(bool ok) {
+    start_ok_ = ok;
+    if (start_event_) SetEvent(start_event_);
+  }
+
+  bool activate_process_loopback(IAudioClient** out_client) {
+    *out_client = nullptr;
+    HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!done) {
+      last_error_ = "create-event-failed";
+      return false;
+    }
+
+    AUDIOCLIENT_ACTIVATION_PARAMS activation = {};
+    activation.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
+    activation.ProcessLoopbackParams.TargetProcessId = static_cast<DWORD>(target_pid_);
+    // INCLUDE tree — browsers (Opera/Chrome) play YouTube in child processes.
+    activation.ProcessLoopbackParams.ProcessLoopbackMode =
+      PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE;
+
+    PROPVARIANT activateParams;
+    PropVariantInit(&activateParams);
+    activateParams.vt = VT_BLOB;
+    activateParams.blob.cbSize = sizeof(activation);
+    activateParams.blob.pBlobData = reinterpret_cast<BYTE*>(&activation);
+
+    // ref=1 from ctor; ActivateAudioInterfaceAsync AddRefs; we keep ours until after Wait.
+    ActivateCompletionHandler* handler = new ActivateCompletionHandler(done);
+
+    ComPtr<IActivateAudioInterfaceAsyncOperation> asyncOp;
+    HRESULT hr = ActivateAudioInterfaceAsync(
+      VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+      __uuidof(IAudioClient),
+      &activateParams,
+      handler,
+      asyncOp.GetAddressOf());
+
+    if (FAILED(hr)) {
+      handler->Release();
+      CloseHandle(done);
+      char buf[64];
+      std::snprintf(buf, sizeof(buf), "wasapi-0x%08lX", static_cast<unsigned long>(hr));
+      last_error_ = buf;
+      return false;
+    }
+
+    DWORD wait = WaitForSingleObject(done, 4000);
+    CloseHandle(done);
+
+    if (wait != WAIT_OBJECT_0) {
+      handler->Release();
+      last_error_ = "wasapi-activate-timeout";
+      return false;
+    }
+
+    hr = handler->activate_hr();
+    if (FAILED(hr)) {
+      handler->Release();
+      char buf[64];
+      std::snprintf(buf, sizeof(buf), "wasapi-0x%08lX", static_cast<unsigned long>(hr));
+      last_error_ = buf;
+      return false;
+    }
+
+    *out_client = handler->take_client();
+    handler->Release();
+    if (!*out_client) {
+      last_error_ = "wasapi-no-client";
+      return false;
+    }
+    return true;
+  }
+
   void run_capture_loop() {
-    ComPtr<IMMDeviceEnumerator> enumerator;
-    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
-    if (FAILED(hr)) {
-      last_error_ = "Failed to create MMDeviceEnumerator";
+    IAudioClient* raw_client = nullptr;
+    if (!activate_process_loopback(&raw_client)) {
+      signal_start(false);
       return;
     }
+    ComPtr<IAudioClient> audio_client(raw_client);
+    raw_client->Release();
 
-    ComPtr<IMMDevice> device;
-    hr = enumerator->GetDefaultAudioEndpoint(eRender, eMultimedia, &device);
+    // GetMixFormat is often E_NOTIMPL for process loopback — hardcode a common format.
+    WAVEFORMATEX format = {};
+    format.wFormatTag = WAVE_FORMAT_PCM;
+    format.nChannels = 2;
+    format.nSamplesPerSec = target_sr_ >= 44100 ? target_sr_ : 48000;
+    format.wBitsPerSample = 16;
+    format.nBlockAlign = static_cast<WORD>(format.nChannels * format.wBitsPerSample / 8);
+    format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
+    format.cbSize = 0;
+
+    REFERENCE_TIME hnsBufferDuration = 1000000; // 100ms
+    HRESULT hr = audio_client->Initialize(
+      AUDCLNT_SHAREMODE_SHARED,
+      AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
+      hnsBufferDuration,
+      0,
+      &format,
+      nullptr);
+
     if (FAILED(hr)) {
-      last_error_ = "Failed to get default audio endpoint";
-      return;
-    }
-
-    ComPtr<IAudioClient> audio_client;
-    hr = device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, audio_client.put_void());
-    if (FAILED(hr)) {
-      last_error_ = "Failed to activate IAudioClient";
-      return;
-    }
-
-    WAVEFORMATEX* mix_format = nullptr;
-    hr = audio_client->GetMixFormat(&mix_format);
-    if (FAILED(hr) || !mix_format) {
-      last_error_ = "Failed to get mix format";
-      return;
-    }
-
-    // 100ms buffer in 100ns units
-    REFERENCE_TIME hnsBufferDuration = 1000000;
-    DWORD streamFlags = AUDCLNT_STREAMFLAGS_LOOPBACK;
-
-    hr = audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED, streamFlags, hnsBufferDuration, 0, mix_format, nullptr);
-    if (FAILED(hr)) {
-      CoTaskMemFree(mix_format);
-      last_error_ = "Failed to initialize audio client with loopback";
+      char buf[64];
+      std::snprintf(buf, sizeof(buf), "wasapi-init-0x%08lX", static_cast<unsigned long>(hr));
+      last_error_ = buf;
+      signal_start(false);
       return;
     }
 
     ComPtr<IAudioCaptureClient> capture_client;
-    hr = audio_client->GetService(IID_PPV_ARGS(&capture_client));
+    hr = audio_client->GetService(__uuidof(IAudioCaptureClient), capture_client.put_void());
     if (FAILED(hr)) {
-      CoTaskMemFree(mix_format);
-      last_error_ = "Failed to get audio capture client";
+      last_error_ = "wasapi-capture-service";
+      signal_start(false);
       return;
     }
 
     hr = audio_client->Start();
     if (FAILED(hr)) {
-      CoTaskMemFree(mix_format);
-      last_error_ = "Failed to start audio client";
+      last_error_ = "wasapi-start-failed";
+      signal_start(false);
       return;
     }
+
+    signal_start(true);
 
     std::vector<float> pcm_buffer;
     pcm_buffer.reserve(4096);
@@ -180,54 +325,38 @@ private:
       BYTE* data = nullptr;
       UINT32 num_frames = 0;
       DWORD flags = 0;
-
       hr = capture_client->GetBuffer(&data, &num_frames, &flags, nullptr, nullptr);
-      if (SUCCEEDED(hr)) {
-        pcm_buffer.resize(num_frames);
+      if (FAILED(hr)) break;
 
-        if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
-          std::fill(pcm_buffer.begin(), pcm_buffer.end(), 0.0f);
-        } else {
-          const float* src = reinterpret_cast<const float*>(data);
-          WORD channels = mix_format->nChannels;
-          if (mix_format->wFormatTag == WAVE_FORMAT_IEEE_FLOAT ||
-             (mix_format->wFormatTag == WAVE_FORMAT_EXTENSIBLE && mix_format->wBitsPerSample == 32)) {
-            // Downmix to mono float32
-            for (UINT32 i = 0; i < num_frames; ++i) {
-              float sum = 0.0f;
-              for (WORD c = 0; c < channels; ++c) {
-                sum += src[i * channels + c];
-              }
-              pcm_buffer[i] = sum / static_cast<float>(channels);
-            }
-          } else if (mix_format->wBitsPerSample == 16) {
-            // 16-bit PCM to float32
-            const int16_t* src16 = reinterpret_cast<const int16_t*>(data);
-            for (UINT32 i = 0; i < num_frames; ++i) {
-              float sum = 0.0f;
-              for (WORD c = 0; c < channels; ++c) {
-                sum += static_cast<float>(src16[i * channels + c]) / 32768.0f;
-              }
-              pcm_buffer[i] = sum / static_cast<float>(channels);
-            }
-          } else {
-            std::fill(pcm_buffer.begin(), pcm_buffer.end(), 0.0f);
+      pcm_buffer.resize(num_frames);
+      if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
+        std::fill(pcm_buffer.begin(), pcm_buffer.end(), 0.0f);
+      } else if (data) {
+        const int16_t* src16 = reinterpret_cast<const int16_t*>(data);
+        const WORD channels = format.nChannels;
+        for (UINT32 i = 0; i < num_frames; ++i) {
+          float sum = 0.0f;
+          for (WORD c = 0; c < channels; ++c) {
+            sum += static_cast<float>(src16[i * channels + c]) / 32768.0f;
           }
+          pcm_buffer[i] = sum / static_cast<float>(channels > 0 ? channels : 1);
         }
-
-        if (callback_ && !pcm_buffer.empty()) {
-          callback_(pcm_buffer.data(), static_cast<uint32_t>(pcm_buffer.size()));
-        }
-
-        capture_client->ReleaseBuffer(num_frames);
+      } else {
+        std::fill(pcm_buffer.begin(), pcm_buffer.end(), 0.0f);
       }
+
+      if (callback_ && !pcm_buffer.empty()) {
+        callback_(pcm_buffer.data(), static_cast<uint32_t>(pcm_buffer.size()));
+      }
+      capture_client->ReleaseBuffer(num_frames);
     }
 
     audio_client->Stop();
-    CoTaskMemFree(mix_format);
   }
 
   std::atomic<bool> is_running_{false};
+  std::atomic<bool> start_ok_{false};
+  HANDLE start_event_{nullptr};
   std::thread worker_thread_;
   AudioCallback callback_;
   uint32_t target_sr_{48000};
@@ -260,27 +389,29 @@ std::vector<AudioProcessInfo> LoopbackSession::list_audio_processes() {
   std::unordered_set<uint32_t> seen_pids;
 
   HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-  bool co_inited = SUCCEEDED(hr);
+  bool co_inited = SUCCEEDED(hr) || hr == S_FALSE;
 
   ComPtr<IMMDeviceEnumerator> enumerator;
-  hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator));
+  hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+    __uuidof(IMMDeviceEnumerator), enumerator.put_void());
   if (SUCCEEDED(hr)) {
     ComPtr<IMMDevice> device;
-    hr = enumerator->GetDefaultAudioEndpoint(eRender, eMultimedia, &device);
+    hr = enumerator->GetDefaultAudioEndpoint(eRender, eMultimedia, device.GetAddressOf());
     if (SUCCEEDED(hr)) {
       ComPtr<IAudioSessionManager2> session_manager;
       hr = device->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr, session_manager.put_void());
       if (SUCCEEDED(hr)) {
         ComPtr<IAudioSessionEnumerator> session_enum;
-        hr = session_manager->GetSessionEnumerator(&session_enum);
+        hr = session_manager->GetSessionEnumerator(session_enum.GetAddressOf());
         if (SUCCEEDED(hr)) {
           int count = 0;
           session_enum->GetCount(&count);
           for (int i = 0; i < count; ++i) {
             ComPtr<IAudioSessionControl> control;
-            if (SUCCEEDED(session_enum->GetSession(i, &control))) {
+            if (SUCCEEDED(session_enum->GetSession(i, control.GetAddressOf()))) {
               ComPtr<IAudioSessionControl2> control2;
-              if (SUCCEEDED(control->QueryInterface(__uuidof(IAudioSessionControl2), control2.put_void()))) {
+              if (SUCCEEDED(control->QueryInterface(
+                    __uuidof(IAudioSessionControl2), control2.put_void()))) {
                 DWORD pid = 0;
                 if (SUCCEEDED(control2->GetProcessId(&pid)) && pid > 0) {
                   if (seen_pids.find(pid) == seen_pids.end()) {
@@ -303,10 +434,7 @@ std::vector<AudioProcessInfo> LoopbackSession::list_audio_processes() {
     }
   }
 
-  if (co_inited) {
-    CoUninitialize();
-  }
-
+  if (co_inited) CoUninitialize();
   return result;
 }
 

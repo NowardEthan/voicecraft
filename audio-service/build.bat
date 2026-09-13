@@ -47,8 +47,8 @@ if not errorlevel 1 (
     echo Compilando com cl.exe ^(MSVC^)...
     pushd build
     cl /nologo %COMMON% /Fe:voicecraft-audio.exe /Fo: ^
-        ..\src\main.cpp ..\src\capture.cpp ^
-        /link winmm.lib ole32.lib
+        ..\src\main.cpp ..\src\capture.cpp ..\src\loopback_wasapi.cpp ^
+        /link winmm.lib ole32.lib mmdevapi.lib psapi.lib
     set RC=!errorlevel!
     popd
     if not "!RC!"=="0" exit /b !RC!
@@ -63,7 +63,7 @@ if not errorlevel 1 (
     g++ -std=c++17 -O2 -I src -I third_party\miniaudio_repo ^
         -DMA_NO_RESOURCE_MANAGEMENT=1 -DMA_NO_LOGGING=1 -DMA_NO_JSON=1 -DMA_NO_DATA_STRUCTURES=1 ^
         src\main.cpp src\capture.cpp src\loopback_wasapi.cpp -o build\voicecraft-audio.exe ^
-        -lwinmm -lole32 -lpsapi -static
+        -lwinmm -lole32 -lpsapi -lmmdevapi -static
     if errorlevel 1 exit /b 1
     echo.
     echo OK: build\voicecraft-audio.exe

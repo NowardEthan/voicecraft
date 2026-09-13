@@ -78,6 +78,10 @@
       {
         "from": "public/app-icon.png",
         "to": "app-icon.png"
+      },
+      {
+        "from": "resources/bin/voicecraft-audio.exe",
+        "to": "voicecraft-audio.exe"
       }
     ],
     "win": {

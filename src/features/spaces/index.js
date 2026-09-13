@@ -89,6 +89,12 @@ export {
   canSpacePermission,
   fullPerms,
   emptyPerms,
+  roleRank,
+  memberTopRank,
+  actorRoleRank,
+  sortRolesByRank,
+  roleAssignCapabilities,
+  attachRolesToMembers,
 } from './model/spaceRoles'
 export {
   fieldFontStyle,

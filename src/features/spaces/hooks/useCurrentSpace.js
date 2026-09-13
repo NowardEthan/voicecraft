@@ -18,7 +18,8 @@ import { flashToast } from '../../../shared/utils/toast'
 import { serializeSpaceIcon } from '../model/spaceIcons'
 import { markSpaceJoined, markSpaceLeft, markSpaceVisited } from '../model/spacePreferences'
 import { clearSpaceCover, setSpaceCover } from '../model/spaceCover'
-import { canSpacePermission, fullPerms, normalizePerms } from '../model/spaceRoles'
+import { canSpacePermission, fullPerms, normalizePerms, attachRolesToMembers } from '../model/spaceRoles'
+import { subscribeSpaceRoles } from '../model/spaceRolesStore'
 
 // Map a UI purpose key to the backend's binary 'voice' | 'text' discriminator.
 // All non-voice purposes ride on type='text' plus an explicit `purpose` field.
@@ -102,6 +103,7 @@ export function useCurrentSpace(selfProfile = null) {
   const sig = getSharedSignaling()
   const [currentSpace, setCurrentSpace] = useState(null)
   const [spaceMembers, setSpaceMembers] = useState([])
+  const [spaceRoles, setSpaceRoles] = useState([])
   const [optimisticFirstRoom, setOptimisticFirstRoom] = useState(null)
   const [switchingSpaceId, setSwitchingSpaceId] = useState(null)
 
@@ -433,9 +435,18 @@ export function useCurrentSpace(selfProfile = null) {
     }
   }, [sig])
 
+  // Live role definitions for hierarchy + badges.
+  useEffect(() => {
+    if (!currentSpace?.id) {
+      setSpaceRoles([])
+      return undefined
+    }
+    return subscribeSpaceRoles(currentSpace.id, setSpaceRoles)
+  }, [currentSpace?.id])
+
   const enrichedMembers = useMemo(
-    () => applySelfProfile(spaceMembers, selfProfile),
-    [spaceMembers, selfProfile],
+    () => attachRolesToMembers(applySelfProfile(spaceMembers, selfProfile), spaceRoles),
+    [spaceMembers, selfProfile, spaceRoles],
   )
 
   const selfPerms = useMemo(() => {
@@ -454,6 +465,7 @@ export function useCurrentSpace(selfProfile = null) {
   return {
     currentSpace,
     spaceMembers: enrichedMembers,
+    spaceRoles,
     optimisticFirstRoom,
     setOptimisticFirstRoom,
     switching: !!switchingSpaceId,

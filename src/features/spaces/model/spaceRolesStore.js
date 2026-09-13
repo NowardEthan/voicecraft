@@ -15,11 +15,16 @@ import {
 import { auth, db, VC } from '../../../shared/firebase/app'
 import {
   ROLE_COLOR_PRESETS,
+  applyRoleToggle,
+  actorRoleRank,
   canSpacePermission,
   emptyPerms,
   mergeRolePerms,
   normalizePerms,
   normalizeRole,
+  roleAssignCapabilities,
+  roleRank,
+  sortRolesByRank,
 } from './spaceRoles'
 
 function rolesCol(spaceId) {
@@ -48,9 +53,7 @@ export function subscribeSpaceRoles(spaceId, onChange) {
     return () => {}
   }
   return onSnapshot(rolesCol(spaceId), (snap) => {
-    const list = snap.docs
-      .map((d) => normalizeRole(d.id, d.data()))
-      .sort((a, b) => (a.position - b.position) || a.name.localeCompare(b.name))
+    const list = sortRolesByRank(snap.docs.map((d) => normalizeRole(d.id, d.data())))
     onChange?.(list)
   }, () => onChange?.([]))
 }
@@ -58,9 +61,7 @@ export function subscribeSpaceRoles(spaceId, onChange) {
 export async function loadSpaceRoles(spaceId) {
   if (!spaceId) return []
   const snap = await getDocs(rolesCol(spaceId))
-  return snap.docs
-    .map((d) => normalizeRole(d.id, d.data()))
-    .sort((a, b) => (a.position - b.position) || a.name.localeCompare(b.name))
+  return sortRolesByRank(snap.docs.map((d) => normalizeRole(d.id, d.data())))
 }
 
 async function assertCreator(spaceId) {
@@ -78,12 +79,17 @@ export async function createSpaceRole(spaceId, { name, color, permissions, posit
   const { me } = await assertCreator(spaceId)
   const trimmed = String(name || '').trim().slice(0, 32)
   if (!trimmed) throw new Error('Digite um nome pro cargo')
+  const existing = await loadSpaceRoles(spaceId)
+  // New cargos start at the bottom of the hierarchy (lowest power).
+  const lowest = existing.length
+    ? Math.min(...existing.map((r) => roleRank(r)))
+    : 100
   const ref = doc(rolesCol(spaceId))
   const payload = {
     name: trimmed,
     color: ROLE_COLOR_PRESETS.includes(color) ? color : (color || ROLE_COLOR_PRESETS[0]),
     permissions: normalizePerms(permissions),
-    position: typeof position === 'number' ? position : Date.now(),
+    position: typeof position === 'number' ? position : lowest - 100,
     createdAt: Date.now(),
     createdBy: me,
   }
@@ -105,8 +111,25 @@ export async function updateSpaceRole(spaceId, roleId, patch = {}) {
   if (typeof patch.position === 'number') next.position = patch.position
   if (Object.keys(next).length === 0) return
   await updateDoc(roleRef(spaceId, roleId), next)
-  // Refresh denormalized perms for members that hold this role.
   await recomputeMembersWithRole(spaceId, roleId)
+}
+
+/** Move a role one step up/down in the hierarchy (creator only). */
+export async function moveSpaceRole(spaceId, roleId, direction = 'up') {
+  await assertCreator(spaceId)
+  const roles = await loadSpaceRoles(spaceId)
+  const idx = roles.findIndex((r) => r.id === roleId)
+  if (idx < 0) throw new Error('Cargo inválido')
+  // roles are sorted highest-first; "up" = more power = toward index 0
+  const swapWith = direction === 'up' ? idx - 1 : idx + 1
+  if (swapWith < 0 || swapWith >= roles.length) return roles[idx]
+  const a = roles[idx]
+  const b = roles[swapWith]
+  const batch = writeBatch(db)
+  batch.update(roleRef(spaceId, a.id), { position: b.position })
+  batch.update(roleRef(spaceId, b.id), { position: a.position })
+  await batch.commit()
+  return normalizeRole(a.id, { ...a, position: b.position })
 }
 
 export async function deleteSpaceRole(spaceId, roleId) {
@@ -143,13 +166,20 @@ async function recomputeMembersWithRole(spaceId, roleId) {
     const roleIds = Array.isArray(d.data()?.roleIds) ? d.data().roleIds : []
     if (!roleIds.includes(roleId)) continue
     const held = roleIds.map((id) => byId[id]).filter(Boolean)
-    batch.update(d.ref, { perms: mergeRolePerms(held) })
+    batch.update(d.ref, {
+      perms: mergeRolePerms(held),
+    })
     n += 1
   }
   if (n > 0) await batch.commit()
 }
 
-export async function setMemberRoleIds(spaceId, targetUid, roleIds, { actorUid, actorPerms, space } = {}) {
+export async function setMemberRoleIds(spaceId, targetUid, roleIds, {
+  actorUid,
+  actorPerms,
+  actorRoleIds,
+  space,
+} = {}) {
   const me = actorUid || auth.currentUser?.uid
   if (!me || !spaceId || !targetUid) throw new Error('Dados inválidos')
 
@@ -166,13 +196,49 @@ export async function setMemberRoleIds(spaceId, targetUid, roleIds, { actorUid, 
 
   const roles = await loadSpaceRoles(spaceId)
   const byId = Object.fromEntries(roles.map((r) => [r.id, r]))
+
+  // Resolve actor's current roles if not provided.
+  let myRoleIds = Array.isArray(actorRoleIds) ? actorRoleIds : null
+  if (!myRoleIds) {
+    const meSnap = await getDoc(memberRef(spaceId, me))
+    myRoleIds = Array.isArray(meSnap.data()?.roleIds) ? meSnap.data().roleIds : []
+  }
+
+  const targetSnap = await getDoc(memberRef(spaceId, targetUid))
+  const currentIds = Array.isArray(targetSnap.data()?.roleIds) ? targetSnap.data().roleIds : []
+
+  const caps = roleAssignCapabilities({
+    space: spaceData,
+    actorUid: me,
+    actorRoleIds: myRoleIds,
+    targetUid,
+    targetRoleIds: currentIds,
+    roles,
+  })
+  if (!caps.canManageTarget) {
+    throw new Error('Não pode alterar cargos de quem tem nível igual ou maior que o seu')
+  }
+
+  const lockedIds = new Set(caps.lockedHeld.map((r) => r.id))
   const unique = []
   const seen = new Set()
+  // Preserve locked (≥ actor) roles the target already has.
+  for (const id of lockedIds) {
+    if (!seen.has(id) && byId[id]) {
+      seen.add(id)
+      unique.push(id)
+    }
+  }
   for (const id of roleIds || []) {
     if (!id || seen.has(id) || !byId[id]) continue
+    if (roleRank(byId[id]) >= caps.actorRank) {
+      throw new Error(`Não pode atribuir "${byId[id].name}" — nível igual ou acima do seu`)
+    }
     seen.add(id)
     unique.push(id)
   }
+
+  // Also reject removing a locked role by omission (already preserved above).
   const held = unique.map((id) => byId[id])
   const perms = mergeRolePerms(held)
 
@@ -184,10 +250,44 @@ export async function setMemberRoleIds(spaceId, targetUid, roleIds, { actorUid, 
   return { roleIds: unique, perms }
 }
 
+/** Toggle a single role with hierarchy checks (preferred UI path). */
+export async function toggleMemberRole(spaceId, targetUid, roleId, opts = {}) {
+  const me = opts.actorUid || auth.currentUser?.uid
+  const spaceSnap = opts.space ? null : await getDoc(spaceRef(spaceId))
+  const spaceData = opts.space || (spaceSnap?.exists() ? { id: spaceId, ...spaceSnap.data() } : null)
+  if (!spaceData) throw new Error('Space não encontrado')
+
+  let myRoleIds = Array.isArray(opts.actorRoleIds) ? opts.actorRoleIds : null
+  if (!myRoleIds) {
+    const meSnap = await getDoc(memberRef(spaceId, me))
+    myRoleIds = Array.isArray(meSnap.data()?.roleIds) ? meSnap.data().roleIds : []
+  }
+  const targetSnap = await getDoc(memberRef(spaceId, targetUid))
+  const currentIds = Array.isArray(targetSnap.data()?.roleIds) ? targetSnap.data().roleIds : []
+  const roles = await loadSpaceRoles(spaceId)
+
+  const nextIds = applyRoleToggle({
+    space: spaceData,
+    actorUid: me,
+    actorRoleIds: myRoleIds,
+    targetUid,
+    currentRoleIds: currentIds,
+    roles,
+    toggleRoleId: roleId,
+  })
+
+  return setMemberRoleIds(spaceId, targetUid, nextIds, {
+    ...opts,
+    actorUid: me,
+    actorRoleIds: myRoleIds,
+    space: spaceData,
+  })
+}
+
 export async function loadMemberPerms(spaceId, uid) {
   if (!spaceId || !uid) return emptyPerms()
   const snap = await getDoc(memberRef(spaceId, uid))
   return normalizePerms(snap.exists() ? snap.data()?.perms : null)
 }
 
-export { emptyPerms, normalizePerms }
+export { emptyPerms, normalizePerms, actorRoleRank }

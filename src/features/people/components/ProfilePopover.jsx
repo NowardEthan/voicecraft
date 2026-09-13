@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   X, Copy, Check, UserPlus, Crown, Gamepad2, MessageCircle,
   BookOpen, Music, Radio, Send, ExternalLink, MoreHorizontal,
-  Calendar, Users, Moon, Mic, Quote,
+  Calendar, Users, Moon, Mic, Quote, Shield,
 } from 'lucide-react'
 import { SpaceCoverLayer } from '../../spaces/components/SpaceCoverLayer'
 import { PersonAvatar } from './PersonAvatar'
@@ -43,6 +43,7 @@ export default function ProfilePopover({
   canAssignRoles = false,
   canKick = false,
   selfPerms = null,
+  selfMember = null,
   currentUserId = null,
   currentUserProfile = null,
   onClose = PLACEHOLDER,
@@ -349,6 +350,9 @@ export default function ProfilePopover({
                 {subjectIsCreator && (
                   <SolidBadge label="Criador" color="#e8b84a" icon={Crown} />
                 )}
+                {(member?.roles || []).map((role) => (
+                  <SolidBadge key={role.id} label={role.name} color={role.color || accent} icon={Shield} />
+                ))}
                 <SolidBadge label="Lunar" color={accent} icon={Moon} />
                 {(inRoom && purposeOfRoom?.type === 'voice') && (
                   <SolidBadge label="Em voz" color={accent} icon={Mic} />
@@ -370,6 +374,7 @@ export default function ProfilePopover({
             currentUserId={currentUserId}
             canAssign={canAssignRoles}
             actorPerms={selfPerms}
+            actorRoleIds={selfMember?.roleIds || []}
           />
 
           {canKick && !isSelf && !subjectIsCreator && (

@@ -16,7 +16,8 @@ export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
   const screens = sources.filter((s) => s.isScreen)
   const windows = sources.filter((s) => !s.isScreen)
   const [audioMode, setAudioMode] = useState('off') // 'off' | 'app' | 'system'
-  const [usingHeadphones, setUsingHeadphones] = useState(true)
+  // Default off: system loopback re-captures call playback → echo when remotes are audible.
+  const [usingHeadphones, setUsingHeadphones] = useState(false)
   const [processes, setProcesses] = useState([])
   const [selectedPid, setSelectedPid] = useState('')
   const [processQuery, setProcessQuery] = useState('')
@@ -55,13 +56,19 @@ export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
   }, [processes, processQuery])
 
   const withSystemAudio = audioMode === 'system'
-  const pick = (sourceId) => onPick?.(sourceId, {
-    // Desktop loopback only for full system audio. App mode uses WASAPI by PID.
-    withAudio: withSystemAudio,
-    headphones: audioMode === 'app' || (withSystemAudio && usingHeadphones),
-    audioMode,
-    appPid: audioMode === 'app' && selectedPid ? parseInt(selectedPid, 10) : null,
-  })
+  const pick = (sourceId) => {
+    if (audioMode === 'app' && !selectedPid) {
+      // Keep picker open — user must pick an app first.
+      return
+    }
+    onPick?.(sourceId, {
+      // Desktop loopback only for full system audio. App mode uses WASAPI by PID.
+      withAudio: withSystemAudio,
+      headphones: audioMode === 'app' || (withSystemAudio && usingHeadphones),
+      audioMode,
+      appPid: audioMode === 'app' && selectedPid ? parseInt(selectedPid, 10) : null,
+    })
+  }
 
   return (
     <ModalShell open={open} onClose={onClose} labelledBy="share-title" maxWidth="lg">
@@ -130,7 +137,7 @@ export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
               {audioMode === 'app' && (
                 <div className="pl-6 space-y-2 pt-1">
                   <p className="text-[11.5px] text-muted leading-snug">
-                    Só apps com janela aberta. Busque pelo nome do jogo ou janela.
+                    1) Clique no app que está tocando som · 2) Depois escolha a tela/janela abaixo para começar.
                   </p>
                   <div className="relative max-w-md">
                     <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />
@@ -166,15 +173,21 @@ export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
                           type="button"
                           role="option"
                           aria-selected={selected}
-                          onClick={() => setSelectedPid(String(p.pid))}
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            setSelectedPid(String(p.pid))
+                          }}
                           className={
                             'w-full text-left px-2.5 py-1.5 transition-colors ' +
                             (selected
-                              ? 'bg-accent/15 text-strong'
+                              ? 'bg-accent/15 text-strong ring-1 ring-inset ring-accent/40'
                               : 'text-strong hover:bg-white/[0.06]')
                           }
                         >
-                          <span className="block text-[12px] font-medium truncate">{primary}</span>
+                          <span className="block text-[12px] font-medium truncate">
+                            {selected ? '✓ ' : ''}{primary}
+                          </span>
                           {secondary && (
                             <span className="block text-[10.5px] text-muted truncate">{secondary}</span>
                           )}
@@ -182,6 +195,11 @@ export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
                       )
                     })}
                   </div>
+                  {selectedPid && (
+                    <p className="text-[11px] text-accent leading-snug">
+                      App selecionado. Agora clique numa tela ou janela abaixo para compartilhar.
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -205,7 +223,8 @@ export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
               {audioMode === 'system' && (
                 <div className="pl-6 space-y-2 pt-1">
                   <p className="text-[11.5px] text-muted leading-snug">
-                    Captura o som de todas as janelas do Windows. Sem fones, a call fica muda no seu PC pra não gerar eco.
+                    Captura o som de todas as janelas. Pode gerar eco se a call tocar no mesmo dispositivo —
+                    prefira “áudio do aplicativo” acima.
                   </p>
                   <label className="flex items-center gap-2 cursor-pointer select-none">
                     <input
@@ -216,7 +235,7 @@ export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
                     />
                     <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-strong">
                       <Headphones size={12} />
-                      Estou de fones de ouvido (manter voz da call ativa)
+                      Ouvir a call mesmo assim (pode dar eco)
                     </span>
                   </label>
                 </div>

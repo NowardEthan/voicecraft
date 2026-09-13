@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Shield } from 'lucide-react'
+import { Plus, Trash2, Shield, ChevronUp, ChevronDown } from 'lucide-react'
 import {
   ROLE_COLOR_PRESETS,
   SPACE_PERMISSIONS,
@@ -8,13 +8,15 @@ import {
 import {
   createSpaceRole,
   deleteSpaceRole,
+  moveSpaceRole,
   subscribeSpaceRoles,
   updateSpaceRole,
 } from '../model/spaceRolesStore'
 import { flashToast } from '../../../shared/utils/toast'
 
 /**
- * Creator-only editor for Space role definitions.
+ * Creator-only editor for Space role definitions (with hierarchy).
+ * Higher in the list = more power. Assigners can only touch cargos below their level.
  */
 export function SpaceRolesPanel({ spaceId, enabled = true }) {
   const [roles, setRoles] = useState([])
@@ -112,13 +114,25 @@ export function SpaceRolesPanel({ spaceId, enabled = true }) {
     }
   }
 
+  const move = async (roleId, direction) => {
+    if (busy) return
+    setBusy(true)
+    try {
+      await moveSpaceRole(spaceId, roleId, direction)
+    } catch (err) {
+      flashToast(err?.message || 'Não deu pra reordenar')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <SectionLabel>Cargos deste Space</SectionLabel>
           <p className="text-[12px] text-muted -mt-1.5 mb-1 leading-snug">
-            Defina o que cada cargo pode fazer. Atribua no perfil de cada pessoa.
+            Hierarquia: o de cima tem mais poder. Ninguém atribui cargo no próprio nível ou acima.
           </p>
         </div>
         {!draft && (
@@ -138,12 +152,14 @@ export function SpaceRolesPanel({ spaceId, enabled = true }) {
         <div className="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center">
           <Shield size={20} className="mx-auto text-muted mb-2" />
           <p className="text-[13px] text-strong font-medium">Nenhum cargo ainda</p>
-          <p className="text-[12px] text-muted mt-1">Crie Moderador, Staff, VIP… do jeito que quiser.</p>
+          <p className="text-[12px] text-muted mt-1">
+            Crie Guardião, Mentor, Veterano… e ajuste o nível com as setas.
+          </p>
         </div>
       )}
 
       <ul className="space-y-2">
-        {roles.map((role) => (
+        {roles.map((role, index) => (
           <li
             key={role.id}
             className={[
@@ -152,13 +168,38 @@ export function SpaceRolesPanel({ spaceId, enabled = true }) {
             ].join(' ')}
           >
             <div className="flex items-center gap-2.5">
+              <div className="flex flex-col gap-0.5 shrink-0">
+                <button
+                  type="button"
+                  disabled={busy || index === 0}
+                  onClick={() => move(role.id, 'up')}
+                  className="w-6 h-5 rounded text-muted hover:text-strong hover:bg-white/[0.06] disabled:opacity-25 inline-flex items-center justify-center"
+                  title="Subir na hierarquia"
+                  aria-label={`Subir ${role.name}`}
+                >
+                  <ChevronUp size={14} />
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || index === roles.length - 1}
+                  onClick={() => move(role.id, 'down')}
+                  className="w-6 h-5 rounded text-muted hover:text-strong hover:bg-white/[0.06] disabled:opacity-25 inline-flex items-center justify-center"
+                  title="Descer na hierarquia"
+                  aria-label={`Descer ${role.name}`}
+                >
+                  <ChevronDown size={14} />
+                </button>
+              </div>
               <span
                 className="w-3 h-3 rounded-full shrink-0"
                 style={{ background: role.color }}
               />
-              <p className="flex-1 min-w-0 text-[13.5px] font-semibold text-strong truncate">
-                {role.name}
-              </p>
+              <div className="flex-1 min-w-0">
+                <p className="text-[13.5px] font-semibold text-strong truncate">
+                  {role.name}
+                </p>
+                <p className="text-[10px] text-muted">Nível {roles.length - index}</p>
+              </div>
               <button
                 type="button"
                 onClick={() => startEdit(role)}
@@ -176,7 +217,7 @@ export function SpaceRolesPanel({ spaceId, enabled = true }) {
                 <Trash2 size={13} />
               </button>
             </div>
-            <p className="mt-1.5 text-[11px] text-muted leading-snug">
+            <p className="mt-1.5 text-[11px] text-muted leading-snug pl-8">
               {SPACE_PERMISSIONS.filter((p) => role.permissions?.[p.id]).map((p) => p.label).join(' · ')
                 || 'Sem permissões'}
             </p>

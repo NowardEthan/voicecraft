@@ -75,6 +75,10 @@ export function useProfilePopover() {
       && prev.member === data.member
       && prev.space === data.space
       && prev.isCreator === data.isCreator
+      && prev.canAssignRoles === data.canAssignRoles
+      && prev.canKick === data.canKick
+      && prev.selfPerms === data.selfPerms
+      && prev.selfMember === data.selfMember
     ) {
       return
     }

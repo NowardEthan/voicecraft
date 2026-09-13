@@ -179,6 +179,18 @@ export default function PersonCard({
               criador
             </span>
           )}
+          {!isCreator && member.topRole && (
+            <span
+              className="inline-flex items-center px-1.5 py-px rounded text-[9px] font-bold uppercase tracking-wider shrink-0 truncate max-w-[7rem]"
+              title={member.topRole.name}
+              style={{
+                color: member.topRole.color,
+                background: `${member.topRole.color}22`,
+              }}
+            >
+              {member.topRole.name}
+            </span>
+          )}
           <UserTagChips tags={member.tags} size="xs" />
         </div>
         {!hideStatus && (
