@@ -56,6 +56,7 @@ service cloud.firestore {
     // Creator / edit_space: any fields.
     // Members without edit_space: only memberIds / roomCount (join/leave).
     // manage_events holders may also touch events.
+    // mod_chat holders may update chatAutomation only.
     function spaceUpdateAllowed(spaceId) {
       return signedIn() && (
         request.auth.uid == resource.data.createdBy
@@ -63,6 +64,10 @@ service cloud.firestore {
         || (
           memberHasPerm(spaceId, 'manage_events')
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['events'])
+        )
+        || (
+          canModChat(spaceId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['chatAutomation'])
         )
         || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberIds', 'roomCount'])
       );
@@ -143,15 +148,34 @@ service cloud.firestore {
 
       match /rooms/{roomId} {
         allow read: if signedIn();
-        allow create, update, delete: if canManageRooms(spaceId);
+        allow create, delete: if canManageRooms(spaceId);
+        allow update: if canManageRooms(spaceId)
+          || (
+            canModChat(spaceId)
+            && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['chatLocked', 'slowModeSeconds', 'lobby', 'rules'])
+          );
 
         match /messages/{messageId} {
           allow read: if signedIn();
-          allow create: if signedIn();
+          allow create: if signedIn() && (
+            canModChat(spaceId)
+            || get(/databases/$(database)/documents/vc_spaces/$(spaceId)/rooms/$(roomId)).data.chatLocked != true
+            || (
+              request.resource.data.kind == 'lobby_event'
+              && request.resource.data.authorId == request.auth.uid
+              && get(/databases/$(database)/documents/vc_spaces/$(spaceId)/rooms/$(roomId)).data.lobby.enabled == true
+            )
+          );
           allow update, delete: if signedIn() && (
-            resource.data.userId == request.auth.uid
+            resource.data.authorId == request.auth.uid
             || canModChat(spaceId)
           );
+        }
+
+        match /scheduled_announcements/{announceId} {
+          allow read: if signedIn() && canModChat(spaceId);
+          allow create, update, delete: if canModChat(spaceId);
         }
 
         match /peers/{peerId} {

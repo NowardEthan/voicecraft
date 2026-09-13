@@ -1,20 +1,45 @@
 /**
  * MessageList — scrollable Discord-style feed with grouping, date
- * dividers, unread marker and smart auto-scroll.
+ * dividers, unread marker, smart auto-scroll, mentions highlights and a
+ * typing indicator footer.
+ *
+ * Phase 3A — chat Discord-style additions:
+ *   - Typing indicator at the footer ("fulano está digitando…")
+ *   - mentionsMe / isReply / pinned passed to MessageBubble
+ *   - Animated fade-in classes use Tailwind's animate-* (not vc-anim-*)
+ *   - 3 quick emoji reactions on the action bar (handled by bubble)
  */
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { ArrowDown, MessageSquare } from 'lucide-react'
 import MessageBubble from './MessageBubble'
 import { colorFromId } from '../../features/spaces'
-import { resolveChatDensity } from './chatDensity'
+import { resolveChatDensity, normalizeChatDensity } from './chatDensity'
 import { getLastRead, setLastRead } from '../../features/notifications/unreadStore'
 
 const STICK_THRESHOLD_PX = 100
-const GROUP_BREAK_MS = 5 * 60 * 1000
 
 function isOwnMessage(m, currentUserId, currentUserName) {
   if (m?.authorId && currentUserId) return m.authorId === currentUserId
   return m?.direction === 'out' || m?.author === currentUserName
+}
+
+/** Detect if `text` contains an `@<handle>` mention that matches the
+ *  current user's handle or displayName. */
+function detectMentionMe(text, currentUserId, currentUserName, members) {
+  if (!text) return false
+  const me = members.find((m) => m.userId === currentUserId)
+    || (currentUserName ? { displayName: currentUserName } : null)
+  if (!me) return false
+  const handles = new Set()
+  if (me.handle) handles.add(me.handle.toLowerCase())
+  if (me.displayName) handles.add(me.displayName.toLowerCase())
+  if (currentUserId) handles.add(String(currentUserId).toLowerCase())
+  const re = /@([a-zA-Z0-9_.\-]{1,24})/g
+  let m
+  while ((m = re.exec(text))) {
+    if (handles.has(m[1].toLowerCase())) return true
+  }
+  return false
 }
 
 export function resolveChatAuthor(msg, members = [], currentUserId, currentUserName) {
@@ -69,20 +94,32 @@ export default function MessageList({
   onDelete,
   canModerate = false,
   members = [],
-  density = 'compacto',
+  density = 'confortavel',
+  pinnedIds = [],
+  onTogglePin,
+  onToggleLike,
+  quickReactions = ['👍', '❤️', '🔥'],
+  typingTracker = null,
+  allRooms = [],
+  onRoomMention,
+  jumpToId = null,
+  jumpTick = 0,
+  canPinAll = false,
 }) {
   const scrollerRef = useRef(null)
   const [unseen, setUnseen] = useState(0)
   const [stickToBottom, setStickToBottom] = useState(true)
   const [highlightId, setHighlightId] = useState(null)
   const [highlightTick, setHighlightTick] = useState(0)
+  const [typingState, setTypingState] = useState({ peers: [] })
   const highlightTimerRef = useRef(null)
   const lastLenRef = useRef(messages.length)
   const [lastReadTs] = useState(() => {
     const { spaceId, roomId } = parseRoomKey(roomKey)
     return getLastRead(currentUserId, spaceId, roomId).at || 0
   })
-  const dens = resolveChatDensity(density)
+  const densityKey = normalizeChatDensity(density)
+  const dens = resolveChatDensity(densityKey)
 
   const handleScroll = useCallback(() => {
     const el = scrollerRef.current
@@ -142,6 +179,11 @@ export default function MessageList({
     highlightTimerRef.current = window.setTimeout(() => setHighlightId(null), 2400)
   }, [])
 
+  useEffect(() => {
+    if (!jumpToId) return
+    jumpToMessage(jumpToId)
+  }, [jumpToId, jumpTick, jumpToMessage])
+
   useEffect(() => () => {
     if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current)
   }, [])
@@ -153,6 +195,12 @@ export default function MessageList({
     setUnseen(0)
     setStickToBottom(true)
   }, [])
+
+  /* Typing indicator subscription */
+  useEffect(() => {
+    if (!typingTracker) return undefined
+    return typingTracker.subscribe(setTypingState)
+  }, [typingTracker])
 
   const messagesById = useMemo(() => {
     const m = new Map()
@@ -166,17 +214,64 @@ export default function MessageList({
     const q = query.trim().toLowerCase()
     if (!q) return messages
     return messages.filter(m => {
-      if (m.kind === 'sys') return true
-      return String(m.text || '').toLowerCase().includes(q)
+      if (m.kind === 'sys' || m.kind === 'announce' || m.announce
+        || m.kind === 'lobby_event' || m.kind === 'lobby_welcome'
+        || m.lobbyEvent) {
+        return true
+      }
+      return String(m.text || m.announce?.title || m.announce?.body || '').toLowerCase().includes(q)
     })
   }, [messages, query])
+
+  const pinnedSet = useMemo(() => {
+    const fromProp = new Set(pinnedIds || [])
+    for (const m of messages || []) {
+      if (m?.pinned && m.id) fromProp.add(m.id)
+    }
+    return fromProp
+  }, [pinnedIds, messages])
+
+  /* Room-mention resolver (CONTRATO_FASE2). Builds a slug index once per
+   * rooms prop change so the markdown renderer can produce a
+   * clickable pill only when `#geral` actually maps to a room.       */
+  const roomIndex = useMemo(() => {
+    const idx = new Map()
+    const list = Array.isArray(allRooms) ? allRooms : []
+    for (const r of list) {
+      if (!r || !r.id || !r.name) continue
+      const slugBase = String(r.name).toLowerCase().replace(/[\s_]+/g, '-')
+      const idLower = String(r.id).toLowerCase()
+      const candidates = new Set([slugBase, idLower])
+      for (const k of candidates) {
+        if (k && !idx.has(k)) idx.set(k, r)
+      }
+    }
+    return idx
+  }, [allRooms])
+  const resolveRoom = useCallback((slug) => {
+    if (!slug || !roomIndex.size) return null
+    return roomIndex.get(String(slug).toLowerCase()) || null
+  }, [roomIndex])
 
   const rows = useMemo(() => {
     const groups = []
     for (let i = 0; i < filteredMessages.length; i++) {
       const m = filteredMessages[i]
-      if (m.kind === 'sys') {
-        groups.push({ kind: 'sys', message: m, key: m.id })
+      if (m.kind === 'sys' || m.kind === 'announce' || m.announce
+        || m.kind === 'lobby_event' || m.kind === 'lobby_welcome'
+        || m.lobbyEvent) {
+        const asAnnounce = m.kind === 'announce' || m.announce
+          || (m.kind === 'sys' && String(m.text || '').length > 60)
+        const kind = m.kind === 'lobby_welcome'
+          ? 'lobby_welcome'
+          : (m.kind === 'lobby_event' || m.lobbyEvent)
+            ? 'lobby_event'
+            : asAnnounce ? 'announce' : 'sys'
+        groups.push({
+          kind,
+          message: m,
+          key: m.id,
+        })
         continue
       }
       const isMine = isOwnMessage(m, currentUserId, currentUserName)
@@ -188,7 +283,7 @@ export default function MessageList({
         && !m.replyToId
         && isOwnMessage(prev, currentUserId, currentUserName) === isMine
         && ((isMine ? m.author : prev.author) || 'peer') === ((isMine ? prev.author : m.author) || 'peer')
-        && (m.ts - prev.ts) < GROUP_BREAK_MS
+        && (m.ts - prev.ts) < dens.groupBreakMs
       const authorKey = isMine ? '__me__' : (m.authorId || m.author || 'peer')
       if (sameAsPrev && groups.length > 0 && groups[groups.length - 1].kind === 'msg') {
         groups[groups.length - 1].items.push(m)
@@ -208,7 +303,10 @@ export default function MessageList({
     let lastDay = null
     let unreadInserted = false
     for (const g of groups) {
-      const first = g.kind === 'sys' ? g.message : g.items[0]
+      const first = (g.kind === 'sys' || g.kind === 'announce'
+        || g.kind === 'lobby_event' || g.kind === 'lobby_welcome')
+        ? g.message
+        : g.items[0]
       const ts = first?.ts || 0
       const day = dayKey(ts)
       if (day !== lastDay) {
@@ -222,10 +320,39 @@ export default function MessageList({
       out.push(g)
     }
     return out
-  }, [filteredMessages, currentUserName, currentUserId, authorColors, lastReadTs])
+  }, [filteredMessages, currentUserName, currentUserId, authorColors, lastReadTs, dens.groupBreakMs])
+
+  const typingText = useMemo(() => {
+    const peers = typingState?.peers || []
+    if (peers.length === 0) return ''
+    if (peers.length === 1) return `${peers[0]} está digitando`
+    if (peers.length === 2) return `${peers[0]} e ${peers[1]} estão digitando`
+    return 'várias pessoas estão digitando'
+  }, [typingState])
+
+/* Split the typing-text into `<strong>name</strong> <em>rest…</em>` so
+ * the label itself feels premium (bold who + italic action). Falls back
+ * to plain text for the "várias pessoas" case.                       */
+function renderTypingLabel(text) {
+  if (!text) return null
+  const m = /^(.+?)\s+(está digitando|estão digitando)$/.exec(text)
+  if (m) {
+    return (
+      <span>
+        <strong>{m[1]}</strong>{' '}
+        <em style={{ fontStyle: 'italic', opacity: 0.85 }}>{m[2]}</em>
+      </span>
+    )
+  }
+  return <span>{text}</span>
+}
 
   return (
-    <div className="relative flex-1 min-h-0 overflow-hidden">
+    <div
+      className="relative flex-1 min-h-0 overflow-hidden"
+      data-chat-density={densityKey}
+      style={dens.vars}
+    >
       <div
         ref={scrollerRef}
         onScroll={handleScroll}
@@ -243,11 +370,26 @@ export default function MessageList({
             if (g.kind === 'unread') {
               return <UnreadDivider key={g.key} className={dens.dividerPy} />
             }
-            if (g.kind === 'sys') {
-              return <MessageBubble key={g.key} msg={g.message} isMine={false} showHeader={false} density={density} />
+            if (g.kind === 'sys' || g.kind === 'announce'
+              || g.kind === 'lobby_event' || g.kind === 'lobby_welcome') {
+              return (
+                <div key={g.key} className={dens.group}>
+                  <MessageBubble
+                    msg={g.message}
+                    isMine={false}
+                    showHeader={false}
+                    density={densityKey}
+                    resolveRoom={resolveRoom}
+                    currentUserId={currentUserId}
+                    onToggleLike={g.kind === 'announce' ? onToggleLike : null}
+                    onToggleReaction={g.kind === 'announce' ? onToggleReaction : null}
+                    quickReactions={quickReactions}
+                  />
+                </div>
+              )
             }
             return (
-              <div key={g.key}>
+              <div key={g.key} className={`${dens.group} ${dens.row}`}>
                 {g.items.map((m, idx) => (
                   <MessageBubble
                     key={m.id}
@@ -255,7 +397,7 @@ export default function MessageList({
                     isMine={g.isMine}
                     showHeader={idx === 0}
                     isLast={idx === g.items.length - 1}
-                    density={density}
+                    density={densityKey}
                     onRetry={onRetry}
                     onImageClick={onImageClick}
                     onReply={onReply}
@@ -264,16 +406,51 @@ export default function MessageList({
                     onDelete={onDelete}
                     canModerate={canModerate}
                     author={resolveChatAuthor(m, members, currentUserId, currentUserName)}
+                    /* Author color: prefer the one already derived for the
+                     * group (stable for the whole chain), fallback to a
+                     * per-message id-derived hue.                          */
+                    authorColor={g.color || colorFromId(m.authorId || m.author || (g.isMine ? '__me__' : 'peer'))}
                     replyTo={m.replyToId ? (messagesById.get(m.replyToId) || { id: m.replyToId, missing: true }) : null}
                     replyAuthor={m.replyToId ? resolveChatAuthor(messagesById.get(m.replyToId), members, currentUserId, currentUserName) : null}
                     highlighted={highlightId === m.id}
                     highlightTick={highlightTick}
                     onJumpToReply={jumpToMessage}
+                    currentUserId={currentUserId}
+                    currentUserName={currentUserName}
+                    roomKey={roomKey}
+                    mentionsMe={
+                      !isOwnMessage(m, currentUserId, currentUserName) &&
+                      detectMentionMe(m.text, currentUserId, currentUserName, members)
+                    }
+                    isReply={!!m.replyToId}
+                    pinned={pinnedSet.has(m.id) || !!m.pinned}
+                    canPin={canPinAll || isOwnMessage(m, currentUserId, currentUserName)}
+                    onTogglePin={onTogglePin}
+                    onToggleLike={onToggleLike}
+                    quickReactions={quickReactions}
+                    resolveRoom={resolveRoom}
+                    onRoomMention={onRoomMention}
                   />
                 ))}
               </div>
             )
           })
+        )}
+        {typingText && (
+          <div className="vc-typing-wrap flex items-center gap-2 px-5 sm:px-8 py-1.5">
+            <div
+              data-typing-indicator
+              aria-live="polite"
+              className="vc-typing"
+            >
+              {renderTypingLabel(typingText)}
+              <span className="vc-typing-dots" aria-hidden>
+                <span className="vc-typing-dot" />
+                <span className="vc-typing-dot" />
+                <span className="vc-typing-dot" />
+              </span>
+            </div>
+          </div>
         )}
       </div>
 
@@ -282,14 +459,15 @@ export default function MessageList({
           onClick={scrollToBottom}
           className="
             absolute right-3 sm:right-5 bottom-3 z-10 inline-flex items-center gap-1.5
-            px-3 py-1.5 rounded-pill text-[11px] font-medium
-            bg-accent text-strong shadow-lg shadow-accent/30
-            hover:opacity-90 active:scale-95
-            transition-all vc-anim-fade-in-up
+            px-3 py-1.5 rounded-pill text-[11px] font-semibold text-white
+            vc-jump-bottom
+            active:scale-95
+            animate-fade-in-up
           "
-          style={{ animationDuration: '160ms' }}
+          style={{ animationDuration: '180ms' }}
+          aria-label="Pular para as mensagens mais recentes"
         >
-          <ArrowDown size={11} strokeWidth={2.5} />
+          <ArrowDown size={11} strokeWidth={2.5} className="vc-jump-icon" />
           {unseen} {unseen === 1 ? 'mensagem nova' : 'mensagens novas'}
         </button>
       )}
@@ -299,20 +477,26 @@ export default function MessageList({
 
 function DayDivider({ label, className = 'px-4 sm:px-6 py-3' }) {
   return (
-    <div className={'flex items-center gap-3 ' + className}>
-      <div className="flex-1 h-px bg-white/[0.08]" />
-      <span className="text-[11px] text-muted font-medium">{label}</span>
-      <div className="flex-1 h-px bg-white/[0.08]" />
+    <div
+      role="separator"
+      aria-hidden
+      className={'vc-day-divider ' + className}
+    >
+      <span className="vc-day-divider__label">{label}</span>
+      <span className="vc-day-divider__dot" />
     </div>
   )
 }
 
 function UnreadDivider({ className = 'px-4 sm:px-6 py-2' }) {
   return (
-    <div className={'flex items-center gap-3 ' + className}>
-      <div className="flex-1 h-px bg-accent" />
-      <span className="text-[11px] font-semibold text-accent whitespace-nowrap">Novas mensagens</span>
-      <div className="flex-1 h-px bg-accent" />
+    <div
+      role="separator"
+      className={'vc-day-divider unread-divider ' + className}
+      style={{ paddingTop: 10, paddingBottom: 10 }}
+    >
+      <span className="vc-day-divider__label" style={{ textTransform: 'uppercase' }}>Novas mensagens</span>
+      <span className="vc-day-divider__dot" />
     </div>
   )
 }
@@ -322,11 +506,11 @@ function SkeletonStack() {
     <div className="space-y-5 px-4 sm:px-6 pt-2">
       {[1, 2, 3].map(i => (
         <div key={i} className="flex gap-3 items-start">
-          <div className="w-10 h-10 rounded-full vc-anim-shimmer" />
+          <div className="w-10 h-10 rounded-full animate-shimmer" />
           <div className="flex-1 space-y-2 max-w-md">
-            <div className="h-2.5 w-28 rounded vc-anim-shimmer" />
-            <div className="h-3 w-full rounded vc-anim-shimmer" />
-            <div className="h-3 w-3/4 rounded vc-anim-shimmer" />
+            <div className="h-2.5 w-28 rounded animate-shimmer" />
+            <div className="h-3 w-full rounded animate-shimmer" />
+            <div className="h-3 w-3/4 rounded animate-shimmer" />
           </div>
         </div>
       ))}

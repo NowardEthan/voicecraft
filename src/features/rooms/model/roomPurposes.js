@@ -15,11 +15,17 @@ import {
 } from 'lucide-react'
 
 const soft = (hex) => {
+  /* Sem transparência: versão 100% opaca, escura (~22% luminância),
+   * pra ler como "tile" sólido mas discreto em fundo escuro.        */
   const m = hex.match(/^#([0-9a-fA-F]{6})$/)
-  if (!m) return 'rgba(255, 63, 108, .14)'
+  if (!m) return '#3a2530'
   const n = parseInt(m[1], 16)
   const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255
-  return `rgba(${r},${g},${b},.14)`
+  /* Mistura a cor com preto a 78% — dá um tom sólido único. */
+  const mix = (c) => Math.round(c * 0.22)
+  const rr = mix(r), gg = mix(g), bb = mix(b)
+  const toHex = (c) => c.toString(16).padStart(2, '0')
+  return `#${toHex(rr)}${toHex(gg)}${toHex(bb)}`
 }
 
 /** Types shown in create / edit pickers. */

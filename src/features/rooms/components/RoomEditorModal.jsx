@@ -32,6 +32,7 @@ export default function RoomEditorModal({
   mode = 'create',
   room = null,
   space = null,
+  defaultGroupId = null,
   submitting = false,
   onClose,
   onCreate,
@@ -123,6 +124,9 @@ export default function RoomEditorModal({
       color: color || null,
       nameStyle: nameStyle || 'default',
       fontId: fontId || 'default',
+    }
+    if (!isEdit && defaultGroupId) {
+      payload.groupId = String(defaultGroupId).slice(0, 64)
     }
     if (coverRemoved) {
       payload.cover = null

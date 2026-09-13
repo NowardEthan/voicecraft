@@ -8,7 +8,7 @@ import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   BookOpen, Briefcase, Check, Clock, Coffee, Cpu, Gamepad2, Globe,
-  Grid3X3, Home, Mic, Music, Paintbrush, Search, Smile, Sparkles, Star, Trophy, Users, X,
+  Grid3X3, Home, Mic, Music, Paintbrush, Search, Smile, Sparkles, Star, Trophy, Users, X, Upload,
 } from 'lucide-react'
 import { EASE_OUT } from '../../../shared/motion/presets.js'
 import {
@@ -67,6 +67,7 @@ export function SpaceIconPicker({
   onClose,
   anchorRef,
   enableEmojis = true,
+  onUploadImage = null,
 }) {
   return (
     <AnimatePresence>
@@ -81,6 +82,7 @@ export function SpaceIconPicker({
           onClose={onClose}
           anchorRef={anchorRef}
           enableEmojis={enableEmojis}
+          onUploadImage={onUploadImage}
         />
       )}
     </AnimatePresence>
@@ -96,6 +98,7 @@ function IconPickerPanel({
   onClose,
   anchorRef,
   enableEmojis,
+  onUploadImage,
 }) {
   const [mode, setMode] = useState('icons') // 'icons' | 'emojis'
   const [activeCategory, setActiveCategory] = useState(RECENT_CATEGORY_KEY)
@@ -351,9 +354,25 @@ function IconPickerPanel({
       style={{ top: pos.top, left: pos.left }}
     >
       <div className="flex items-center justify-between px-5 pt-4 pb-2">
-        <h2 className="text-[16px] font-semibold text-strong tracking-tight">
-          Escolha um ícone
-        </h2>
+        <div className="flex items-center gap-3">
+          <h2 className="text-[16px] font-semibold text-strong tracking-tight">
+            Escolha um ícone
+          </h2>
+          {onUploadImage && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose?.()
+                onUploadImage?.()
+              }}
+              className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg text-[11.5px] font-medium bg-accent/15 text-accent hover:bg-accent/25 border border-accent/25 transition-all active:scale-95"
+              title="Fazer upload de foto do computador"
+            >
+              <Upload size={12} strokeWidth={2.2} />
+              <span>Enviar imagem (PNG, JPG)</span>
+            </button>
+          )}
+        </div>
         <button
           type="button"
           onClick={onClose}

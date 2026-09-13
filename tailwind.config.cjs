@@ -21,6 +21,9 @@ module.exports = {
         positive:  'var(--vc-positive)',
         warning:   'var(--vc-warning)',
         danger:    'var(--vc-danger)',
+        like:      'var(--vc-like)',
+        'like-soft':  'var(--vc-like-soft)',
+        'like-glow':  'var(--vc-like-glow)',
         // Space accent (default before a Space is selected).
         accent:    'var(--space-accent)',
         'accent-soft': 'var(--space-accent-soft)',

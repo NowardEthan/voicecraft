@@ -178,7 +178,7 @@ export default function PeoplePanel({
 
   return (
     <aside
-      className="w-full h-full bg-[#0B0E11] border-l border-white/[0.06] flex flex-col overflow-hidden"
+      className="vc-people-panel w-full h-full bg-[#0B0E11] border-l border-white/[0.06] flex flex-col overflow-hidden"
       aria-label="Pessoas"
     >
       {/* Header */}
@@ -299,11 +299,7 @@ export default function PeoplePanel({
         <button
           type="button"
           onClick={onInvite}
-          className="w-full h-10 rounded-xl inline-flex items-center justify-center gap-2 text-[13px] font-semibold text-strong bg-transparent transition-colors hover:bg-white/[0.03]"
-          style={{
-            border: `1.5px solid ${accent}`,
-            boxShadow: `0 0 0 1px color-mix(in srgb, ${accent} 20%, transparent)`,
-          }}
+          className="vc-people-invite-cta w-full h-10 rounded-xl inline-flex items-center justify-center gap-2 text-[13px] font-semibold text-strong transition-colors"
         >
           <UserPlus size={15} strokeWidth={1.9} style={{ color: accent }} />
           Convidar pessoas
@@ -350,7 +346,7 @@ function PersonRow({ member, space, isSelf, isCreator, accent, onOpenProfile }) 
       <button
         type="button"
         onClick={() => onOpenProfile?.(member)}
-        className="group relative w-full flex items-center gap-2.5 px-2 py-2.5 rounded-xl overflow-hidden transition-colors text-left hover:brightness-110"
+        className="vc-people-row group relative w-full flex items-center gap-2.5 px-2.5 py-2.5 rounded-xl overflow-hidden transition-colors text-left hover:brightness-110 h-[86px]"
         style={styled ? {
           border: `1.5px solid ${theme.popoverBorder}`,
           boxShadow: themed ? `0 0 18px -6px ${theme.popoverGlow}, inset 0 0 24px -12px ${theme.popoverGlow}` : undefined,
@@ -372,7 +368,11 @@ function PersonRow({ member, space, isSelf, isCreator, accent, onOpenProfile }) 
           />
         )}
         {themed && (
-          <CardThemeFx themeId={theme.id || member.cardThemeId} variant="nameplate" />
+          <CardThemeFx
+            themeId={theme.id || member.cardThemeId}
+            variant="nameplate"
+            className="z-0 opacity-90"
+          />
         )}
         <div className="relative shrink-0 z-[1]">
           <span
@@ -401,8 +401,8 @@ function PersonRow({ member, space, isSelf, isCreator, accent, onOpenProfile }) 
           />
         </div>
 
-        <div className="relative min-w-0 flex-1 z-[1]">
-          <p className="text-[13px] font-semibold text-strong leading-tight truncate flex items-center gap-1 flex-wrap">
+        <div className="relative min-w-0 flex-1 z-[1] flex flex-col justify-center gap-1.5 overflow-x-hidden overflow-y-visible">
+          <p className="text-[13px] font-semibold text-strong leading-none truncate flex items-center gap-1 min-h-[14px]">
             <span className="truncate">{name}</span>
             {isSelf && (
               <span className="text-muted font-normal shrink-0">(você)</span>
@@ -410,9 +410,11 @@ function PersonRow({ member, space, isSelf, isCreator, accent, onOpenProfile }) 
             {isCreator && !isSelf && (
               <Crown size={11} className="shrink-0" style={{ color: ringAccent }} strokeWidth={2.4} />
             )}
-            <UserTagChips tags={member.tags} size="xs" />
           </p>
-          <p className={`text-[11px] leading-tight mt-0.5 truncate flex items-center gap-1 ${status.textColor}`}>
+          {member.tags?.length > 0 && (
+            <UserTagChips tags={member.tags} size="xs" marquee className="shrink-0" />
+          )}
+          <p className={`text-[11px] leading-none truncate flex items-center gap-1 min-h-[12px] ${status.textColor}`}>
             {StatusIcon && (
               <StatusIcon size={11} strokeWidth={2} className="shrink-0" style={{ color: status.color || undefined }} />
             )}

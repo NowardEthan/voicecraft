@@ -16,6 +16,7 @@ export default function EmojiReactions({
   onPick,
   className = '',
   hideAdd = false,
+  hideList = false,
   registerOpen,
 }) {
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -98,7 +99,7 @@ export default function EmojiReactions({
       ? createPortal(
           <div
             ref={pickerRef}
-            className="fixed z-[80] vc-anim-fade-in-up"
+            className="fixed z-[80] animate-fade-in-up"
             style={{ top: pos.top, left: pos.left, width: PICKER_W }}
             onWheel={(e) => e.stopPropagation()}
           >
@@ -115,8 +116,8 @@ export default function EmojiReactions({
       : null
 
   return (
-    <div className={`flex flex-wrap items-center gap-1 ${entries.length ? 'mt-1.5' : ''} ${className}`}>
-      {entries.map(([emoji, info]) => {
+    <div className={`flex flex-wrap items-center gap-1 ${entries.length ? 'mt-0.5' : ''} ${className}`}>
+      {!hideList && entries.map(([emoji, info]) => {
         const mine = !!info.mine
         return (
           <button
@@ -127,18 +128,18 @@ export default function EmojiReactions({
             aria-pressed={mine}
             aria-label={`${emoji}, ${info.count} ${info.count === 1 ? 'reação' : 'reações'}`}
             className={
-              'relative inline-flex items-center gap-1 px-1.5 py-[3px] rounded-full text-[12px] ' +
-              'border transition-colors overflow-visible ' +
+              'vc-react-pill relative inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] ' +
+              'border transition-all duration-150 overflow-visible ' +
               (mine
-                ? 'bg-accent-soft border-accent/70 text-strong'
-                : 'bg-white/[0.04] border-white/[0.08] text-ink hover:bg-white/[0.08]') +
+                ? 'vc-react-pill--mine bg-[color-mix(in_srgb,var(--vc-warning)_18%,var(--vc-surface-1))] border-[color-mix(in_srgb,var(--vc-warning)_55%,transparent)] text-strong shadow-[0_0_10px_-2px_color-mix(in_srgb,var(--vc-warning)_35%,transparent)]'
+                : 'bg-[var(--vc-surface-1)] border-[color-mix(in_srgb,#ffffff_10%,transparent)] text-ink hover:bg-[var(--vc-surface-2)] hover:scale-[1.05] hover:border-[color-mix(in_srgb,var(--vc-warning)_30%,transparent)]') +
               (pop[emoji] ? ' vc-react-pop' : '')
             }
           >
             {pop[emoji] ? (
               <span className="vc-react-burst" aria-hidden>{emoji}</span>
             ) : null}
-            <span className="vc-react-face text-[15px] leading-none">{emoji}</span>
+            <span className="vc-react-face text-[13px] leading-none">{emoji}</span>
             <span className="tabular-nums font-semibold">{info.count}</span>
           </button>
         )
@@ -154,9 +155,11 @@ export default function EmojiReactions({
           type="button"
           onClick={togglePicker}
           className="
-            w-7 h-7 rounded-full border border-white/[0.08] bg-white/[0.04]
-            flex items-center justify-center text-muted hover:text-strong
-            hover:bg-white/[0.08] transition-colors
+            vc-react-pill-add w-7 h-7 rounded-full border border-white/[0.08] bg-white/[0.04]
+            flex items-center justify-center text-muted hover:text-[var(--vc-warning)]
+            hover:bg-[color-mix(in_srgb,var(--vc-warning)_12%,transparent)]
+            hover:border-[color-mix(in_srgb,var(--vc-warning)_45%,transparent)]
+            hover:scale-[1.08] transition-all
           "
           title="Adicionar reação"
           aria-label="Adicionar reação"

@@ -22,6 +22,7 @@
 //     {"type":"device-list","devices":[{"id":"...","name":"...","isDefault":true}]}
 
 #include "capture.h"
+#include "loopback_wasapi.h"
 
 #include <atomic>
 #include <chrono>
@@ -115,6 +116,22 @@ void send_device_list() {
   emit_event(oss.str());
 }
 
+void send_process_list() {
+  auto procs = voicecraft::audio::LoopbackSession::list_audio_processes();
+  std::ostringstream oss;
+  oss << "{\"type\":\"process-list\",\"processes\":[";
+  bool first = true;
+  for (const auto& p : procs) {
+    if (!first) oss << ",";
+    first = false;
+    oss << "{\"pid\":" << p.pid << ","
+        << "\"name\":\"" << p.name << "\","
+        << "\"icon\":\"" << p.icon << "\"}";
+  }
+  oss << "]}";
+  emit_event(oss.str());
+}
+
 }  // namespace
 
 int main() {
@@ -125,8 +142,9 @@ int main() {
   std::setvbuf(stdout, nullptr, _IONBF, 0);
 
   voicecraft::audio::CaptureSession session;
+  voicecraft::audio::LoopbackSession loopback_session;
 
-  emit_event("{\"type\":\"service-started\",\"version\":\"0.1.0\"}");
+  emit_event("{\"type\":\"service-started\",\"version\":\"0.2.0\"}");
 
   std::string line;
   while (!g_shutdown && std::getline(std::cin, line)) {
@@ -134,6 +152,23 @@ int main() {
     auto type = json_get(line, "type");
     if (type == "list-devices") {
       send_device_list();
+    } else if (type == "list-processes") {
+      send_process_list();
+    } else if (type == "start-loopback") {
+      uint32_t pid = static_cast<uint32_t>(json_int(line, "processId", 0));
+      std::string sess_id = json_get(line, "sessionId");
+      if (sess_id.empty()) sess_id = "loopback-1";
+      bool ok = loopback_session.start(pid, 48000, 1, [](const float* samples, uint32_t frames) {
+        write_audio_frame(samples, frames);
+      });
+      if (ok) {
+        emit_event("{\"type\":\"loopback-started\",\"sessionId\":\"" + sess_id + "\"}");
+      } else {
+        emit_error(loopback_session.last_error());
+      }
+    } else if (type == "stop-loopback") {
+      loopback_session.stop();
+      emit_event("{\"type\":\"loopback-stopped\"}");
     } else if (type == "start") {
       voicecraft::audio::CaptureConfig cfg;
       cfg.sample_rate = static_cast<uint32_t>(json_int(line, "sampleRate", 48000));

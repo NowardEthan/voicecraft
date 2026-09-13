@@ -170,7 +170,7 @@ export const ParticipantCard = memo(function ParticipantCard({
           <div className="flex items-center gap-1.5 min-h-[18px]">
             {isSpeaking ? (
               <>
-                <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0 vc-anim-pulse-dot" aria-hidden />
+                <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0 animate-pulse-dot" aria-hidden />
                 <span className="text-[11.5px] text-accent font-medium">Falando agora</span>
                 <SpeakingIndicator active reducedMotion={reducedMotion} />
               </>

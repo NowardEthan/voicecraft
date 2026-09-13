@@ -391,6 +391,35 @@ function log(level, msg) {
 // Expose for the renderer so it can request a flush before crash reports.
 ipcMain.handle('app:log', (_e, level, msg) => log(level, msg))
 
+/**
+ * Fetch a Firebase Storage image in the main process (no browser CORS).
+ * Renderer passes the download URL + optional Firebase ID token.
+ */
+ipcMain.handle('net:fetch-storage-image', async (_e, payload = {}) => {
+  const url = typeof payload.url === 'string' ? payload.url.trim() : ''
+  const idToken = typeof payload.idToken === 'string' ? payload.idToken : ''
+  if (!/^https:\/\//i.test(url)) throw new Error('URL inválida')
+  let host
+  try { host = new URL(url).hostname } catch { throw new Error('URL inválida') }
+  const allowed = host === 'firebasestorage.googleapis.com'
+    || host === 'storage.googleapis.com'
+    || host.endsWith('.firebasestorage.app')
+  if (!allowed) throw new Error('Host não permitido')
+
+  const headers = { Accept: 'image/*,*/*' }
+  if (idToken) headers.Authorization = `Firebase ${idToken}`
+
+  const res = await fetch(url, { headers })
+  if (!res.ok) {
+    throw new Error(`Falha ao baixar imagem (${res.status})`)
+  }
+  const buf = Buffer.from(await res.arrayBuffer())
+  return {
+    contentType: res.headers.get('content-type') || 'image/jpeg',
+    base64: buf.toString('base64'),
+  }
+})
+
 ipcMain.handle('settings:get', () => loadSettings())
 ipcMain.handle('settings:set', (_e, patch) => saveSettings(patch || {}))
 
@@ -496,7 +525,7 @@ function startAudioService() {
         const wc = mainWindow.webContents
         if (wc && !wc.isDestroyed()) {
           try {
-            wc.send('audio:frame', payload)
+            wc.send('audio:frame', { type: 'mic', payload })
           } catch (err) {
             // Swallow — renderer just disposed, nothing to do.
           }
@@ -558,6 +587,88 @@ ipcMain.handle('audio-service:start', () => startAudioService())
 ipcMain.handle('audio-service:stop', () => { stopAudioService(); return { ok: true } })
 ipcMain.handle('audio-service:available', () => ({ available: !!resolveAudioServiceBinary() }))
 ipcMain.handle('audio-service:send', (_e, obj) => { sendAudioCommand(obj); return { ok: true } })
+
+// Active loopback sessions: Map<sessionId, { processId, startedAt }>
+const activeLoopbackSessions = new Map()
+
+// Helper: list audio-capable processes in Windows (C1 / A1)
+function listAudioCapableProcesses() {
+  return new Promise((resolve) => {
+    const cp = require('child_process')
+    const selfPid = process.pid
+    const selfName = 'VoiceCraft'
+
+    if (process.platform === 'win32') {
+      const timer = setTimeout(() => {
+        resolve([{ pid: selfPid, name: selfName, icon: '' }])
+      }, 2000)
+
+      cp.execFile('tasklist', ['/FO', 'CSV', '/NH'], { windowsHide: true, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+        clearTimeout(timer)
+        if (err || !stdout) {
+          return resolve([{ pid: selfPid, name: selfName, icon: '' }])
+        }
+        try {
+          const lines = stdout.split(/\r?\n/)
+          const seen = new Set()
+          const list = []
+          seen.add(selfPid)
+          list.push({ pid: selfPid, name: selfName, icon: '' })
+
+          for (const line of lines) {
+            if (!line.trim()) continue
+            const parts = line.split('","').map(s => s.replace(/^"|"$/g, ''))
+            if (parts.length >= 2) {
+              const name = parts[0]
+              const pid = parseInt(parts[1], 10)
+              if (pid > 0 && !seen.has(pid)) {
+                seen.add(pid)
+                list.push({ pid, name, icon: '' })
+              }
+            }
+          }
+          resolve(list)
+        } catch {
+          resolve([{ pid: selfPid, name: selfName, icon: '' }])
+        }
+      })
+    } else {
+      resolve([{ pid: selfPid, name: selfName, icon: '' }])
+    }
+  })
+}
+
+ipcMain.handle('audio-service:list-processes', async () => {
+  const processes = await listAudioCapableProcesses()
+  return processes
+})
+
+ipcMain.handle('audio-service:start-loopback', (_e, payload) => {
+  const processId = payload?.processId
+  if (typeof processId !== 'number' || processId <= 0) {
+    return { ok: false, error: 'pid-not-found' }
+  }
+  for (const [id, sess] of activeLoopbackSessions.entries()) {
+    if (sess.processId === processId) {
+      return { ok: true, sessionId: id }
+    }
+  }
+  const crypto = require('crypto')
+  const sessionId = crypto.randomUUID ? crypto.randomUUID() : ('sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9))
+  activeLoopbackSessions.set(sessionId, { processId, startedAt: Date.now() })
+  sendAudioCommand({ type: 'start-loopback', processId, sessionId })
+  return { ok: true, sessionId }
+})
+
+ipcMain.handle('audio-service:stop-loopback', (_e, payload) => {
+  const sessionId = payload?.sessionId
+  if (!sessionId) {
+    return { ok: false, error: 'unknown-session' }
+  }
+  activeLoopbackSessions.delete(sessionId)
+  sendAudioCommand({ type: 'stop-loopback', sessionId })
+  return { ok: true }
+})
 
 app.on('before-quit', () => stopAudioService())
 

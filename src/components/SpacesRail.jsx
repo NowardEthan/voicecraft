@@ -92,9 +92,9 @@ export default function GlobalRail({
         aria-label="Início"
         aria-pressed={!currentSpaceId && !accountOpen}
         className={
-          `relative ${tile} rounded-2xl flex items-center justify-center shrink-0 ` +
+          `relative vc-rail-tile ${tile} rounded-2xl flex items-center justify-center shrink-0 ` +
           'transition-[transform,background-color,border-radius,box-shadow] duration-200 ' +
-          'hover:scale-[1.04] active:scale-[0.94] ' +
+          'hover:scale-[1.08] active:scale-[0.94] ' +
           (!currentSpaceId && !accountOpen
             ? 'bg-accent text-white shadow-[0_0_0_2px_var(--space-accent-glow-24)]'
             : 'bg-surface1 text-ink hover:bg-surface2')
@@ -141,7 +141,7 @@ export default function GlobalRail({
                 aria-label={unread ? `${space.name}, ${unread} não lidas` : space.name}
                 aria-pressed={active}
                 aria-busy={isSwitching || undefined}
-                className="relative block transition-transform duration-200 hover:scale-[1.05] active:scale-[0.94]"
+                className="relative block vc-rail-tile transition-transform duration-200 hover:scale-[1.08] active:scale-[0.94]"
               >
                 <SpaceAvatar
                   space={space}
@@ -150,12 +150,15 @@ export default function GlobalRail({
                   withRing={active || isSwitching}
                 />
                 <UnreadDot count={unread} className="!translate-x-0 !-translate-y-0 !top-0.5 !right-0.5" />
+                {active && (
+                  <span className="vc-rail-online-pulse" aria-hidden />
+                )}
                 {isSwitching && (
                   <span
                     className="absolute inset-0 rounded-[inherit] flex items-center justify-center bg-canvas/40 pointer-events-none"
                     aria-hidden
                   >
-                    <span className="w-4 h-4 rounded-full border-2 border-line border-t-accent vc-anim-spin" />
+                    <span className="w-4 h-4 rounded-full border-2 border-line border-t-accent animate-spin" />
                   </span>
                 )}
               </button>
@@ -174,10 +177,10 @@ export default function GlobalRail({
             aria-expanded={menuOpen}
             aria-haspopup="menu"
             className={
-              `${tile} rounded-full flex items-center justify-center ` +
+              `${tile} rounded-full vc-rail-tile vc-rail-add flex items-center justify-center ` +
               'bg-surface1 text-muted hover:text-strong hover:bg-surface2 ' +
-              'transition-[transform,background-color,border-radius] duration-200 ' +
-              'hover:scale-[1.04] hover:rounded-2xl active:scale-[0.94] ' +
+              'transition-[transform,background-color,border-radius,box-shadow] duration-200 ' +
+              'hover:scale-[1.08] hover:rounded-2xl active:scale-[0.94] ' +
               'border border-dashed border-line ' +
               (menuOpen ? 'text-strong bg-surface2 rounded-2xl' : '')
             }
@@ -237,9 +240,10 @@ export default function GlobalRail({
 
       {hoveredSpace && typeof document !== 'undefined' && createPortal(
         <div
-          className="fixed z-[70] px-2.5 py-1 rounded-lg bg-rail border border-line text-strong text-[12px] font-medium whitespace-nowrap pointer-events-none -translate-y-1/2 shadow-lg"
+          className="fixed z-[70] vc-rail-tooltip pointer-events-none -translate-y-1/2"
           style={{ top: hoverPos.top, left: hoverPos.left }}
         >
+          <span className="vc-rail-tooltip__dot" aria-hidden />
           {hoveredSpace.name}
         </div>,
         document.body,
@@ -254,8 +258,10 @@ export default function GlobalRail({
             aria-label="Conta Lunar"
             aria-pressed={accountOpen}
             className={[
-              'rounded-full p-[2px] transition-transform duration-200 hover:scale-[1.06] active:scale-[0.94]',
-              accountOpen ? 'bg-accent shadow-[0_0_0_2px_var(--space-accent-glow-24)]' : 'bg-transparent hover:bg-white/10',
+              accountOpen
+                ? 'vc-account-ring-static'
+                : 'vc-account-ring',
+              'rounded-full transition-transform duration-200 hover:scale-[1.08] active:scale-[0.94]',
             ].join(' ')}
           >
             <AvatarCircle src={accountPhoto} name={accountName} size={avatar} className="ring-2 ring-rail" />

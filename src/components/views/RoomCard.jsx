@@ -66,7 +66,7 @@ export function RoomCard({ room, members, currentUserId, onClick, variant = 'com
               </p>
               {stateTone === 'live' && (
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-accent-soft text-accent text-[10.5px] font-semibold uppercase tracking-wider">
-                  <span className="w-1.5 h-1.5 rounded-full bg-accent vc-anim-pulse-dot" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse-dot" />
                   ao vivo
                 </span>
               )}
@@ -131,7 +131,7 @@ export function RoomCard({ room, members, currentUserId, onClick, variant = 'com
             </p>
             {stateTone === 'live' && (
               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-accent-soft text-accent text-[9.5px] font-semibold uppercase tracking-wider">
-                <span className="w-1 h-1 rounded-full bg-accent vc-anim-pulse-dot" />
+                <span className="w-1 h-1 rounded-full bg-accent animate-pulse-dot" />
                 ao vivo
               </span>
             )}
@@ -172,7 +172,7 @@ export function RoomCard({ room, members, currentUserId, onClick, variant = 'com
 export function SectionTitle({ icon: Icon, label, trailing, live = false }) {
   return (
     <div className="flex items-center gap-2 mb-3">
-      {live && <span className="w-1.5 h-1.5 rounded-full bg-accent vc-anim-pulse-dot" />}
+      {live && <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse-dot" />}
       {Icon && <Icon size={12} className={live ? 'text-accent' : 'text-muted'} strokeWidth={1.75} />}
       <h3 className="text-[11px] font-semibold uppercase tracking-[0.12em] text-ink/55">
         {label}

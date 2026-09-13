@@ -27,7 +27,7 @@ function AppFrame({ children }) {
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#07080c]">
       <TitleBar />
-      <div className="flex-1 min-h-0 min-w-0 relative">
+      <div className="flex-1 min-h-0 min-w-0 relative vc-app-bg-decor">
         {children}
         <UpdateToast />
       </div>

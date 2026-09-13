@@ -27,6 +27,10 @@ import { getLocalIP, getHostname } from '../shared/utils/network'
 import { useViewport } from '../shared/hooks/useViewport'
 import { signOutAccount } from '../features/auth'
 import { BrandLoader } from '../shared/ui/BrandMark'
+import {
+  findRulesRoom,
+  spaceRequiresRulesAccept,
+} from '../features/chat/rulesSchema'
 
 const VoiceRoomView = lazy(() => import('../features/rooms/views/voice/VoiceRoomView'))
 const ConversationRoom = lazy(() => import('../components/views/TextRoomView'))
@@ -253,13 +257,15 @@ export default function AppShell({ account }) {
     if (!alreadyMember) flashToast('Você entrou no Space')
   }, [handleSelectSpace])
 
-  // Deep link: /?space=ID (&room= optional) after login
+  // Deep link: /invite/:space(/:room) or /?space=ID (&room= optional) after login
   const deepLinkConsumed = useRef(false)
   useEffect(() => {
     if (deepLinkConsumed.current) return
     if (connStatus !== 'connected' || !signalingClient?.userId) return
     if (typeof window === 'undefined') return
-    const parsed = parseSpaceInvite(window.location.search)
+    const fromPath = parseSpaceInvite(`${window.location.origin}${window.location.pathname}${window.location.search}`)
+    const fromQuery = parseSpaceInvite(window.location.search)
+    const parsed = fromPath?.spaceId ? fromPath : fromQuery
     if (!parsed?.spaceId) return
     deepLinkConsumed.current = true
     const url = new URL(window.location.href)
@@ -267,6 +273,9 @@ export default function AppShell({ account }) {
     url.searchParams.delete('s')
     url.searchParams.delete('room')
     url.searchParams.delete('r')
+    if (/^\/(?:invite|i)\//i.test(url.pathname)) {
+      url.pathname = '/'
+    }
     const next = `${url.pathname}${url.search}${url.hash}`
     window.history.replaceState({}, '', next)
     ;(async () => {
@@ -330,10 +339,38 @@ export default function AppShell({ account }) {
   }, [closeTextRoom])
 
   const openRoomFocus = useCallback((room) => {
+    if (!room) return
+    const self = membersWithTags.find((m) => m.userId === currentUserId) || null
+    const bypass = canPerm('mod_chat') || isCreator
+    const needsAccept = spaceRequiresRulesAccept({
+      space: currentSpace,
+      member: self,
+      canBypass: bypass,
+    })
+    if (needsAccept) {
+      const rulesRoom = findRulesRoom(currentSpace)
+      const isRules = room.id && rulesRoom?.id === room.id
+      if (!isRules) {
+        flashToast('Aceite as regras para liberar o Space')
+        if (rulesRoom) {
+          setSpaceSurface(null)
+          setActiveView('room')
+          selectRoom(rulesRoom)
+        }
+        return
+      }
+    }
     setSpaceSurface(null)
     setActiveView('room')
     selectRoom(room)
-  }, [selectRoom])
+  }, [
+    selectRoom,
+    membersWithTags,
+    currentUserId,
+    canPerm,
+    isCreator,
+    currentSpace,
+  ])
 
   const returnToVoice = useCallback(() => {
     setSpaceSurface(null)
@@ -430,7 +467,6 @@ export default function AppShell({ account }) {
               ? 'absolute left-0 top-0 z-50 h-full w-[min(280px,88vw)] shadow-2xl animate-fade-in-left'
               : 'w-[min(280px,32vw)] min-w-[220px] max-w-[280px] shrink-0 h-full animate-fade-in-left'
           }
-          key={currentSpace?.id}
         >
           <SpaceContextPanel
             space={currentSpace}
@@ -443,7 +479,7 @@ export default function AppShell({ account }) {
               openRoomFocus(room)
               if (overlayNav) setPanelCollapsed(true)
             }}
-            onCreateRoom={() => setRoomEditor({ mode: 'create' })}
+            onCreateRoom={(groupId) => setRoomEditor({ mode: 'create', groupId: groupId || null })}
             onEditRoom={(room) => setRoomEditor({ mode: 'edit', room })}
             onDeleteRoom={deleteRoom}
             members={membersWithTags}
@@ -468,48 +504,6 @@ export default function AppShell({ account }) {
         </div>
       )}
 
-      {/* Floating "open panel" buttons */}
-      {!showAccount && !panelVisible && currentSpace && (
-        <button
-          type="button"
-          onClick={togglePanel}
-          aria-label="Abrir painel do Space"
-          title="Abrir painel do Space"
-          className="
-            absolute left-2 sm:left-3 top-2 sm:top-3 z-30
-            w-9 h-9 rounded-xl flex items-center justify-center
-            bg-black/40 hover:bg-black/55 backdrop-blur-md
-            text-white/85 hover:text-white
-            shadow-[0_10px_28px_-14px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.06)]
-            transition-[background-color,color,transform] duration-150
-            hover:scale-[1.03] active:scale-[0.97]
-          "
-        >
-          <PanelLeftOpen size={15} strokeWidth={1.85} />
-        </button>
-      )}
-
-      {/* Floating re-open button for the People panel. */}
-      {!showAccount && peoplePanelCollapsed && currentSpace && (
-        <button
-          type="button"
-          onClick={() => setPeoplePanelCollapsed(false)}
-          aria-label="Abrir painel de pessoas"
-          title="Abrir painel de pessoas"
-          className="
-            absolute right-2 sm:right-3 top-2 sm:top-3 z-30
-            w-9 h-9 rounded-xl flex items-center justify-center
-            bg-black/40 hover:bg-black/55 backdrop-blur-md
-            text-white/85 hover:text-white
-            shadow-[0_10px_28px_-14px_rgba(0,0,0,0.7),inset_0_1px_0_rgba(255,255,255,0.06)]
-            transition-[background-color,color,transform] duration-150
-            hover:scale-[1.03] active:scale-[0.97]
-          "
-        >
-          <PanelRightOpen size={15} strokeWidth={1.85} />
-        </button>
-      )}
-
       {/* aria-live announcer */}
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {voiceStatus}
@@ -517,10 +511,36 @@ export default function AppShell({ account }) {
 
       {/* Panel 3: Main area */}
       <main
-        className={`relative flex-1 min-w-0 min-h-0 flex flex-col bg-canvas overflow-hidden transition-opacity duration-200 ${
-          transitioning ? 'opacity-60' : 'opacity-100'
-        }`}
+        className={[
+          'relative flex-1 min-w-0 min-h-0 flex flex-col bg-canvas overflow-hidden transition-opacity duration-200',
+          transitioning ? 'opacity-60' : 'opacity-100',
+          !showAccount && !panelVisible && currentSpace ? 'vc-main-pad-nav-toggle' : '',
+          !showAccount && peoplePanelCollapsed && currentSpace ? 'vc-main-pad-people-toggle' : '',
+        ].filter(Boolean).join(' ')}
       >
+        {/* Reopen toggles live inside main so they don't cover the room header. */}
+        {!showAccount && !panelVisible && currentSpace && (
+          <button
+            type="button"
+            onClick={togglePanel}
+            aria-label="Abrir painel do Space"
+            title="Abrir painel do Space"
+            className="vc-panel-reopen vc-panel-reopen--nav"
+          >
+            <PanelLeftOpen size={15} strokeWidth={1.85} />
+          </button>
+        )}
+        {!showAccount && peoplePanelCollapsed && currentSpace && (
+          <button
+            type="button"
+            onClick={() => setPeoplePanelCollapsed(false)}
+            aria-label="Abrir painel de pessoas"
+            title="Abrir painel de pessoas"
+            className="vc-panel-reopen vc-panel-reopen--people"
+          >
+            <PanelRightOpen size={15} strokeWidth={1.85} />
+          </button>
+        )}
         {connStatus === 'connecting' && (
           <div className="flex items-center justify-center gap-2 py-2 border-b border-line bg-canvas text-[11px] text-muted">
             <div className="w-2.5 h-2.5 rounded-full border-2 border-line border-t-accent vc-anim-spin" />
@@ -598,6 +618,7 @@ export default function AppShell({ account }) {
                     onInvite={handleOpenInvite}
                     voiceActive={!!currentRoom}
                     canModerateChat={canPerm('mod_chat')}
+                    canKick={canPerm('kick')}
                   />
                 </Suspense>
               </ErrorBoundary>
@@ -633,7 +654,7 @@ export default function AppShell({ account }) {
                   currentUserName={currentUserName}
                   onSelectRoom={openRoomFocus}
                   onSelectSpace={handleSelectSpace}
-                  onCreateRoom={() => setRoomEditor({ mode: 'create' })}
+                  onCreateRoom={(groupId) => setRoomEditor({ mode: 'create', groupId: groupId || null })}
                   onCreateSpace={() => setShowSpaceCreator(true)}
                   onOpenHub={() => setShowSpaceHub(true)}
                   onOpenAccount={() => {
@@ -734,6 +755,7 @@ export default function AppShell({ account }) {
           mode={roomEditor?.mode || 'create'}
           room={roomEditor?.room || null}
           space={currentSpace}
+          defaultGroupId={roomEditor?.groupId || null}
           submitting={creatingRoom}
           onClose={() => setRoomEditor(null)}
           onCreate={createRoom}

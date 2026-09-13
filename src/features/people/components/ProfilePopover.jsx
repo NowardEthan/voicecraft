@@ -1,10 +1,9 @@
 /**
- * ProfilePopover — profile card matching the mockup (banner, avatar ring,
- * status, actions, shared spaces / badges).
+ * ProfilePopover — profile card (banner fade, solid badges, cleaner hierarchy).
  */
 import { useEffect, useMemo, useState } from 'react'
 import {
-  X, Copy, Check, UserPlus,   Crown, Gamepad2, MessageCircle,
+  X, Copy, Check, UserPlus, Crown, Gamepad2, MessageCircle,
   BookOpen, Music, Radio, Send, ExternalLink, MoreHorizontal,
   Calendar, Users, Moon, Mic, Quote,
 } from 'lucide-react'
@@ -86,6 +85,7 @@ export default function ProfilePopover({
   const subjectIsCreator = space?.createdBy === member.userId
   const theme = resolveCardTheme(member.cardThemeId, space?.color || null)
   const accent = theme.accent
+  const bodyBg = theme.bodyBg || '#0e1016'
   const isSelf = currentUserId && member.userId === currentUserId
   const since = member.createdAt ? monthLabel(member.createdAt) : null
 
@@ -117,90 +117,85 @@ export default function ProfilePopover({
         className="relative w-full max-w-[380px] flex flex-col rounded-[28px] overflow-hidden shadow-2xl vc-card-shell"
         style={{
           maxHeight: 'min(720px, calc(100vh - 48px))',
-          background: theme.bodyBg || '#0e1016',
+          background: bodyBg,
           border: `1.5px solid ${theme.popoverBorder}`,
           boxShadow: `0 24px 64px -16px ${theme.popoverGlow}, 0 0 48px -8px ${theme.popoverGlow}, 0 0 0 1px ${theme.popoverBorder}`,
         }}
       >
+        {/* FX sits on shell bodyBg; header/body stay transparent so motion shows through. */}
         <CardThemeFx themeId={theme.id || member.cardThemeId} variant="card" />
 
-        {/* Banner + avatar stay outside scroll so the ring isn't clipped */}
+        {/* Cover dissolves via mask onto shell + FX (no opaque fill that would bury motion). */}
         <div className="relative shrink-0 z-[2]">
-          <div
-            className="relative h-[118px] overflow-hidden"
-            style={{ background: bannerBg }}
-          >
-            {hasCover && <SpaceCoverLayer src={member.cover} fit={member.coverFit} />}
-            {!hasCover && <CosmicDecor accent={accent} />}
+          <div className="relative" style={{ minHeight: 118 }}>
             <div
-              className="absolute inset-0 z-[1] pointer-events-none"
-              style={{ background: theme.coverTint || `linear-gradient(135deg, ${hexAlpha(accent, 0.4)}, transparent 60%)` }}
-            />
-            <div
-              className="absolute inset-0 z-[2] pointer-events-none"
-              style={{ background: `linear-gradient(to bottom, transparent 40%, ${theme.bodyBg || '#0e1016'})` }}
-            />
+              className="absolute inset-x-0 top-0 h-[150px] overflow-hidden"
+              style={{
+                WebkitMaskImage: 'linear-gradient(to bottom, #000 0%, #000 32%, transparent 100%)',
+                maskImage: 'linear-gradient(to bottom, #000 0%, #000 32%, transparent 100%)',
+              }}
+            >
+              <div className="absolute inset-0" style={{ background: bannerBg || bodyBg }}>
+                {hasCover && <SpaceCoverLayer src={member.cover} fit={member.coverFit} />}
+                {!hasCover && <CosmicDecor accent={accent} />}
+                <div
+                  className="absolute inset-0 pointer-events-none"
+                  style={{ background: theme.coverTint || `linear-gradient(135deg, ${hexAlpha(accent, 0.3)}, transparent 58%)` }}
+                />
+              </div>
+            </div>
 
             <button
               type="button"
               onClick={onClose}
               aria-label="Fechar"
               title="Fechar"
-              className="absolute top-3 right-3 z-10 w-8 h-8 rounded-xl bg-black/45 hover:bg-black/65 backdrop-blur flex items-center justify-center text-strong/85 hover:text-strong transition-colors"
+              className="absolute top-3 right-3 z-20 w-8 h-8 rounded-xl bg-black/45 hover:bg-black/65 backdrop-blur flex items-center justify-center text-strong/85 hover:text-strong transition-colors"
             >
               <X size={14} strokeWidth={2} />
             </button>
-          </div>
 
-          <div className="px-5 -mt-[42px] relative z-10 isolate">
-            <div className="relative inline-block">
-              <div
-                className="rounded-full p-[3px] vc-card-avatar-ring"
-                style={{
-                  background: `linear-gradient(145deg, ${accent}, ${hexAlpha(accent, 0.35)})`,
-                  boxShadow: `0 0 0 4px #0e1016, 0 10px 28px ${hexAlpha(accent, 0.55)}`,
-                  ['--vc-avatar-glow']: hexAlpha(accent, 0.55),
-                }}
-              >
-                <PersonAvatar
-                  src={member.photoURL}
-                  name={name}
-                  userId={member.userId}
-                  size={84}
-                  className="relative z-[1] bg-[#1a1c22]"
+            <div className="relative z-10 px-5 pt-[66px]">
+              <div className="relative inline-block">
+                <div
+                  className="rounded-full p-[3px] vc-card-avatar-ring"
+                  style={{
+                    background: `linear-gradient(145deg, ${accent}, ${hexAlpha(accent, 0.35)})`,
+                    boxShadow: `0 0 0 4px ${bodyBg}, 0 10px 28px ${hexAlpha(accent, 0.55)}`,
+                    ['--vc-avatar-glow']: hexAlpha(accent, 0.55),
+                  }}
+                >
+                  <PersonAvatar
+                    src={member.photoURL}
+                    name={name}
+                    userId={member.userId}
+                    size={84}
+                    className="relative z-[1] bg-[#1a1c22]"
+                  />
+                </div>
+                <span
+                  className={
+                    'absolute bottom-1 left-1 w-3.5 h-3.5 rounded-full border-[3px] ' +
+                    (member.online ? 'bg-positive' : 'bg-line')
+                  }
+                  style={{ borderColor: bodyBg }}
+                  title={member.online ? 'online' : 'offline'}
                 />
               </div>
-              <span
-                className={
-                  'absolute bottom-1 left-1 w-3.5 h-3.5 rounded-full border-[3px] border-[#0e1016] ' +
-                  (member.online ? 'bg-positive' : 'bg-line')
-                }
-                title={member.online ? 'online' : 'offline'}
-              />
-              <span
-                className="absolute bottom-0.5 right-0.5 w-7 h-7 rounded-full bg-[#0e1016] border border-white/10 flex items-center justify-center"
-                title="Conta Lunar"
-              >
-                <Moon size={12} strokeWidth={2} style={{ color: accent }} />
-              </span>
             </div>
           </div>
         </div>
 
-        {/* Everything below avatar scrolls when the card hits max height */}
         <div className="relative z-[2] flex-1 min-h-0 overflow-y-auto overscroll-contain px-5 pt-3 pb-5">
+          {/* Identity */}
           <div className="flex items-center gap-2 min-w-0 flex-wrap">
             <h2 id="profile-name" className="text-[20px] font-bold text-strong tracking-tight truncate">
               {name}
             </h2>
             {subjectIsCreator && (
               <span
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider shrink-0 border"
-                style={{
-                  color: '#e8b84a',
-                  borderColor: 'rgba(232, 184, 74, 0.45)',
-                  background: 'rgba(232, 184, 74, 0.08)',
-                }}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[9.5px] font-bold uppercase tracking-wider shrink-0"
+                style={{ color: '#1a1408', background: '#e8b84a', boxShadow: '0 1px 0 rgba(0,0,0,0.25)' }}
                 title="Criador do Space"
               >
                 <Crown size={10} strokeWidth={2.5} />
@@ -215,13 +210,13 @@ export default function ProfilePopover({
           ) : null}
 
           {member.bio ? (
-            <p className="text-[13.5px] text-strong/85 mt-2.5 leading-snug">{member.bio}</p>
+            <p className="text-[13.5px] text-strong/85 mt-2 leading-snug">{member.bio}</p>
           ) : null}
 
-          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11.5px] text-muted">
+          <div className="mt-2.5 flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[11.5px] text-muted">
             <span className="inline-flex items-center gap-1.5">
               <Calendar size={12} strokeWidth={1.8} className="opacity-70" />
-              {since ? `Membro desde ${since}` : 'Membro deste Space'}
+              {since ? `Desde ${since}` : 'Membro deste Space'}
             </span>
             {space && (
               <span className="inline-flex items-center gap-1.5">
@@ -231,36 +226,38 @@ export default function ProfilePopover({
             )}
           </div>
 
-          <div className="mt-4 flex items-center gap-3 px-3.5 py-3 rounded-2xl bg-white/[0.03] border border-white/[0.07]">
+          {/* Presence */}
+          <div className="mt-3.5 flex items-center gap-3 px-3 py-2.5 rounded-2xl bg-black/25 border border-white/[0.06]">
             <div className="min-w-0 flex-1">
               <p className="flex items-center gap-1.5 text-[13px] font-semibold text-strong">
                 <span className={'w-2 h-2 rounded-full ' + (member.online ? 'bg-positive' : 'bg-line')} />
                 {member.online ? 'Online' : 'Offline'}
               </p>
               {inRoom && purposeOfRoom ? (
-                <p className="mt-1 flex items-center gap-1.5 text-[12px] text-muted truncate">
+                <p className="mt-0.5 flex items-center gap-1.5 text-[12px] text-muted truncate">
                   <PurposeIcon size={12} strokeWidth={1.8} style={{ color: purpose?.color || accent }} />
                   <span>
-                    {purposeOfRoom.type === 'voice' ? 'Jogando ' : ''}
+                    em{' '}
                     <span className="font-semibold" style={{ color: accent }}>
-                      em {purposeOfRoom.name}
+                      {purposeOfRoom.name}
                     </span>
                   </span>
                 </p>
               ) : (
-                <p className="mt-1 text-[12px] text-muted">Por aqui no Space</p>
+                <p className="mt-0.5 text-[12px] text-muted">Por aqui no Space</p>
               )}
             </div>
-            <Waveform accent={accent} />
+            {inRoom && purposeOfRoom?.type === 'voice' ? <Waveform accent={accent} /> : null}
           </div>
 
           {member.statusText ? (
-            <p className="mt-3 flex items-start gap-2 text-[13px] text-muted italic leading-snug">
+            <p className="mt-2.5 flex items-start gap-2 text-[13px] text-muted italic leading-snug">
               <Quote size={13} className="shrink-0 mt-0.5 opacity-60" />
               <span>“ {member.statusText} ”</span>
             </p>
           ) : null}
 
+          {/* Actions */}
           <button
             type="button"
             onClick={() => {
@@ -281,11 +278,11 @@ export default function ProfilePopover({
             {isSelf ? 'Editar perfil' : 'Enviar mensagem'}
           </button>
 
-          <div className="mt-2.5 flex items-center gap-2">
+          <div className="mt-2 flex items-center gap-2">
             <button
               type="button"
               onClick={() => onInvite(member)}
-              className="flex-1 h-10 px-2.5 rounded-xl border border-white/[0.08] bg-white/[0.03] hover:bg-white/[0.06] text-[12px] font-medium text-strong inline-flex items-center justify-center gap-1.5 transition-colors"
+              className="flex-1 h-9 px-2.5 rounded-xl border border-white/[0.08] bg-white/[0.03] hover:bg-white/[0.06] text-[12px] font-medium text-strong inline-flex items-center justify-center gap-1.5 transition-colors"
             >
               <UserPlus size={13} strokeWidth={1.9} />
               Convidar
@@ -300,7 +297,7 @@ export default function ProfilePopover({
                   flashToast('perfil completo em breve')
                 }
               }}
-              className="flex-1 h-10 px-2.5 rounded-xl border border-white/[0.08] bg-white/[0.03] hover:bg-white/[0.06] text-[12px] font-medium text-strong inline-flex items-center justify-center gap-1.5 transition-colors"
+              className="flex-1 h-9 px-2.5 rounded-xl border border-white/[0.08] bg-white/[0.03] hover:bg-white/[0.06] text-[12px] font-medium text-strong inline-flex items-center justify-center gap-1.5 transition-colors"
             >
               <ExternalLink size={13} strokeWidth={1.9} />
               Ver perfil
@@ -308,7 +305,7 @@ export default function ProfilePopover({
             <button
               type="button"
               onClick={() => flashToast('mais opções em breve')}
-              className="w-10 h-10 rounded-xl border border-white/[0.08] bg-white/[0.03] hover:bg-white/[0.06] text-muted hover:text-strong inline-flex items-center justify-center transition-colors"
+              className="w-9 h-9 rounded-xl border border-white/[0.08] bg-white/[0.03] hover:bg-white/[0.06] text-muted hover:text-strong inline-flex items-center justify-center transition-colors"
               aria-label="Mais"
               title="Mais"
             >
@@ -316,43 +313,38 @@ export default function ProfilePopover({
             </button>
           </div>
 
-          <div className="mt-5 pt-4 border-t border-white/[0.06] grid grid-cols-2 gap-4">
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted mb-2.5">
-                Spaces em comum
-              </p>
-              <div className="flex items-start gap-3">
-                {space ? (
-                  <SpaceChip
-                    name={space.name}
-                    accent={accent}
-                    icon={space.icon}
-                  />
-                ) : (
-                  <p className="text-[11px] text-muted">Nenhum ainda</p>
-                )}
+          {/* Single compact meta row — spaces + status badges (not duplicating tags) */}
+          <div className="mt-5 pt-4 border-t border-white/[0.06] space-y-3.5">
+            {space && (
+              <div className="flex items-center gap-3">
+                <SpaceChip name={space.name} accent={accent} />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted/80">
+                    Space em comum
+                  </p>
+                  <p className="text-[13px] font-medium text-strong truncate mt-0.5">{space.name}</p>
+                </div>
               </div>
-            </div>
+            )}
+
             <div>
-              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted mb-2.5">
-                Badges
+              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted/80 mb-2">
+                Distintivos
               </p>
-              <div className="flex items-start gap-2.5 flex-wrap">
+              <div className="flex flex-wrap gap-1.5">
                 {subjectIsCreator && (
-                  <BadgeChip label="Criador" color="#e8b84a" icon={Crown} />
+                  <SolidBadge label="Criador" color="#e8b84a" icon={Crown} />
                 )}
-                {liveTags.map((tag) => (
-                  <BadgeChip key={tag.id} label={tag.label} color={tag.color} icon={Moon} />
-                ))}
-                <BadgeChip label="Lunar" color={accent} icon={Moon} />
+                <SolidBadge label="Lunar" color={accent} icon={Moon} />
                 {(inRoom && purposeOfRoom?.type === 'voice') && (
-                  <BadgeChip label="Voz" color={accent} icon={Mic} />
+                  <SolidBadge label="Em voz" color={accent} icon={Mic} />
                 )}
               </div>
             </div>
           </div>
 
           <TagAssignPanel
+            compact
             targetUserId={member.userId}
             currentUserId={currentUserId}
             selfProfile={currentUserProfile}
@@ -379,18 +371,19 @@ export default function ProfilePopover({
             </button>
           )}
 
-          <button
-            type="button"
-            onClick={handleCopy}
-            className="mt-4 inline-flex items-center gap-1.5 text-[11.5px] text-muted hover:text-strong transition-colors"
-          >
-            {copied ? <Check size={12} className="text-positive" /> : <Copy size={12} />}
-            {copied ? 'ID copiado' : 'Copiar ID'}
-          </button>
-
-          {isCreator && !subjectIsCreator && (
-            <p className="mt-2 text-[10.5px] text-warning/80">Você é o criador deste Space</p>
-          )}
+          <div className="mt-4 flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="inline-flex items-center gap-1.5 text-[11.5px] text-muted hover:text-strong transition-colors"
+            >
+              {copied ? <Check size={12} className="text-positive" /> : <Copy size={12} />}
+              {copied ? 'ID copiado' : 'Copiar ID'}
+            </button>
+            {isCreator && !subjectIsCreator && (
+              <p className="text-[10.5px] text-warning/80">Você é o criador</p>
+            )}
+          </div>
         </div>
       </div>
     </ModalShell>
@@ -409,10 +402,6 @@ function CosmicDecor({ accent }) {
       <span className="absolute top-8 right-16 w-1 h-1 rounded-full bg-white/70" />
       <span className="absolute top-14 right-24 w-1.5 h-1.5 rounded-full bg-white/50" />
       <span className="absolute bottom-10 left-1/3 w-1 h-1 rounded-full bg-white/60" />
-      <svg className="absolute bottom-3 left-0 w-full h-10 opacity-30" viewBox="0 0 400 40" fill="none">
-        <path d="M0 28 C60 8, 120 36, 180 20 S300 4, 400 24" stroke="white" strokeWidth="1.2" />
-        <path d="M0 34 C80 18, 140 38, 220 26 S320 12, 400 30" stroke="white" strokeWidth="0.8" opacity="0.6" />
-      </svg>
     </div>
   )
 }
@@ -434,36 +423,40 @@ function Waveform({ accent }) {
 
 function SpaceChip({ name, accent }) {
   return (
-    <div className="flex flex-col items-center gap-1 w-[52px]">
-      <span
-        className="w-10 h-10 rounded-full flex items-center justify-center"
-        style={{ background: hexAlpha(accent, 0.18), color: accent }}
-      >
-        <Gamepad2 size={16} strokeWidth={1.8} />
-      </span>
-      <span className="text-[9.5px] text-muted text-center leading-tight line-clamp-2 w-full">
-        {name}
-      </span>
-    </div>
+    <span
+      className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0"
+      style={{ background: accent, color: contrastOn(accent), boxShadow: '0 2px 0 rgba(0,0,0,0.25)' }}
+      title={name}
+    >
+      <Gamepad2 size={18} strokeWidth={1.9} />
+    </span>
   )
 }
 
-function BadgeChip({ label, color, icon: Icon }) {
+function SolidBadge({ label, color, icon: Icon }) {
   return (
-    <div className="flex flex-col items-center gap-1 w-[44px]">
-      <span
-        className="w-9 h-9 rounded-full flex items-center justify-center border"
-        style={{
-          color,
-          borderColor: hexAlpha(color, 0.35),
-          background: hexAlpha(color, 0.1),
-        }}
-      >
-        <Icon size={14} strokeWidth={2} />
-      </span>
-      <span className="text-[9px] text-muted text-center leading-tight">{label}</span>
-    </div>
+    <span
+      className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full text-[10.5px] font-bold uppercase tracking-wide"
+      style={{
+        background: color,
+        color: contrastOn(color),
+        boxShadow: '0 1px 0 rgba(0,0,0,0.25)',
+      }}
+    >
+      <Icon size={12} strokeWidth={2.2} />
+      {label}
+    </span>
   )
+}
+
+function contrastOn(hex) {
+  if (!hex || typeof hex !== 'string' || !hex.startsWith('#')) return '#ffffff'
+  const n = parseInt(hex.slice(1), 16)
+  if (!Number.isFinite(n)) return '#ffffff'
+  const r = (n >> 16) & 255
+  const g = (n >> 8) & 255
+  const b = n & 255
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 > 0.62 ? '#0b0b0f' : '#ffffff'
 }
 
 function hexAlpha(hex, alpha = 1) {

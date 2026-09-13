@@ -37,7 +37,7 @@ export function VoiceRoomHeader({
   return (
     <header
       className={[
-        '@container shrink-0 px-3 sm:px-5 pt-4 sm:pt-6 pb-2 sm:pb-3 relative',
+        '@container vc-voice-room-header shrink-0 px-3 sm:px-5 pt-4 sm:pt-6 pb-2 sm:pb-3 relative',
         cinema ? 'text-white' : '',
       ].filter(Boolean).join(' ')}
     >

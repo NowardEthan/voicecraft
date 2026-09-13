@@ -117,10 +117,14 @@ export function isDefaultCoverFit(fit) {
 
 export function coverImageStyle(fit) {
   const { x, y, zoom } = normalizeCoverFit(fit)
+  // object-cover + focal point; scale from the same origin so framing
+  // stays consistent across containers that share the same aspect-ratio.
   return {
+    objectFit: 'cover',
     objectPosition: `${x}% ${y}%`,
-    transform: zoom === 1 ? undefined : `scale(${zoom})`,
+    transform: `scale(${zoom})`,
     transformOrigin: `${x}% ${y}%`,
+    willChange: zoom === 1 ? undefined : 'transform',
   }
 }
 

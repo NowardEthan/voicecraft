@@ -17,16 +17,32 @@ import {
   getDocs,
   limit,
   onSnapshot,
+  orderBy,
   query,
   serverTimestamp,
   setDoc,
+  startAfter,
   updateDoc,
   where,
   writeBatch,
+  deleteField,
 } from 'firebase/firestore'
+import { normalizeAutopurge } from '../../features/chat/commands/chatAutomation'
+import { normalizeLobby, applyLobbyTemplate, lobbyDayKey } from '../../features/chat/lobbySchema'
+import {
+  normalizeRules,
+  rulesContentFingerprint,
+  findRulesRoom,
+} from '../../features/chat/rulesSchema'
 import { onAuthStateChanged, updateProfile } from 'firebase/auth'
 import { auth, db, VC } from '../firebase/app'
-import { deleteSpaceCover, uploadSpaceCover, uploadRoomCover, deleteRoomCover } from '../firebase/covers'
+import { deleteSpaceCover, uploadSpaceCover, uploadSpaceIcon, deleteSpaceIcon, uploadRoomCover, deleteRoomCover, uploadAnnounceAsset } from '../firebase/covers'
+import {
+  normalizeAnnounce,
+  announcePreviewText,
+  sanitizeAnnounceHtml,
+  htmlToPlainText,
+} from '../../features/chat/announceSchema.js'
 import { uploadChatFile } from '../firebase/chatFiles'
 import {
   attachUserPresence,
@@ -112,6 +128,8 @@ function toMemberView(id, data = {}) {
     status: data.status || data.statusText || null,
     roleIds: Array.isArray(data.roleIds) ? data.roleIds.filter(Boolean) : [],
     perms: data.perms && typeof data.perms === 'object' ? data.perms : null,
+    rulesAcceptedAt: data.rulesAcceptedAt || null,
+    rulesAcceptedVersion: Math.max(0, Math.floor(Number(data.rulesAcceptedVersion) || 0)),
   }
 }
 
@@ -158,6 +176,10 @@ function toRoomView(id, data = {}) {
     lastMessagePreview: data.lastMessagePreview || '',
     lastAuthorId: data.lastAuthorId || null,
     lastAuthorName: data.lastAuthorName || '',
+    chatLocked: !!data.chatLocked,
+    slowModeSeconds: Math.min(3600, Math.max(0, Number(data.slowModeSeconds) || 0)),
+    lobby: normalizeLobby(data.lobby),
+    rules: normalizeRules(data.rules),
   }
 }
 
@@ -183,6 +205,9 @@ function toSpaceSummary(id, data = {}, joined = true) {
     roomCount: Number(data.roomCount) || 0,
     joined,
     createdBy: data.createdBy || null,
+    chatAutomation: data.chatAutomation && typeof data.chatAutomation === 'object'
+      ? { autopurge: normalizeAutopurge(data.chatAutomation.autopurge) }
+      : null,
   }
 }
 
@@ -214,6 +239,8 @@ export class SignalingClient {
     this._roomUnsubs = []
     this._heartbeat = null
     this._spaceCache = null
+    /** Cache of every recently visited Space, keyed by id. */
+    this._spaceCacheById = new Map()
 
     this.peerJoinedCallback = null
     this.peerLeftCallback = null
@@ -241,6 +268,45 @@ export class SignalingClient {
       chat: new Set(),
       presenceChanged: new Set(),
     }
+  }
+
+  // ----------------------------------------------------------------------
+  // In-memory Space cache helpers.
+  //
+  // _spaceCache keeps the active space for backward compatibility, but we
+  // also keep every visited Space around in a Map so switching between
+  // recently visited Spaces becomes instant (no Firestore round-trip, no
+  // second hydration, no flicker). The cache is invalidated on
+  // updateSpace / deleteSpace / leaveSpace / Firestore delete events so
+  // stale data never lingers.
+  // ----------------------------------------------------------------------
+
+  /** Read a cached Space by id without touching Firestore. */
+  getCachedSpace(id) {
+    if (!id) return null
+    return this._spaceCacheById.get(id) || null
+  }
+
+  /** Store (or replace) a Space in the cache. Keeps _spaceCache in sync
+   *  when the stored Space is the active one. */
+  cacheSpace(space) {
+    if (!space || !space.id) return space
+    this._spaceCacheById.set(space.id, space)
+    if (this.spaceId === space.id) this._spaceCache = space
+    return space
+  }
+
+  /** Drop a Space from the cache. Clears _spaceCache if it pointed here. */
+  invalidateCachedSpace(id) {
+    if (!id) return
+    if (this._spaceCacheById.has(id)) this._spaceCacheById.delete(id)
+    if (this.spaceId === id) this._spaceCache = null
+  }
+
+  /** Wipe the entire cache (used by disconnect / sign-out). */
+  clearSpaceCache() {
+    this._spaceCacheById.clear()
+    this._spaceCache = null
   }
 
   onSpaceChanged(fn)      { return this._subscribe('spaceChanged', fn) }
@@ -339,8 +405,8 @@ export class SignalingClient {
     if (this._connectPromise) return this._connectPromise
     this._closed = false
     this._connectPromise = this._connectFirebase()
-    return this._connectPromise
-  }
+      return this._connectPromise
+    }
 
   async _connectFirebase() {
     this._emit('status', { type: 'reconnecting' })
@@ -472,8 +538,32 @@ export class SignalingClient {
     this._spacePresenceOff = handle
 
     const applyPresenceMap = (map) => {
+      const prev = this._presenceByUser || {}
+      // Shallow compare: if every user's online/roomId stays the same we
+      // must NOT bump _spaceCache, otherwise useCurrentSpace re-renders
+      // the entire member tree on every harmless RTDB tick.
+      let changed = false
+      const aKeys = Object.keys(prev)
+      const bKeys = Object.keys(map)
+      if (aKeys.length !== bKeys.length) {
+        changed = true
+      } else {
+        for (const k of bKeys) {
+          const pa = prev[k]
+          const pb = map[k]
+          if (!pa) { changed = true; break }
+          if (!!pa.online !== !!pb.online) { changed = true; break }
+          if ((pa.roomId || null) !== (pb.roomId || null)) { changed = true; break }
+        }
+        if (!changed) {
+          for (const k of aKeys) {
+            if (!(k in map)) { changed = true; break }
+          }
+        }
+      }
       this._presenceByUser = map
-      if (this._spaceCache?.members) {
+
+      if (changed && this._spaceCache?.members) {
         const members = this._spaceCache.members.map((m) => {
           const p = map[m.userId]
           if (!p) {
@@ -489,8 +579,12 @@ export class SignalingClient {
               : null,
           }
         })
-        this._spaceCache = { ...this._spaceCache, members }
+        this._spaceCache = this.cacheSpace({ ...this._spaceCache, members })
       }
+
+      // Always emit so other listeners (e.g. live audio room composition)
+      // can refresh; the per-member React state in useCurrentSpace
+      // applies its own shallow check before triggering a re-render.
       this._emit('presenceChanged', { spaceId, presence: map })
     }
 
@@ -570,7 +664,10 @@ export class SignalingClient {
       members = membersSnap.docs.map((d) => toMemberView(d.id, d.data()))
     }
     const full = toSpaceFull(spaceId, snap.data(), rooms, members)
-    this._spaceCache = full
+    // Mirror into the per-id cache so subsequent navigations to this Space
+    // are instant. _spaceCache stays bound to the active space for legacy
+    // callers (can(), _selfMember(), etc.).
+    this.cacheSpace(full)
     return full
   }
 
@@ -582,8 +679,11 @@ export class SignalingClient {
 
     this._spaceUnsubs.push(onSnapshot(spaceRef(spaceId), (snap) => {
       if (!snap.exists()) {
+        // Server-side delete event — drop from every cache so a stale
+        // navigation later cannot resurrect this Space from memory.
+        this.invalidateCachedSpace(spaceId)
         if (this.spaceId === spaceId) {
-          this.spaceId = null
+        this.spaceId = null
           this._spaceCache = null
           this._emit('spaceChanged', { space: null, currentSpace: null, deleted: spaceId })
         }
@@ -592,13 +692,19 @@ export class SignalingClient {
       const data = snap.data()
       const prev = this._spaceCache
       const full = toSpaceFull(spaceId, data, prev?.rooms || [], prev?.members || [])
-      this._spaceCache = full
+      this.cacheSpace(full)
       this._emit('spaceChanged', { space: full, updated: true })
     }))
 
     this._spaceUnsubs.push(onSnapshot(roomsCol(spaceId), (snap) => {
       const rooms = snap.docs.map((d) => toRoomView(d.id, d.data()))
-      if (this._spaceCache) this._spaceCache = { ...this._spaceCache, rooms, roomCount: rooms.length }
+      if (this._spaceCache) {
+        this._spaceCache = this.cacheSpace({
+          ...this._spaceCache,
+          rooms,
+          roomCount: rooms.length,
+        })
+      }
       if (!roomsReady) {
         roomsReady = true
         return
@@ -638,7 +744,13 @@ export class SignalingClient {
           createdAt: view.createdAt || prev.createdAt || null,
         }
       })
-      if (this._spaceCache) this._spaceCache = { ...this._spaceCache, members, memberCount: members.length }
+      if (this._spaceCache) {
+        this._spaceCache = this.cacheSpace({
+          ...this._spaceCache,
+          members,
+          memberCount: members.length,
+        })
+      }
       if (!membersReady) {
         membersReady = true
         // Push enriched list into UI — first snapshot used to skip emits and
@@ -734,10 +846,17 @@ export class SignalingClient {
     if (extras.cover) {
       cover = await uploadSpaceCover(spaceId, extras.cover)
     }
+    let resolvedIcon = String(icon || 'ph:users-three:outline')
+    if (resolvedIcon.startsWith('data:image/')) {
+      const uploaded = await uploadSpaceIcon(spaceId, resolvedIcon)
+      resolvedIcon = uploaded || resolvedIcon
+    } else if (!/^https?:\/\//.test(resolvedIcon)) {
+      resolvedIcon = resolvedIcon.slice(0, 80)
+    }
     const payload = {
       name: String(name || '').trim() || 'sem nome',
       description: String(description || '').slice(0, 256),
-      icon: String(icon || 'ph:users-three:outline').slice(0, 80),
+      icon: resolvedIcon,
       color: /^#[0-9a-fA-F]{6}$/.test(color || '') ? color : '#E74C3C',
       cover,
       coverFit: extras.coverFit || null,
@@ -790,6 +909,71 @@ export class SignalingClient {
   }
 
   async joinSpace(spaceId, { keepVoice = false } = {}) {
+    // Cache hit short-circuit: if we already hydrated this Space in this
+    // session, paint it instantly and skip the round-trip. We still need
+    // to flip presence / voiceSpaceId, but those don't block the UI.
+    const cached = this.getCachedSpace(spaceId)
+    if (cached && cached.id) {
+      const voiceSpaceId = this.voiceSpaceId || (this.roomId ? this.spaceId : null)
+      const voiceRoomId = this.roomId
+      const preserving = !!(keepVoice && voiceRoomId && voiceSpaceId)
+
+      // Drop the current call only when not preserving it — keepVoice must
+      // never interrupt an active voice session.
+      if (!preserving && this.roomId) {
+        try { await this.leaveRoom() } catch {}
+      }
+
+      this.spaceId = spaceId
+      if (preserving) {
+        this.voiceSpaceId = voiceSpaceId
+        this.roomId = voiceRoomId
+      } else {
+        this.voiceSpaceId = null
+        this.roomId = null
+      }
+
+      // Mirror the cached object into _spaceCache so legacy callers
+      // (can(), _selfMember(), _reconcileMemberDocs, etc.) keep working.
+      this._spaceCache = cached
+
+      // Refresh presence doc + membership marker in the background.
+      // We don't gate the UI on these — the cached data already paints.
+      this._writeJoinPresence(spaceId).catch((err) => console.warn('[joinSpace] presence', err))
+
+      // Fire-and-forget reconcile; the result can't be known fast enough
+      // to gate navigation, and a reconcile failure is recoverable on
+      // the next manual refresh.
+      if (this.userId) {
+        const canonicalIds = new Set([
+          ...(Array.isArray(cached.memberIds) ? cached.memberIds : []),
+          this.userId,
+        ])
+        if (canonicalIds.size > 0) {
+          this._reconcileMemberDocs(spaceId, canonicalIds)
+            .catch((err) => console.warn('[joinSpace] reconcile', err))
+        }
+      }
+
+      // Still attach fresh listeners so we react to new messages / room
+      // changes — the cached snapshot may be a few minutes old.
+      this._attachSpaceListeners(spaceId)
+      this._bindSpacePresence(spaceId)
+
+      this._emit('spaceChanged', {
+        space: cached,
+        currentSpace: cached,
+        currentRoom: preserving ? { id: voiceRoomId } : null,
+        voicePreserved: preserving,
+        fromCache: true,
+      })
+      return { space: cached, fromCache: true }
+    }
+
+    // Cache miss: full hydration path. This still runs ONE _hydrateSpace
+    // (the original code ran it twice in immediate succession — once
+    // before reconcile and once after, which doubled every first-visit
+    // round-trip for no observable benefit).
     const snap = await getDoc(spaceRef(spaceId))
     if (!snap.exists()) throw new Error('space não encontrado')
     const data = snap.data() || {}
@@ -834,7 +1018,7 @@ export class SignalingClient {
       this.roomId = voiceRoomId
     } else {
       this.voiceSpaceId = null
-      this.roomId = null
+        this.roomId = null
     }
 
     const [space] = await Promise.all([
@@ -844,28 +1028,43 @@ export class SignalingClient {
       voicePresenceWrite,
     ])
 
-    // Drop orphan member docs + prior-auth ghosts that share this account email.
-    const canonicalIds = new Set(memberIds)
-    if (this.userId) canonicalIds.add(this.userId)
-    if (canonicalIds.size > 0) {
-      try {
-        await this._reconcileMemberDocs(spaceId, canonicalIds)
-      } catch (err) {
-        console.warn('[joinSpace] reconcile', err)
+    // Fire-and-forget reconcile: never block joinSpace on this. Errors
+    // are logged so debugging orphan member docs stays possible.
+    if (this.userId) {
+      const canonicalIds = new Set(memberIds)
+      canonicalIds.add(this.userId)
+      if (canonicalIds.size > 0) {
+        this._reconcileMemberDocs(spaceId, canonicalIds)
+          .catch((err) => console.warn('[joinSpace] reconcile', err))
       }
     }
 
-    const fresh = await this._hydrateSpace(spaceId, null, { enrichUsers: true }).catch(() => space)
-
     this._attachSpaceListeners(spaceId)
     this._bindSpacePresence(spaceId)
-    this._emit('spaceChanged', {
-      space: fresh,
-      currentSpace: fresh,
+        this._emit('spaceChanged', {
+      space,
+      currentSpace: space,
       currentRoom: preserving ? { id: voiceRoomId } : null,
       voicePreserved: preserving,
     })
-    return { space: fresh }
+    if (!alreadyMember) {
+      this._postLobbyEventsForSpace('join').catch((err) => {
+        console.warn('[joinSpace] lobby', err)
+      })
+    }
+    return { space }
+  }
+
+  /** Write the local member's presence row on join. Used by the cache-hit
+   *  branch where we want to mark ourselves online without gating the UI. */
+  _writeJoinPresence(spaceId) {
+    if (!this.userId || !spaceId) return Promise.resolve()
+    return setDoc(memberRef(spaceId, this.userId), {
+      ...this._memberProfileFields(),
+      online: true,
+      lastSeen: Date.now(),
+      location: { spaceId, roomId: null },
+    }, { merge: true })
   }
 
   /**
@@ -913,6 +1112,13 @@ export class SignalingClient {
     const id = spaceId || this.spaceId
     if (!id || !this.userId) return
 
+    // Post leave cards while we still have space context / lobby rooms.
+    if (this.spaceId === id) {
+      try { await this._postLobbyEventsForSpace('leave') } catch (err) {
+        console.warn('[leaveSpace] lobby', err)
+      }
+    }
+
     // Leaving the Space that owns the call also ends the call.
     const voiceSpace = this.voiceSpaceId || this.spaceId
     if (this.roomId && voiceSpace === id) {
@@ -934,13 +1140,13 @@ export class SignalingClient {
     if (this.spaceId === id) this.spaceId = this.voiceSpaceId || null
     if (this.voiceSpaceId === id) {
       this.voiceSpaceId = null
-      this.roomId = null
+        this.roomId = null
     }
-    this._spaceCache = null
-    this._emit('spaceChanged', {
+    this.invalidateCachedSpace(id)
+        this._emit('spaceChanged', {
       space: null,
       currentSpace: null,
-      currentRoom: null,
+          currentRoom: null,
       left: id,
     })
   }
@@ -963,17 +1169,19 @@ export class SignalingClient {
     batch.delete(spaceRef(id))
     await batch.commit()
     await deleteSpaceCover(id)
+    await deleteSpaceIcon(id)
     if (this.spaceId === id) {
       this._clearSpacePresence()
       this._clear(this._roomUnsubs)
       this._clear(this._spaceUnsubs)
-      this.spaceId = null
-      this.roomId = null
+        this.spaceId = null
+        this.roomId = null
       this._spaceCache = null
-    }
-    this._emit('spaceChanged', {
-      space: null,
-      currentSpace: null,
+        }
+    this.invalidateCachedSpace(id)
+        this._emit('spaceChanged', {
+          space: null,
+          currentSpace: null,
       deleted: id,
     })
   }
@@ -996,7 +1204,6 @@ export class SignalingClient {
     if (typeof updates.name === 'string') next.name = updates.name.slice(0, 64).trim()
     if (typeof updates.description === 'string') next.description = updates.description.slice(0, 256)
     if (typeof updates.slogan === 'string') next.slogan = updates.slogan.slice(0, 80)
-    if (typeof updates.icon === 'string') next.icon = updates.icon.slice(0, 80)
     if (typeof updates.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(updates.color)) next.color = updates.color
     if (Array.isArray(updates.events)) next.events = updates.events
     if (updates.coverFit !== undefined) next.coverFit = updates.coverFit
@@ -1007,6 +1214,16 @@ export class SignalingClient {
     if (updates.fonts !== undefined) {
       next.fonts = normalizeSpaceFonts(updates.fonts).slice(0, 24)
     }
+    if (typeof updates.icon === 'string') {
+      if (updates.icon.startsWith('data:image/')) {
+        const uploaded = await uploadSpaceIcon(id, updates.icon)
+        next.icon = uploaded || updates.icon
+      } else if (/^https?:\/\//.test(updates.icon)) {
+        next.icon = updates.icon
+      } else {
+        next.icon = updates.icon.slice(0, 80)
+      }
+    }
     if (updates.cover === null) {
       await deleteSpaceCover(id)
       next.cover = null
@@ -1016,8 +1233,15 @@ export class SignalingClient {
     if (Object.keys(next).length === 0) return next
     await updateDoc(spaceRef(id), next)
     if (this._spaceCache?.id === id) {
-      this._spaceCache = { ...this._spaceCache, ...next }
+      // Mirror into per-id cache so the next visit gets the fresh values.
+      this._spaceCache = this.cacheSpace({ ...this._spaceCache, ...next })
       this._emit('spaceChanged', { space: this._spaceCache, updated: true })
+    } else {
+      // The Space isn't active, but we may still have it cached from a
+      // prior visit — update the cached copy in place without firing
+      // any UI event.
+      const cached = this._spaceCacheById.get(id)
+      if (cached) this._spaceCacheById.set(id, { ...cached, ...next })
     }
     return next
   }
@@ -1137,11 +1361,11 @@ export class SignalingClient {
     await updateDoc(spaceRef(spaceId), { memberIds: arrayRemove(targetUid) })
     try { await deleteDoc(memberRef(spaceId, targetUid)) } catch {}
     if (this._spaceCache) {
-      this._spaceCache = {
+      this._spaceCache = this.cacheSpace({
         ...this._spaceCache,
         memberIds: (this._spaceCache.memberIds || []).filter((id) => id !== targetUid),
         members: (this._spaceCache.members || []).filter((m) => m.userId !== targetUid),
-      }
+      })
       this._emit('spaceChanged', { space: this._spaceCache, updated: true })
       this._emit('memberLeft', { userId: targetUid, spaceId })
     }
@@ -1260,17 +1484,20 @@ export class SignalingClient {
   async sendChatMessage(message, roomId = null) {
     const rid = roomId || this.roomId
     if (!this.spaceId || !rid || !message) return
+    const id = message.id || uid()
     const clean = JSON.parse(JSON.stringify({
       ...message,
+      id,
       authorId: this.userId,
       ts: message.ts || Date.now(),
     }))
-    const docRef = await addDoc(messagesCol(this.spaceId, rid), clean)
+    // Doc id === client message id so edit/delete can target by id.
+    await setDoc(doc(messagesCol(this.spaceId, rid), id), clean, { merge: true })
     const preview = String(clean.text || clean.attachment?.name || 'Anexo').slice(0, 140)
     try {
       await updateDoc(roomRef(this.spaceId, rid), {
         lastMessageAt: clean.ts,
-        lastMessageId: docRef.id,
+        lastMessageId: id,
         lastMessagePreview: preview,
         lastAuthorId: this.userId,
         lastAuthorName: clean.author || this.displayName || 'alguém',
@@ -1278,6 +1505,638 @@ export class SignalingClient {
     } catch (err) {
       console.warn('[sendChatMessage] lastMessage', err)
     }
+  }
+
+  /**
+   * Soft-delete a chat message in Firestore so it stays deleted across
+   * room/space switches. Supports both new docs (id === doc id) and
+   * legacy addDoc rows that stored client id as a field.
+   */
+  async deleteChatMessage(messageId, roomId = null) {
+    const rid = roomId || this.roomId
+    if (!this.spaceId || !rid || !messageId) return
+    const col = messagesCol(this.spaceId, rid)
+    const patch = {
+      deleted: true,
+      text: '',
+      deletedAt: Date.now(),
+      deletedBy: this.userId,
+      pinned: false,
+      pinnedAt: deleteField(),
+      pinnedBy: deleteField(),
+    }
+    const directRef = doc(col, messageId)
+    const direct = await getDoc(directRef)
+    if (direct.exists()) {
+      await updateDoc(directRef, patch)
+      return
+    }
+    const q = query(col, where('id', '==', messageId), limit(1))
+    const found = await getDocs(q)
+    if (found.empty) {
+      console.warn('[deleteChatMessage] message not found', messageId)
+      return
+    }
+    await updateDoc(found.docs[0].ref, patch)
+  }
+
+  /**
+   * Pin / unpin a chat message. Persists on the message doc so all
+   * clients see it via listenChat. Max 50 pins per room.
+   */
+  async pinChatMessage(messageId, pinned = true, roomId = null) {
+    const rid = roomId || this.roomId
+    if (!this.spaceId || !rid || !messageId) return null
+
+    const col = messagesCol(this.spaceId, rid)
+    let targetRef = doc(col, messageId)
+    let snap = await getDoc(targetRef)
+    if (!snap.exists()) {
+      const q = query(col, where('id', '==', messageId), limit(1))
+      const found = await getDocs(q)
+      if (found.empty) throw new Error('Mensagem não encontrada')
+      targetRef = found.docs[0].ref
+      snap = found.docs[0]
+    }
+
+    const data = snap.data() || {}
+    if (data.deleted) throw new Error('Não dá para fixar mensagem apagada')
+
+    const isAuthor = data.authorId === this.userId
+    if (!isAuthor && !this.can('mod_chat')) {
+      throw new Error('só o autor ou quem modera o chat pode fixar')
+    }
+
+    if (pinned) {
+      try {
+        const pinnedSnap = await getDocs(query(col, where('pinned', '==', true), limit(51)))
+        const already = pinnedSnap.docs.some((d) => d.id === targetRef.id || d.data()?.id === messageId)
+        if (!already && pinnedSnap.size >= 50) {
+          throw new Error('Limite de 50 mensagens fixadas nesta sala')
+        }
+      } catch (err) {
+        if (err?.message?.includes('Limite de 50')) throw err
+        console.warn('[pinChatMessage] count', err)
+      }
+      const meta = { pinned: true, pinnedAt: Date.now(), pinnedBy: this.userId }
+      await updateDoc(targetRef, meta)
+      return meta
+    }
+
+    await updateDoc(targetRef, {
+      pinned: false,
+      pinnedAt: deleteField(),
+      pinnedBy: deleteField(),
+    })
+    return { pinned: false }
+  }
+
+  /**
+   * Hard-delete chat messages in the current (or given) room — including
+   * already soft-deleted stubs ("mensagem apagada"). Purge empties the
+   * channel; single-message delete stays soft-delete.
+   * @returns {Promise<number>} number of docs removed
+   */
+  async purgeChatMessages(roomId = null, { authorId = null, beforeTs = null, max = 2000 } = {}) {
+    const rid = roomId || this.roomId
+    if (!this.spaceId || !rid) return 0
+    this._assertCan('mod_chat', 'precisa da permissão Moderar chat')
+
+    const col = messagesCol(this.spaceId, rid)
+    const pageSize = 200
+    const maxTotal = Math.min(Math.max(Number(max) || 2000, 1), 5000)
+    let purged = 0
+    let cursor = null
+
+    while (purged < maxTotal) {
+      const constraints = [orderBy('ts', 'asc')]
+      if (cursor) constraints.push(startAfter(cursor))
+      constraints.push(limit(pageSize))
+      const snap = await getDocs(query(col, ...constraints))
+      if (snap.empty) break
+
+      const batch = writeBatch(db)
+      let ops = 0
+      for (const d of snap.docs) {
+        if (purged + ops >= maxTotal) break
+        const data = d.data() || {}
+        if (authorId && data.authorId !== authorId) continue
+        if (beforeTs != null && Number(data.ts || 0) >= Number(beforeTs)) continue
+        batch.delete(d.ref)
+        ops += 1
+      }
+
+      if (ops > 0) {
+        await batch.commit()
+        purged += ops
+        // Deletes invalidate pagination — rescan from the start.
+        cursor = null
+        continue
+      }
+
+      // No matches in this page (author/before filter): advance.
+      cursor = snap.docs[snap.docs.length - 1]
+      if (snap.size < pageSize) break
+    }
+    return purged
+  }
+
+  /**
+   * Persist chatAutomation.autopurge on the Space (mod_chat or edit_space).
+   */
+  async updateChatAutomation(spaceId, autopurge) {
+    const id = spaceId || this.spaceId
+    if (!id) throw new Error('Space inválido')
+    if (!this.can('mod_chat') && !this.can('edit_space')) {
+      throw new Error('precisa de Moderar chat ou Editar Space')
+    }
+    const next = {
+      chatAutomation: {
+        autopurge: normalizeAutopurge(autopurge),
+      },
+    }
+    await updateDoc(spaceRef(id), next)
+    if (this._spaceCache?.id === id) {
+      this._spaceCache = this.cacheSpace({ ...this._spaceCache, ...next })
+      this._emit('spaceChanged', { space: this._spaceCache, updated: true })
+    } else {
+      const cached = this._spaceCacheById.get(id)
+      if (cached) this._spaceCacheById.set(id, { ...cached, ...next })
+    }
+    return next
+  }
+
+  /**
+   * Chat moderation flags on a room (lock / slowmode). Requires mod_chat.
+   */
+  async updateRoomChatModeration(roomId, updates = {}) {
+    const rid = roomId || this.roomId
+    if (!this.spaceId || !rid) throw new Error('Sala inválida')
+    this._assertCan('mod_chat', 'precisa da permissão Moderar chat')
+    const next = {}
+    if (updates.chatLocked !== undefined) next.chatLocked = !!updates.chatLocked
+    if (updates.slowModeSeconds !== undefined) {
+      next.slowModeSeconds = Math.min(3600, Math.max(0, Number(updates.slowModeSeconds) || 0))
+    }
+    if (Object.keys(next).length === 0) return null
+    await updateDoc(roomRef(this.spaceId, rid), next)
+    const snap = await getDoc(roomRef(this.spaceId, rid))
+    if (!snap.exists()) return null
+    const room = toRoomView(rid, snap.data())
+    this._emit('roomChanged', { kind: 'updated', spaceId: this.spaceId, room })
+    return { room }
+  }
+
+  /** Lobby / welcome-screen config for a conversation room. Requires mod_chat. */
+  async updateRoomLobby(roomId, lobbyConfig = {}) {
+    const rid = roomId || this.roomId
+    if (!this.spaceId || !rid) throw new Error('Sala inválida')
+    this._assertCan('mod_chat', 'precisa da permissão Moderar chat')
+    let lobby = normalizeLobby(lobbyConfig)
+    lobby = {
+      ...lobby,
+      body: lobby.body || htmlToPlainText(lobby.bodyHtml),
+      bodyHtml: sanitizeAnnounceHtml(lobby.bodyHtml),
+    }
+
+    const uploadField = async (key, kind) => {
+      const value = lobby[key]
+      if (!value || typeof value !== 'string' || !value.startsWith('data:image/')) return
+      const url = await uploadAnnounceAsset(this.spaceId, rid, value, kind)
+      if (!url) throw new Error(`Falha ao enviar ${kind}`)
+      lobby = { ...lobby, [key]: url }
+    }
+    await uploadField('banner', 'lobby-banner')
+    await uploadField('iconImage', 'lobby-icon')
+    await uploadField('authorPhoto', 'lobby-author')
+
+    await updateDoc(roomRef(this.spaceId, rid), { lobby })
+    const snap = await getDoc(roomRef(this.spaceId, rid))
+    if (!snap.exists()) return null
+    const room = toRoomView(rid, snap.data())
+    this._emit('roomChanged', { kind: 'updated', spaceId: this.spaceId, room })
+    return { room }
+  }
+
+  /** Rules channel config. Requires mod_chat. Exclusive: only one enabled rules room per Space. */
+  async updateRoomRules(roomId, rulesConfig = {}) {
+    const rid = roomId || this.roomId
+    if (!this.spaceId || !rid) throw new Error('Sala inválida')
+    this._assertCan('mod_chat', 'precisa da permissão Moderar chat')
+
+    const prevSnap = await getDoc(roomRef(this.spaceId, rid))
+    const prevRules = normalizeRules(prevSnap.exists() ? prevSnap.data()?.rules : null)
+
+    let rules = normalizeRules(rulesConfig)
+    rules = {
+      ...rules,
+      body: rules.body || htmlToPlainText(rules.bodyHtml),
+      bodyHtml: sanitizeAnnounceHtml(rules.bodyHtml),
+    }
+
+    const uploadField = async (key, kind) => {
+      const value = rules[key]
+      if (!value || typeof value !== 'string' || !value.startsWith('data:image/')) return
+      const url = await uploadAnnounceAsset(this.spaceId, rid, value, kind)
+      if (!url) throw new Error(`Falha ao enviar ${kind}`)
+      rules = { ...rules, [key]: url }
+    }
+    await uploadField('banner', 'rules-banner')
+    await uploadField('iconImage', 'rules-icon')
+    await uploadField('authorPhoto', 'rules-author')
+
+    if (rules.enabled) {
+      const contentChanged = rulesContentFingerprint(rules) !== rulesContentFingerprint(prevRules)
+        || !prevRules.enabled
+      rules = {
+        ...rules,
+        version: contentChanged
+          ? Math.max(1, (prevRules.version || 0) + 1)
+          : Math.max(1, prevRules.version || 1),
+      }
+    } else {
+      rules = { ...rules, version: Math.max(1, prevRules.version || 1) }
+    }
+
+    await updateDoc(roomRef(this.spaceId, rid), { rules })
+
+    // Ensure only one rules channel is enabled in the Space.
+    if (rules.enabled) {
+      try {
+        const roomsSnap = await getDocs(roomsCol(this.spaceId))
+        await Promise.all(roomsSnap.docs.map(async (d) => {
+          if (d.id === rid) return
+          const other = normalizeRules(d.data()?.rules)
+          if (!other.enabled) return
+          await updateDoc(roomRef(this.spaceId, d.id), {
+            rules: { ...other, enabled: false },
+          })
+        }))
+      } catch (err) {
+        console.warn('[updateRoomRules] exclusive', err)
+      }
+    }
+
+    const snap = await getDoc(roomRef(this.spaceId, rid))
+    if (!snap.exists()) return null
+    const room = toRoomView(rid, snap.data())
+    this._emit('roomChanged', { kind: 'updated', spaceId: this.spaceId, room })
+    return { room }
+  }
+
+  /** Member confirms they read the current rules version. */
+  async acceptSpaceRules(spaceId, version) {
+    const sid = spaceId || this.spaceId
+    if (!sid || !this.userId) throw new Error('Space inválido')
+    const rulesRoom = findRulesRoom(this._spaceCache)
+      || (this._spaceCache?.rooms || []).find((r) => normalizeRules(r?.rules).enabled)
+    const ver = Math.max(
+      1,
+      Math.floor(Number(version)
+        || normalizeRules(rulesRoom?.rules).version
+        || 1),
+    )
+    const payload = {
+      rulesAcceptedAt: Date.now(),
+      rulesAcceptedVersion: ver,
+    }
+    await setDoc(memberRef(sid, this.userId), payload, { merge: true })
+
+    if (this._spaceCache?.members) {
+      this._spaceCache = this.cacheSpace({
+        ...this._spaceCache,
+        members: this._spaceCache.members.map((m) => (
+          m.userId === this.userId ? { ...m, ...payload } : m
+        )),
+      })
+      this._emit('spaceChanged', { space: this._spaceCache, updated: true })
+    }
+    return payload
+  }
+
+  /**
+   * Persist a join/leave card in lobby channel(s).
+   * Join cards are Discord-style (banner + avatar + template).
+   * @param {string} [roomId]
+   * @param {'join'|'leave'} type
+   * @param {object} [memberOverride]
+   */
+  async sendLobbyEvent(roomId, type = 'join', memberOverride = null, opts = {}) {
+    const rid = roomId || this.roomId
+    if (!this.spaceId || !rid || !this.userId) return null
+    const force = !!opts.force
+
+    const roomSnap = await getDoc(roomRef(this.spaceId, rid))
+    if (!roomSnap.exists()) return null
+    const lobby = normalizeLobby(roomSnap.data()?.lobby)
+    if (!lobby.enabled) return null
+    const eventType = type === 'leave' ? 'leave' : 'join'
+    if (eventType === 'join' && !lobby.showJoins) return null
+    if (eventType === 'leave' && !lobby.showLeaves) return null
+
+    const member = memberOverride && typeof memberOverride === 'object' ? memberOverride : null
+    const userId = member?.userId || this.userId
+    const displayName = member?.displayName
+      || this.displayName
+      || this._profile?.displayName
+      || 'Alguém'
+    const photoURL = member?.photoURL || this._profile?.photoURL || ''
+    const spaceName = this._spaceCache?.name || 'Space'
+    const memberCount = Array.isArray(this._spaceCache?.members)
+      ? this._spaceCache.members.length
+      : (this._spaceCache?.memberCount || null)
+
+    const ctx = { user: displayName, space: spaceName, count: memberCount ?? '' }
+    // Keep {{tokens}} in stored templates so the card can render chips at display time.
+    const title = lobby.title
+    const body = lobby.body
+    const bodyHtml = sanitizeAnnounceHtml(lobby.bodyHtml || '')
+    const bannerCaption = lobby.bannerCaption
+    const previewText = applyLobbyTemplate(
+      lobby.body || lobby.title || `${displayName} entrou em ${spaceName}`,
+      ctx,
+    )
+
+    const ts = Date.now()
+    const id = force || eventType === 'leave'
+      ? `lobby_${eventType}_${userId}_${ts}_${uid().slice(0, 6)}`
+      : `lobby_join_${userId}_${lobbyDayKey(ts)}`
+
+    const clean = {
+      id,
+      kind: 'lobby_event',
+      text: eventType === 'join'
+        ? (previewText.slice(0, 140) || `${displayName} entrou em ${spaceName}`)
+        : `${displayName} saiu de ${spaceName}`,
+      author: displayName,
+      authorId: userId,
+      authorPhoto: photoURL,
+      ts,
+      lobbyAccent: lobby.accent,
+      lobbyEvent: {
+        type: eventType,
+        userId,
+        displayName,
+        photoURL,
+        spaceName,
+        memberCount,
+        title,
+        body,
+        bodyHtml,
+        bannerCaption,
+        banner: lobby.banner || null,
+        bannerFit: lobby.bannerFit || null,
+        accent: lobby.accent,
+        badge: lobby.badge,
+        badgeColor: lobby.badgeColor,
+        icon: lobby.icon,
+        iconValue: lobby.iconValue,
+        iconImage: lobby.iconImage,
+        authorName: lobby.authorName,
+        authorPhoto: lobby.authorPhoto,
+        authorIcon: lobby.authorIcon,
+        authorIconValue: lobby.authorIconValue,
+        config: { ...lobby },
+      },
+    }
+
+    try {
+      if (!force && eventType === 'join') {
+        const existing = await getDoc(doc(messagesCol(this.spaceId, rid), id))
+        if (existing.exists()) return null
+      }
+      await setDoc(doc(messagesCol(this.spaceId, rid), id), JSON.parse(JSON.stringify(clean)))
+    } catch (err) {
+      if (eventType === 'join' && !force) return null
+      throw err
+    }
+    try {
+      await updateDoc(roomRef(this.spaceId, rid), {
+        lastMessageAt: ts,
+        lastMessageId: id,
+        lastMessagePreview: clean.text.slice(0, 140),
+        lastAuthorId: userId,
+        lastAuthorName: displayName,
+      })
+    } catch {}
+    return clean
+  }
+
+  /** Post join/leave cards into every lobby-enabled room of the current space. */
+  async _postLobbyEventsForSpace(type = 'join', memberOverride = null) {
+    const spaceId = this.spaceId
+    if (!spaceId) return
+    const rooms = Array.isArray(this._spaceCache?.rooms) ? this._spaceCache.rooms : []
+    const targets = rooms.filter((r) => normalizeLobby(r?.lobby).enabled)
+    if (targets.length === 0) {
+      try {
+        const snap = await getDocs(roomsCol(spaceId))
+        for (const d of snap.docs) {
+          const lobby = normalizeLobby(d.data()?.lobby)
+          if (lobby.enabled) targets.push(toRoomView(d.id, d.data()))
+        }
+      } catch {}
+    }
+    await Promise.allSettled(
+      targets.map((r) => this.sendLobbyEvent(r.id, type, memberOverride)),
+    )
+  }
+
+  /**
+   * Upload data-URL media on an announce draft and sanitize HTML body.
+   * Keeps https URLs as-is so schedule → publish does not re-upload.
+   */
+  async _prepareAnnouncePayload(rid, payload) {
+    const raw = typeof payload === 'string' ? { body: payload } : (payload || {})
+    let announce = normalizeAnnounce(raw)
+    announce = {
+      ...announce,
+      bodyHtml: sanitizeAnnounceHtml(announce.bodyHtml),
+      body: announce.body || htmlToPlainText(announce.bodyHtml),
+    }
+    const hasBody = !!(announce.body || htmlToPlainText(announce.bodyHtml))
+    if (!announce.title && !hasBody) throw new Error('Título ou corpo obrigatório')
+
+    const uploadField = async (field, kind, { required = false } = {}) => {
+      const value = announce[field]
+      if (!value) return
+      if (typeof value === 'string' && /^https?:\/\//i.test(value)) return
+      if (!String(value).startsWith('data:image/')) {
+        if (required) throw new Error('Cover do anúncio inválida')
+        announce = { ...announce, [field]: field === 'authorPhoto' ? '' : null }
+        return
+      }
+      try {
+        const url = await uploadAnnounceAsset(this.spaceId, rid, value, kind)
+        if (!url) {
+          if (required) throw new Error('Falha ao enviar a cover do anúncio')
+          announce = { ...announce, [field]: field === 'authorPhoto' ? '' : null }
+          return
+        }
+        announce = { ...announce, [field]: url }
+      } catch (err) {
+        console.warn(`[announce] ${kind}`, err)
+        if (required) {
+          throw new Error(err?.message || 'Falha ao enviar a cover do anúncio')
+        }
+        announce = { ...announce, [field]: field === 'authorPhoto' ? '' : null }
+      }
+    }
+
+    await uploadField('cover', 'cover', { required: true })
+    await uploadField('iconImage', 'icon')
+    await uploadField('authorPhoto', 'author')
+    return announce
+  }
+
+  /**
+   * Publish a rich announcement card to the room chat.
+   * @param {string|null} roomId
+   * @param {object|string} payload — string (legacy body) or announce draft
+   */
+  async sendChatAnnouncement(roomId, payload = {}) {
+    const rid = roomId || this.roomId
+    if (!this.spaceId || !rid) throw new Error('Sala inválida')
+    this._assertCan('mod_chat', 'precisa da permissão Moderar chat')
+
+    const announce = await this._prepareAnnouncePayload(rid, payload)
+
+    const id = uid()
+    const ts = Date.now()
+    const clean = {
+      id,
+      kind: 'announce',
+      text: announcePreviewText(announce),
+      author: announce.authorName || 'sistema',
+      authorId: this.userId,
+      authorPhoto: announce.authorPhoto || '',
+      ts,
+      announce: {
+        ...announce,
+        scheduledFor: null,
+      },
+    }
+    await setDoc(doc(messagesCol(this.spaceId, rid), id), JSON.parse(JSON.stringify(clean)))
+    try {
+      await updateDoc(roomRef(this.spaceId, rid), {
+        lastMessageAt: ts,
+        lastMessageId: id,
+        lastMessagePreview: announcePreviewText(announce).slice(0, 140),
+        lastAuthorId: this.userId,
+        lastAuthorName: announce.authorName || 'Anúncio',
+      })
+    } catch {}
+    return clean
+  }
+
+  /** Update an existing published announcement message. */
+  async updateChatAnnouncement(roomId, messageId, payload = {}) {
+    const rid = roomId || this.roomId
+    if (!this.spaceId || !rid || !messageId) throw new Error('Sala inválida')
+    this._assertCan('mod_chat', 'precisa da permissão Moderar chat')
+
+    const announce = await this._prepareAnnouncePayload(rid, {
+      ...(typeof payload === 'object' ? payload : {}),
+      scheduledFor: null,
+    })
+
+    const col = messagesCol(this.spaceId, rid)
+    let targetRef = doc(col, messageId)
+    let snap = await getDoc(targetRef)
+    if (!snap.exists()) {
+      const found = await getDocs(query(col, where('id', '==', messageId), limit(1)))
+      if (found.empty) throw new Error('Anúncio não encontrado')
+      targetRef = found.docs[0].ref
+      snap = found.docs[0]
+    }
+    const prior = snap.data() || {}
+    if (prior.kind !== 'announce' && !prior.announce) {
+      throw new Error('Mensagem não é um anúncio')
+    }
+
+    const editedAt = Date.now()
+    const patch = {
+      kind: 'announce',
+      text: announcePreviewText(announce),
+      author: announce.authorName || prior.author || 'sistema',
+      authorPhoto: announce.authorPhoto || '',
+      edited: true,
+      editedAt,
+      announce: {
+        ...announce,
+        scheduledFor: null,
+      },
+    }
+    await updateDoc(targetRef, JSON.parse(JSON.stringify(patch)))
+    return {
+      id: prior.id || messageId,
+      ...prior,
+      ...patch,
+      ts: prior.ts || editedAt,
+    }
+  }
+
+  /** Queue a rich announcement for later publish. */
+  async scheduleChatAnnouncement(roomId, payload = {}) {
+    const rid = roomId || this.roomId
+    if (!this.spaceId || !rid) throw new Error('Sala inválida')
+    this._assertCan('mod_chat', 'precisa da permissão Moderar chat')
+
+    const announce = await this._prepareAnnouncePayload(rid, payload)
+    if (!announce.scheduledFor || announce.scheduledFor <= Date.now()) {
+      throw new Error('Horário de agendamento inválido')
+    }
+
+    const id = uid()
+    const docData = {
+      id,
+      spaceId: this.spaceId,
+      roomId: rid,
+      createdAt: Date.now(),
+      createdBy: this.userId,
+      publishAt: announce.scheduledFor,
+      status: 'scheduled',
+      announce: { ...announce },
+    }
+    await setDoc(
+      doc(collection(db, VC.spaces, this.spaceId, 'rooms', rid, 'scheduled_announcements'), id),
+      JSON.parse(JSON.stringify(docData)),
+    )
+    return docData
+  }
+
+  /**
+   * Publish due scheduled announcements for a room (client-side runner).
+   * Returns number published.
+   */
+  async publishDueAnnouncements(roomId = null) {
+    const rid = roomId || this.roomId
+    if (!this.spaceId || !rid) return 0
+    if (!this.can('mod_chat')) return 0
+
+    const col = collection(db, VC.spaces, this.spaceId, 'rooms', rid, 'scheduled_announcements')
+    const q = query(col, where('status', '==', 'scheduled'), limit(40))
+    let snap
+    try {
+      snap = await getDocs(q)
+    } catch (err) {
+      console.warn('[publishDueAnnouncements]', err)
+      return 0
+    }
+    const now = Date.now()
+    let n = 0
+    for (const d of snap.docs) {
+      const data = d.data() || {}
+      if (Number(data.publishAt || 0) > now) continue
+      try {
+        await this.sendChatAnnouncement(rid, data.announce || {})
+        await updateDoc(d.ref, { status: 'published', publishedAt: Date.now() })
+        n += 1
+      } catch (err) {
+        console.warn('[publishDueAnnouncements] one failed', d.id, err)
+      }
+    }
+    return n
   }
 
   /** Lightweight rooms listener for unread badges (all rooms in a Space). */
@@ -1292,7 +2151,15 @@ export class SignalingClient {
     if (!spaceId || !roomId || typeof cb !== 'function') return () => {}
     return onSnapshot(messagesCol(spaceId, roomId), (snap) => {
       const list = snap.docs
-        .map((d) => ({ id: d.id, ...d.data() }))
+        .map((d) => {
+          const data = d.data() || {}
+          return {
+            ...data,
+            // Prefer client id field; fall back to Firestore doc id.
+            id: data.id || d.id,
+            firestoreId: d.id,
+          }
+        })
         .sort((a, b) => (a.ts || 0) - (b.ts || 0))
       cb(list)
     })
@@ -1351,6 +2218,7 @@ export class SignalingClient {
     this._clear(this._roomUnsubs)
     this._clear(this._spaceUnsubs)
     this._clear(this._unsubs)
+    this.clearSpaceCache()
     this.ws = null
     this._connectPromise = null
     this._emit('status', { type: 'disconnected' })

@@ -62,8 +62,8 @@ if not errorlevel 1 (
     echo Compilando com g++ ^(MinGW^)...
     g++ -std=c++17 -O2 -I src -I third_party\miniaudio_repo ^
         -DMA_NO_RESOURCE_MANAGEMENT=1 -DMA_NO_LOGGING=1 -DMA_NO_JSON=1 -DMA_NO_DATA_STRUCTURES=1 ^
-        src\main.cpp src\capture.cpp -o build\voicecraft-audio.exe ^
-        -lwinmm -lole32 -static
+        src\main.cpp src\capture.cpp src\loopback_wasapi.cpp -o build\voicecraft-audio.exe ^
+        -lwinmm -lole32 -lpsapi -static
     if errorlevel 1 exit /b 1
     echo.
     echo OK: build\voicecraft-audio.exe

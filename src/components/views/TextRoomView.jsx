@@ -1,22 +1,53 @@
 /**
- * ConversationRoom — full-page view of a conversation Sala.
- * Layout follows the chat mockup: flat header, Discord-style feed, composer.
+ * TextRoomView — top-level orchestrator for a conversation Sala.
+ *
+ * Layout follows the chat mockup: flat header, Discord-style feed,
+ * composer. This component is intentionally thin: it wires data
+ * (channel → chat hook, typing tracker, density prefs) and delegates
+ * rendering to dedicated shells:
+ *
+ *   <ChatShell>          ← root flex column + bg + tokens
+ *     <ChatHeader>       ← title, search, actions (own state)
+ *     <MessageList>      ← scroller + bubbles + typing indicator
+ *     <Composer>         ← input (its own shell)
+ *     <ImageLightbox>    ← optional overlay
+ *   </ChatShell>
+ *
+ * Compatibility: AppShell imports this as default and uses the same
+ * prop names. The internal name `ConversationRoom` is preserved only
+ * for grep-friendliness.
  */
-import { useCallback, useMemo, useState, useEffect } from 'react'
-import { UserPlus, Search, MoreHorizontal, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import MessageList from './MessageList'
 import Composer from './Composer'
-import ChatDensityMenu from './ChatDensityMenu'
-import { readChatDensity, writeChatDensity } from './chatDensity'
+import ChatHeader from './ChatHeader'
+import ImageLightbox from './ImageLightbox'
+import { readChatDensity, writeChatDensity, resolveChatDensity } from './chatDensity'
+import { getFrequentReactions } from '../../shared/firebase/frequentReactions'
 import { useChat } from '../../hooks/useChat'
 import { useTextRoomChannel } from '../../hooks/useTextRoomChannel'
 import { purposeOf } from '../../features/rooms'
-import { RoomIconMark, roomAccentColor } from '../../features/rooms/components/RoomIconMark'
+import { roomAccentColor } from '../../features/rooms/components/RoomIconMark'
 import { resolveLabeledNameStyle } from '../../features/rooms/model/roomCosmetics'
 import { colorFromId, spaceTokens } from '../../features/spaces'
-import { PersonAvatar } from '../../features/people'
+import {
+  attachComposerTyping,
+  makeTypingTracker,
+  subscribeTyping,
+} from '../../features/chat/typing'
+import { CommandsFab, CommandsPanel } from '../../features/chat/commands'
+import { useScheduledAnnouncePublisher } from '../../features/chat/useScheduledAnnouncePublisher'
+import { normalizeLobby } from '../../features/chat/lobbySchema'
+import {
+  normalizeRules,
+  memberAcceptedRules,
+  isRulesRoom,
+} from '../../features/chat/rulesSchema'
+import { RulesCard } from '../../features/chat/RulesCards'
+import { flashToast } from '../../shared/utils/toast'
+import { Lock } from 'lucide-react'
 
-export default function ConversationRoom({
+export default function TextRoomView({
   room,
   space,
   signaling,
@@ -25,8 +56,10 @@ export default function ConversationRoom({
   members = [],
   onClose,
   onInvite,
+  onSelectRoom, // optional — falls back to window.__vcSelectRoom when absent
   voiceActive = false,
   canModerateChat = false,
+  canKick = false,
 }) {
   const purpose = purposeOf(room)
   const accent = roomAccentColor(room)
@@ -57,6 +90,8 @@ export default function ConversationRoom({
     signaling,
     username: selfMember?.displayName || currentUserName || 'você',
     roomKey,
+    spaceId: space?.id || null,
+    roomId: room?.id || null,
     userId: currentUserId,
     authorProfile: {
       displayName: selfMember?.displayName || currentUserName || 'você',
@@ -77,26 +112,110 @@ export default function ConversationRoom({
 
   const onlineMembers = useMemo(() => members.filter((m) => m.online), [members])
 
-  const [searchQuery, setSearchQuery] = useState('')
-  const [searchOpen, setSearchOpen] = useState(false)
   const [replyTo, setReplyTo] = useState(null)
   const [lightbox, setLightbox] = useState(null)
-  const [headerMenuOpen, setHeaderMenuOpen] = useState(false)
   const [density, setDensity] = useState(readChatDensity)
+  const [commandsOpen, setCommandsOpen] = useState(false)
+  const [jumpToId, setJumpToId] = useState(null)
+  const [jumpTick, setJumpTick] = useState(0)
+  const lastSendAtRef = useRef(0)
+
+  const chatLocked = !!room?.chatLocked
+  const slowModeSeconds = Math.max(0, Number(room?.slowModeSeconds) || 0)
+  const composerLocked = chatLocked && !canModerateChat
+
+  useScheduledAnnouncePublisher({
+    signaling,
+    roomId: room?.id,
+    enabled: canModerateChat && !!room?.id,
+  })
+
+  const feedMessages = useMemo(() => {
+    const lobby = normalizeLobby(room?.lobby)
+    const list = Array.isArray(chat.messages) ? chat.messages : []
+    if (!lobby.enabled) return list
+    return list.map((m) => {
+      if (m?.kind === 'lobby_event' || m?.lobbyEvent) {
+        return { ...m, lobbyAccent: m.lobbyAccent || lobby.accent }
+      }
+      return m
+    })
+  }, [chat.messages, room?.lobby])
+
+  const rulesCfg = useMemo(() => normalizeRules(room?.rules), [room?.rules])
+  const rulesActive = isRulesRoom(room)
+  const rulesAccepted = useMemo(
+    () => memberAcceptedRules(selfMember, rulesCfg),
+    [selfMember, rulesCfg],
+  )
+  const [acceptingRules, setAcceptingRules] = useState(false)
+
+  const handleAcceptRules = useCallback(async () => {
+    if (!signaling || acceptingRules || rulesAccepted) return
+    setAcceptingRules(true)
+    try {
+      await signaling.acceptSpaceRules(space?.id, rulesCfg.version)
+      flashToast('Regras aceitas — Space liberado')
+    } catch (err) {
+      flashToast(err?.message || 'Falha ao aceitar regras')
+    } finally {
+      setAcceptingRules(false)
+    }
+  }, [signaling, acceptingRules, rulesAccepted, space?.id, rulesCfg.version])
+
+  /* Typing indicator wiring (one tracker per room, shared with MessageList) */
+  const typingTrackerRef = useRef(null)
+  if (!typingTrackerRef.current) typingTrackerRef.current = makeTypingTracker()
+  const typingTracker = typingTrackerRef.current
+  const textStateRef = useRef('')
 
   useEffect(() => {
-    if (!headerMenuOpen) return
-    const onDown = (e) => {
-      if (e.target.closest?.('[data-header-menu]')) return
-      setHeaderMenuOpen(false)
+    if (!channel || !currentUserId) return undefined
+    const peerName = selfMember?.displayName || currentUserName || 'peer'
+    const unsubMsg = subscribeTyping(channel, currentUserId, typingTracker, peerName)
+    const detached = attachComposerTyping(channel, () => textStateRef.current)
+    return () => { unsubMsg(); detached() }
+  }, [channel, currentUserId, typingTracker, selfMember, currentUserName])
+
+  const togglePin = useCallback(async (msgId) => {
+    try {
+      const target = (chat.messages || []).find((m) => m.id === msgId || m.firestoreId === msgId)
+      const willPin = !target?.pinned
+      await chat.togglePin(msgId)
+      flashToast(willPin ? 'Mensagem fixada' : 'Mensagem desafixada')
+    } catch (err) {
+      flashToast(err?.message || 'Não deu para fixar a mensagem')
     }
-    window.addEventListener('mousedown', onDown)
-    return () => window.removeEventListener('mousedown', onDown)
-  }, [headerMenuOpen])
+  }, [chat])
+
+  const handleJumpToPinned = useCallback((msgId) => {
+    setJumpToId(msgId)
+    setJumpTick((n) => n + 1)
+  }, [])
+
+  const pinnedMessages = useMemo(
+    () => (feedMessages || []).filter((m) => m?.pinned && !m.deleted),
+    [feedMessages],
+  )
 
   const handleSubmit = useCallback(async ({ text, attachment, replyToId }) => {
-    return chat.sendMessage({ text, attachment, replyToId })
-  }, [chat])
+    if (chatLocked && !canModerateChat) {
+      flashToast('Canal trancado')
+      return false
+    }
+    if (slowModeSeconds > 0 && !canModerateChat) {
+      const waitMs = slowModeSeconds * 1000
+      const elapsed = Date.now() - lastSendAtRef.current
+      if (lastSendAtRef.current && elapsed < waitMs) {
+        const left = Math.ceil((waitMs - elapsed) / 1000)
+        flashToast(`Slowmode: aguarde ${left}s`)
+        return false
+      }
+    }
+    const ok = await chat.sendMessage({ text, attachment, replyToId })
+    if (ok) lastSendAtRef.current = Date.now()
+    return ok
+  }, [chat, chatLocked, canModerateChat, slowModeSeconds])
 
   const handleRetry = useCallback((msgId) => chat.retry(msgId), [chat])
 
@@ -104,6 +223,7 @@ export default function ConversationRoom({
     setReplyTo({
       id: msg.id,
       author: msg.author,
+      authorHandle: msg.authorHandle || '',
       text: msg.text,
       attachment: msg.attachment,
       deleted: msg.deleted,
@@ -111,6 +231,39 @@ export default function ConversationRoom({
   }, [])
 
   const handleCancelReply = useCallback(() => setReplyTo(null), [])
+
+  const handleComposerTextChange = useCallback((next) => {
+    textStateRef.current = next
+  }, [])
+
+  /* Room mention click (CONTRATO_FASE2) — navigate to the named Sala in
+   * the current Space. We use the prop callback when provided (the
+   * hosted AppShell wires this in), otherwise fall back to a
+   * window-namespace callback so room mentions still work in tests and
+   * embedded contexts.                                            */
+  const handleRoomMention = useCallback((targetRoom) => {
+    if (!targetRoom || !targetRoom.id) return
+    if (typeof onSelectRoom === 'function') {
+      try { onSelectRoom(targetRoom); return } catch {}
+    }
+    if (typeof window !== 'undefined' && typeof window.__vcSelectRoom === 'function') {
+      try { window.__vcSelectRoom(targetRoom); return } catch {}
+    }
+    flashToast('essa sala não tá disponível aqui')
+  }, [onSelectRoom])
+
+  /* ArrowUp on empty composer → edit last own message */
+  const handleArrowUpEditLast = useCallback(() => {
+    const list = chat.messages || []
+    for (let i = list.length - 1; i >= 0; i--) {
+      const m = list[i]
+      if (!m || m.deleted || m.kind === 'sys') continue
+      if (m.direction !== 'out' && m.authorId !== currentUserId) continue
+      if (m.status === 'sending') continue
+      chat.editMessage(m.id, m.text || '')
+      break
+    }
+  }, [chat, currentUserId])
 
   const tokens = useMemo(() => spaceTokens(space), [space])
 
@@ -122,144 +275,55 @@ export default function ConversationRoom({
 
   const onlineCount = onlineMembers.length
 
+  const quickReactions = useMemo(() => getFrequentReactions(), [])
+
   return (
     <div
-      className="h-full w-full flex flex-col min-h-0 bg-canvas relative overflow-hidden"
+      className="h-full w-full flex flex-col min-h-0 bg-canvas relative overflow-hidden vc-chat-bg-decor"
       style={tokens}
     >
-      <header
-        className="@container relative shrink-0 z-20 px-3 sm:px-6 py-3 sm:py-3.5 border-b border-white/[0.06]"
-        style={{
-          background:
-            'linear-gradient(180deg, color-mix(in srgb, var(--space-accent) 20%, #15171d) 0%, color-mix(in srgb, var(--space-accent) 6%, #12141a) 70%, #12141a 100%)',
+      <ChatHeader
+        room={room}
+        accent={accent}
+        nameStyle={nameStyle}
+        onlineMembers={onlineMembers}
+        currentUserId={currentUserId}
+        onlineCount={onlineCount}
+        chatLocked={chatLocked}
+        density={density}
+        onDensityChange={(next) => {
+          const key = writeChatDensity(next)
+          setDensity(key)
+          flashToast(`Densidade: ${resolveChatDensity(key).shortLabel}`)
         }}
-      >
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-          <div
-            className="w-10 h-10 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center shrink-0"
-            style={{
-              backgroundColor: `color-mix(in srgb, ${accent} 18%, transparent)`,
-              color: accent,
-            }}
-          >
-            <RoomIconMark room={room} size={20} />
-          </div>
+        onInvite={handleInviteClick}
+        onClose={onClose}
+        pinnedMessages={pinnedMessages}
+        members={members}
+        canModerate={canModerateChat}
+        onJumpToPinned={handleJumpToPinned}
+        onUnpinMessage={togglePin}
+      />
 
-          <div className={`min-w-0 ${searchOpen ? 'hidden @[480px]:block flex-1' : 'flex-1'}`}>
-            <h1
-              className="text-[16px] sm:text-[20px] font-bold text-strong tracking-tight truncate"
-              style={{ ...nameStyle, ...(room?.color ? { color: accent } : null) }}
-            >
-              {room.name}
-            </h1>
-            <p className="text-[11px] sm:text-[12px] text-muted truncate mt-0.5 hidden @[380px]:block">
-              {purpose.description}
-            </p>
-          </div>
-
-          {searchOpen ? (
-            <div className="flex items-center gap-2 min-w-0 flex-1 @[480px]:flex-none @[480px]:w-[min(280px,42vw)] px-3 h-9 rounded-full bg-surface1 border border-line focus-within:border-accent/50">
-              <Search size={13} className="text-muted shrink-0" />
-              <input
-                autoFocus
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Buscar nesta conversa…"
-                className="flex-1 min-w-0 bg-transparent text-[12.5px] text-strong placeholder:text-muted focus:outline-none"
+      <div className="flex-1 min-h-0 flex flex-col relative">
+        {rulesActive ? (
+          <div className="shrink-0 border-b border-line/60 bg-[#0d0f14]/80 backdrop-blur-sm max-h-[42%] overflow-y-auto">
+            <div className="py-2">
+              <RulesCard
+                rules={rulesCfg}
+                spaceName={space?.name || ''}
+                memberCount={space?.memberCount || members.length}
+                accepted={rulesAccepted}
+                accepting={acceptingRules}
+                onAccept={handleAcceptRules}
+                showAccept
               />
-              <button
-                type="button"
-                onClick={() => { setSearchOpen(false); setSearchQuery('') }}
-                className="text-muted hover:text-strong"
-                aria-label="Fechar busca"
-              >
-                <X size={13} />
-              </button>
             </div>
-          ) : (
-            <>
-              <div className="hidden @[640px]:flex items-center gap-2.5 shrink-0">
-                <ParticipantStack members={onlineMembers} selfId={currentUserId} />
-                {onlineCount > 0 && (
-                  <span className="text-[12px] text-muted tabular-nums whitespace-nowrap">
-                    {onlineCount} online
-                  </span>
-                )}
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setSearchOpen(true)}
-                className="w-9 h-9 rounded-full flex items-center justify-center text-muted hover:text-strong hover:bg-white/[0.05] transition-colors shrink-0"
-                title="Buscar"
-                aria-label="Buscar nesta conversa"
-              >
-                <Search size={16} strokeWidth={1.75} />
-              </button>
-            </>
-          )}
-
-          <div className="hidden @[520px]:block shrink-0">
-            <ChatDensityMenu
-              value={density}
-              onChange={(next) => {
-                setDensity(next)
-                writeChatDensity(next)
-              }}
-            />
           </div>
-
-          <button
-            type="button"
-            onClick={handleInviteClick}
-            className="w-9 h-9 rounded-full flex items-center justify-center text-muted hover:text-strong hover:bg-white/[0.05] transition-colors shrink-0"
-            title="Convidar pessoas"
-            aria-label="Convidar pessoas pra essa sala"
-          >
-            <UserPlus size={16} strokeWidth={1.75} />
-          </button>
-
-          <div className="relative shrink-0" data-header-menu>
-            <button
-              type="button"
-              onClick={() => setHeaderMenuOpen((o) => !o)}
-              className="w-9 h-9 rounded-full flex items-center justify-center text-muted hover:text-strong hover:bg-white/[0.05] transition-colors"
-              title="Mais"
-              aria-label="Mais opções"
-              aria-expanded={headerMenuOpen}
-            >
-              <MoreHorizontal size={16} strokeWidth={1.75} />
-            </button>
-            {headerMenuOpen && (
-              <div className="absolute right-0 top-full mt-1 z-30 w-44 py-1 rounded-xl bg-surface1 border border-line shadow-2xl vc-anim-fade-in-up">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = density === 'compact' ? 'comfy' : 'compact'
-                    setHeaderMenuOpen(false)
-                    setDensity(next)
-                    writeChatDensity(next)
-                  }}
-                  className="w-full px-3 py-1.5 text-left text-[12px] text-ink hover:bg-surface2 hover:text-strong @[520px]:hidden"
-                >
-                  Densidade: {density === 'compact' ? 'Compacta' : 'Confortável'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { setHeaderMenuOpen(false); onClose?.() }}
-                  className="w-full px-3 py-1.5 text-left text-[12px] text-ink hover:bg-surface2 hover:text-strong"
-                >
-                  Fechar sala
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      </header>
-
-      <div className="flex-1 min-h-0 flex flex-col">
+        ) : null}
+        <div className="flex-1 min-h-0 relative">
         <MessageList
-          messages={chat.messages}
+          messages={feedMessages}
           currentUserName={currentUserName}
           currentUserId={currentUserId}
           authorColors={authorColors}
@@ -267,23 +331,82 @@ export default function ConversationRoom({
           onRetry={handleRetry}
           onImageClick={(url) => setLightbox(url)}
           emptyHint="Nenhuma mensagem ainda. Mande a primeira."
-          query={searchQuery}
+          query=""
           onReply={handleReply}
           onToggleReaction={chat.toggleReaction}
+          onToggleLike={chat.toggleLike}
+          quickReactions={quickReactions}
           onEdit={chat.editMessage}
           onDelete={(id) => chat.deleteMessage(id, { moderate: canModerateChat })}
           canModerate={canModerateChat}
           members={members}
           density={density}
+          onTogglePin={togglePin}
+          typingTracker={typingTracker}
+          allRooms={space?.rooms || []}
+          onRoomMention={handleRoomMention}
+          jumpToId={jumpToId}
+          jumpTick={jumpTick}
+          canPinAll={canModerateChat}
+        />
+        </div>
+
+        <CommandsFab
+          open={commandsOpen}
+          onClick={() => setCommandsOpen((v) => !v)}
+        />
+        <CommandsPanel
+          open={commandsOpen}
+          onClose={() => setCommandsOpen(false)}
+          canModerateChat={canModerateChat}
+          canKick={canKick}
+          members={members}
+          chat={chat}
+          space={space}
+          room={room}
+          signaling={signaling}
+          currentUserId={currentUserId}
         />
       </div>
 
-      <Composer
-        placeholder={`Conversar em ${room.name}`}
-        onSubmit={handleSubmit}
-        replyTo={replyTo}
-        onCancelReply={handleCancelReply}
-      />
+      {composerLocked ? (
+        <ChannelLockedBanner channelName={room.name} />
+      ) : (
+        <>
+          {chatLocked && canModerateChat && (
+            <div className="shrink-0 px-3 sm:px-6 pb-1.5">
+              <div className="flex items-center gap-2 rounded-xl border border-[var(--vc-warning)]/25 bg-[var(--vc-warning)]/[0.08] px-3 py-2">
+                <Lock size={13} className="text-[var(--vc-warning)] shrink-0" />
+                <p className="text-[11.5px] text-ink leading-snug">
+                  Canal trancado — só moderadores podem enviar mensagens.
+                </p>
+              </div>
+            </div>
+          )}
+          <Composer
+            placeholder={
+              slowModeSeconds > 0 && !canModerateChat
+                ? `Slowmode ${slowModeSeconds}s · #${room.name.toLowerCase().replace(/\s+/g, '-')}…`
+                : `Conversar em #${room.name.toLowerCase().replace(/\s+/g, '-')}…`
+            }
+            accent={accent}
+            channelName={room.name}
+            disabled={false}
+            onSubmit={async (payload) => {
+              const ok = await handleSubmit(payload)
+              textStateRef.current = ''
+              return ok
+            }}
+            replyTo={replyTo}
+            onCancelReply={handleCancelReply}
+            onArrowUpEditLast={handleArrowUpEditLast}
+            onTextChange={handleComposerTextChange}
+            members={members}
+            rooms={space?.rooms || []}
+            currentUserId={currentUserId}
+          />
+        </>
+      )}
 
       {lightbox && (
         <ImageLightbox src={lightbox} onClose={() => setLightbox(null)} />
@@ -292,66 +415,38 @@ export default function ConversationRoom({
   )
 }
 
-function ParticipantStack({ members, selfId }) {
-  const shown = members.slice(0, 3)
-  const rest = members.length - shown.length
-  const openProfile = (userId) => {
-    if (typeof window !== 'undefined' && window.__vcOpenProfile) {
-      window.__vcOpenProfile(userId)
-    }
-  }
-  return (
-    <div className="flex -space-x-1.5">
-      {shown.map(m => (
-        <button
-          key={m.userId}
-          type="button"
-          onClick={(e) => { e.stopPropagation(); openProfile(m.userId) }}
-          className="rounded-full ring-2 ring-[#12141a] transition-transform hover:scale-125 hover:z-10"
-          title={m.displayName || (m.userId === selfId ? 'você' : 'convidado')}
-        >
-          <PersonAvatar src={m.photoURL} name={m.displayName} userId={m.userId} size={26} />
-        </button>
-      ))}
-      {rest > 0 && (
-        <div className="w-7 h-7 rounded-full ring-2 ring-[#12141a] bg-surface2 text-muted text-[10px] font-semibold flex items-center justify-center">
-          +{rest}
-        </div>
-      )}
-    </div>
-  )
-}
+function ChannelLockedBanner({ channelName }) {
+  const slug = String(channelName || 'canal')
+    .toLowerCase()
+    .replace(/\s+/g, '-')
 
-function ImageLightbox({ src, onClose }) {
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
   return (
     <div
-      onClick={onClose}
-      className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-6 vc-anim-fade-in cursor-zoom-out"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Imagem ampliada"
+      className="relative z-20 shrink-0 px-3 sm:px-6 pb-3 sm:pb-4"
+      role="status"
+      aria-live="polite"
     >
-      <button
-        type="button"
-        onClick={onClose}
-        className="absolute top-4 right-4 z-10 w-10 h-10 rounded-full bg-black/50 border border-white/15 text-strong hover:bg-black/70 flex items-center justify-center"
-        aria-label="Fechar"
-        title="Fechar"
-      >
-        <X size={16} />
-      </button>
-      <img
-        src={src}
-        alt=""
-        onClick={(e) => e.stopPropagation()}
-        className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl cursor-default"
-      />
+      <div className="rounded-2xl border border-line bg-[#14171f] px-4 py-4 sm:px-5 sm:py-4.5 flex items-start gap-3 shadow-[0_8px_24px_rgba(0,0,0,0.25)]">
+        <div
+          className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border"
+          style={{
+            background: 'color-mix(in srgb, var(--vc-warning, #f5b942) 16%, #1a1e28)',
+            borderColor: 'color-mix(in srgb, var(--vc-warning, #f5b942) 35%, #2a303a)',
+            color: 'var(--vc-warning, #f5b942)',
+          }}
+        >
+          <Lock size={18} strokeWidth={2.1} />
+        </div>
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="text-[13.5px] font-semibold text-strong">
+            Canal trancado
+          </div>
+          <p className="text-[12px] text-muted leading-relaxed">
+            <span className="text-ink">#{slug}</span> está restrito a administradores.
+            Só quem tem permissão de moderar o chat pode enviar mensagens aqui.
+          </p>
+        </div>
+      </div>
     </div>
   )
 }
-

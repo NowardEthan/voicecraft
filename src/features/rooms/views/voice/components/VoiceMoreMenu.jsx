@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { MoreHorizontal, Link2, Settings, PhoneOff, Check } from 'lucide-react'
 import { flashToast } from '../../../../../shared/utils/toast'
+import { buildSpaceInviteUrl } from '../../../../spaces/model/spaceInvite'
 
 export function VoiceMoreMenu({ space, room, onOpenSettings, onLeave }) {
   const [open, setOpen] = useState(false)
@@ -47,14 +48,11 @@ export function VoiceMoreMenu({ space, room, onOpenSettings, onLeave }) {
 
   const copyInvite = async () => {
     if (!space?.id) return
-    const origin = typeof window !== 'undefined' ? window.location.origin : ''
-    const params = new URLSearchParams({ space: space.id })
-    if (room?.id) params.set('room', room.id)
-    const url = `${origin}/?${params.toString()}`
+    const url = buildSpaceInviteUrl({ spaceId: space.id, roomId: room?.id || null })
     try {
       await navigator.clipboard.writeText(url)
       setCopied(true)
-      flashToast('Link copiado')
+      flashToast('Link de convite copiado')
       setTimeout(() => setOpen(false), 600)
     } catch {
       flashToast('Não deu pra copiar o link')

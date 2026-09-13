@@ -175,8 +175,8 @@ export function useLiveKitRoom({
   const initCancelledRef = useRef(false)
   const isMutedRef = useRef(false)
   const isDeafenedRef = useRef(false)
-  // Desktop loopback captures call playback → remote hears themselves. Duck remotes while active.
-  const screenAudioCaptureRef = useRef(false)
+  // Desktop loopback re-captures call playback. Mute remotes unless user says they use headphones.
+  const screenAudioCaptureRef = useRef({ active: false, headphones: false })
 
   isMutedRef.current = isMuted
   isDeafenedRef.current = isDeafened
@@ -217,11 +217,11 @@ export function useLiveKitRoom({
     const master = Math.max(0, Math.min(100, Number(settings?.outputVolume ?? 80))) / 100
     const peerMul = peerVolumeMultiplier(peerVolumesRef.current, audio.dataset?.vcPeer)
     const vol = Math.min(1, master * peerMul)
-    // Loopback of desktop audio re-captures call playback. Soft-duck remotes
-    // (don't hard-mute) so you still hear the room and your mic stays independent.
-    const duckMic = screenAudioCaptureRef.current && audio.dataset?.vcSource !== 'screen'
-    const LOOPBACK_DUCK = 0.22
-    audio.volume = isDeafenedRef.current ? 0 : duckMic ? vol * LOOPBACK_DUCK : vol
+    // Without headphones, mute remote *mic* playback while capturing system audio —
+    // otherwise loopback sends their voice back (echo). Screen-audio track still plays.
+    const cap = screenAudioCaptureRef.current
+    const duckMic = !!(cap?.active && !cap?.headphones && audio.dataset?.vcSource !== 'screen')
+    audio.volume = (isDeafenedRef.current || duckMic) ? 0 : vol
     if (typeof audio.setSinkId === 'function') {
       audio.setSinkId(settings?.speakerId || '').catch(() => {})
     }
@@ -245,8 +245,11 @@ export function useLiveKitRoom({
     })
   }, [applyOutputToAudio])
 
-  const setScreenAudioCaptureActive = useCallback((active) => {
-    screenAudioCaptureRef.current = !!active
+  const setScreenAudioCaptureActive = useCallback((active, opts = {}) => {
+    screenAudioCaptureRef.current = {
+      active: !!active,
+      headphones: !!(active && opts.headphones),
+    }
     refreshRemoteAudioLevels()
   }, [refreshRemoteAudioLevels])
 
@@ -762,7 +765,7 @@ export function useLiveKitRoom({
     try { screenShare.stop() } catch {}
   }, [screenShare, setScreenAudioCaptureActive])
 
-  const publishScreenStream = useCallback(async (mediaStream) => {
+  const publishScreenStream = useCallback(async (mediaStream, opts = {}) => {
     const lkRoom = roomRef.current
     if (!lkRoom || !mediaStream) return
     if (screenPublishingRef.current) return
@@ -833,8 +836,15 @@ export function useLiveKitRoom({
             red: true,
           })
           localScreenAudioTrackRef.current = audioPub?.track || localAudio
-          setScreenAudioCaptureActive(true)
-          flashToast('Áudio do sistema ligado — use fones (sem fones pode ter eco)')
+          const headphones = opts.headphones === true
+          setScreenAudioCaptureActive(true, { headphones })
+          if (opts.audioMode === 'app') {
+            flashToast('Áudio do aplicativo capturado (estilo Discord) — sem eco da call!')
+          } else {
+            flashToast(headphones
+              ? 'Áudio do sistema + fones — se ouvir eco, desmarque "Estou de fones" e compartilhe de novo'
+              : 'Áudio do sistema: call muda no seu PC pra não ter eco (marque "Estou de fones" pra ouvir)')
+          }
           // Windows loopback can disturb the mic graph; keep voice on the call.
           await ensureLocalMicHealthy()
         } catch (audioErr) {
@@ -903,8 +913,13 @@ export function useLiveKitRoom({
       const q = settings?.screenQuality || '720p'
       const fr = settings?.screenFramerate || 15
       const withAudio = opts.withAudio === true
+      const headphones = withAudio && opts.headphones === true
       const started = await screenShare.startWithSource(sourceId, q, fr, { withAudio })
-      if (started) await publishScreenStream(started)
+      if (started) await publishScreenStream(started, {
+        headphones,
+        audioMode: opts.audioMode,
+        appPid: opts.appPid,
+      })
     } catch (err) {
       const msg = err?.message || 'Falha ao compartilhar a tela'
       flashToast(msg.includes('engine') ? 'Falha ao publicar a tela — tente de novo' : msg)

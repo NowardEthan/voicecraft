@@ -37,6 +37,15 @@
  * server's hello/redelivery won't double our history.
  */
 import { useEffect, useRef, useState, useCallback } from 'react'
+import {
+  listenRoomLikes, likeMessageKeys, unlikeMessageKeys,
+} from '../shared/firebase/likes'
+import {
+  listenRoomReactions, reactToMessage, unreactToMessage,
+} from '../shared/firebase/reactions'
+import {
+  bumpReaction as bumpFrequent, unbumpReaction as unbumpFrequent,
+} from '../shared/firebase/frequentReactions'
 
 const CHUNK_SIZE = 16 * 1024  // 16 KiB
 const CHAT_STORAGE_PREFIX = 'voicecraft:chat:'
@@ -116,7 +125,16 @@ function persistableMessage(msg) {
   return out
 }
 
-export function useChat({ channel, signaling, username, roomKey, userId, authorProfile }) {
+export function useChat({
+  channel,
+  signaling,
+  username,
+  roomKey,
+  spaceId = null,
+  roomId = null,
+  userId,
+  authorProfile,
+}) {
   const transfersRef = useRef(new Map())
   // Load cached history synchronously so opening a Sala with prior history
   // never flashes a loading state.
@@ -127,14 +145,140 @@ export function useChat({ channel, signaling, username, roomKey, userId, authorP
     channel ? (channel.readyState || 'connecting') : 'connecting'
   )
 
-  // Re-seed history when roomKey changes (different Sala).
+  /* Fonte da verdade dos likes: Map<msgId, likes[]>. Persiste entre
+   * renders do React e sobrevive ao re-seed de history quando trocamos
+   * de sala. Atualizado pelo listener RTDB e consumido por todas as
+   * mutações em `messages` (helper `applyLikes`).                     */
+  const likesFromServerRef = useRef(new Map())
+
+  /* Fonte da verdade das reactions: Map<msgId, {emoji: userId[]}>.
+   * Mesma estratégia dos likes — autoritativo, atualizado pelo
+   * listener RTDB e re-aplicado em qualquer mutação de messages. */
+  const reactionsFromServerRef = useRef(new Map())
+
+  /** Resolve likes for a message — prefer exact id, then firestoreId. */
+  const lookupServerLikes = useCallback((m) => {
+    if (!m) return undefined
+    const map = likesFromServerRef.current
+    if (m.id != null && map.has(m.id)) return map.get(m.id)
+    if (m.firestoreId != null && map.has(m.firestoreId)) return map.get(m.firestoreId)
+    return undefined
+  }, [])
+
+  /** Helper — aplica os likes do servidor numa lista de mensagens.
+   *  Só pula msgs cujo id ainda não existe no Map (permite optimistic
+   *  local). Usa Map.has — array vazio [] também é estado válido.   */
+  const applyLikes = useCallback((list) => {
+    if (!list || list.length === 0) return list
+    let changed = false
+    const next = list.map((m) => {
+      if (!m || !m.id) return m
+      const fromServer = lookupServerLikes(m)
+      if (fromServer === undefined) return m
+      const local = Array.isArray(m.likes) ? m.likes : []
+      if (local.length === fromServer.length
+          && local.every((u, i) => u === fromServer[i])) {
+        return m
+      }
+      changed = true
+      return { ...m, likes: fromServer }
+    })
+    return changed ? next : list
+  }, [lookupServerLikes])
+
+  const syncLikesMapKeys = useCallback((msgIds, nextLikes) => {
+    const map = likesFromServerRef.current
+    const ids = [...new Set((msgIds || []).filter(Boolean))]
+    for (const id of ids) map.set(id, nextLikes)
+  }, [])
+
+  /** Helper — aplica as reactions do servidor. Converte a estrutura
+   *  interna (por-msgId: emoji → userId[]) pro shape esperado pelo
+   *  componente EmojiReactions: { emoji: { count, mine[] } }.          */
+  const applyReactions = useCallback((list) => {
+    if (!list || list.length === 0) return list
+    let changed = false
+    const next = list.map((m) => {
+      if (!m || !m.id) return m
+      const fromServer = reactionsFromServerRef.current.get(m.id)
+      if (!fromServer) return m
+      const local = m.reactions || {}
+      /* Compara profundamente por chaves/valores. */
+      const sameShape = Object.keys(fromServer).length === Object.keys(local).length
+        && Object.keys(fromServer).every((emoji) => {
+          const a = fromServer[emoji] || []
+          const b = local[emoji]?.users || []
+          return a.length === b.length && a.every((u, i) => u === b[i])
+        })
+      if (sameShape) return m
+      const built = {}
+      Object.keys(fromServer).forEach((emoji) => {
+        const users = fromServer[emoji] || []
+        if (users.length === 0) return
+        built[emoji] = {
+          count: users.length,
+          users,
+          mine: userId ? users.includes(userId) : false,
+        }
+      })
+      changed = true
+      return { ...m, reactions: built }
+    })
+    return changed ? next : list
+  }, [userId])
+
+  // Re-seed history when roomKey changes (different Sala). Re-apply
+  // whatever likes are already in the Map (listener may have fired).
   useEffect(() => {
-    setMessages(loadHistory(roomKey) || [])
+    const seeded = loadHistory(roomKey) || []
+    setMessages(applyLikes(seeded))
     setFiles([])
     setReady(false)
     setConnectionState(channel ? (channel.readyState || 'connecting') : 'connecting')
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomKey])
+
+  /* Subscribe aos likes do RTDB — autoritativo. Atualiza o ref de
+   * likes e re-aplica nas mensagens atuais. Também captura curtidas
+   * feitas em mensagens que podem ainda não ter chegado do Firestore
+   * (ficam guardadas no Map até a mensagem aparecer).              */
+  useEffect(() => {
+    if (!spaceId || !roomId) return undefined
+    const off = listenRoomLikes(spaceId, roomId, (map) => {
+      const store = likesFromServerRef.current
+      store.clear()
+      Object.keys(map).forEach((msgId) => {
+        store.set(msgId, Array.isArray(map[msgId]) ? map[msgId] : [])
+      })
+      setMessages((prev) => {
+        const next = applyLikes(prev)
+        if (next !== prev) saveHistory(roomKey, next)
+        return next
+      })
+    })
+    return off
+  }, [spaceId, roomId, roomKey, applyLikes])
+
+  /* Subscribe às reactions do RTDB — autoritativo. Mesma estratégia
+   * dos likes: atualiza o ref autoritativo e re-aplica em todas as
+   * mensagens. Captura reactions feitas em mensagens ainda não
+   * carregadas do Firestore (guardadas no Map).                    */
+  useEffect(() => {
+    if (!spaceId || !roomId) return undefined
+    const off = listenRoomReactions(spaceId, roomId, (map) => {
+      const ref = reactionsFromServerRef.current
+      ref.clear()
+      Object.keys(map).forEach((msgId) => {
+        ref.set(msgId, map[msgId] || {})
+      })
+      setMessages(prev => {
+        const next = applyReactions(prev)
+        if (next !== prev) saveHistory(roomKey, next)
+        return next
+      })
+    })
+    return off
+  }, [spaceId, roomId, roomKey, applyReactions])
 
   useEffect(() => {
     if (!roomKey || !signaling?.listenChat) return undefined
@@ -145,29 +289,34 @@ export function useChat({ channel, signaling, username, roomKey, userId, authorP
       const remote = list.map((m) => ({
         ...m,
         kind: m.kind || 'msg',
+        deleted: !!m.deleted,
+        pinned: !!m.pinned,
+        text: m.deleted ? '' : (m.text || ''),
         direction: m.authorId && userId && m.authorId === userId ? 'out' : (m.direction || 'in'),
         status: m.authorId && userId && m.authorId === userId ? 'sent' : m.status,
       }))
       setMessages((prev) => {
         const ids = new Set(remote.map((m) => m.id).filter(Boolean))
         const pending = prev.filter((m) => m.direction === 'out' && m.status === 'sending' && m.id && !ids.has(m.id))
-        const next = [...remote, ...pending].sort((a, b) => (a.ts || 0) - (b.ts || 0))
+        let next = applyLikes([...remote, ...pending].sort((a, b) => (a.ts || 0) - (b.ts || 0)))
+        next = applyReactions(next)
         saveHistory(roomKey, next)
         return next
       })
     })
-  }, [roomKey, signaling, userId])
+  }, [roomKey, signaling, userId, applyLikes, applyReactions])
 
   // ----- Helpers that update state ------------------------------------------
   const appendMessage = useCallback((msg) => {
     setMessages(prev => {
       // Id-based dedup. Server may re-deliver messages on reconnect.
       if (msg.id && prev.some(m => m.id === msg.id)) return prev
-      const next = [...prev, msg]
+      let next = applyLikes([...prev, msg])
+      next = applyReactions(next)
       saveHistory(roomKey, next)
       return next
     })
-  }, [roomKey])
+  }, [roomKey, applyLikes, applyReactions])
 
   const replaceMessage = useCallback((id, patch) => {
     setMessages(prev => {
@@ -247,6 +396,54 @@ export function useChat({ channel, signaling, username, roomKey, userId, authorP
             direction: 'in',
             attachment,
             replyToId: msg.replyToId || null,
+          })
+          break
+        }
+        case 'like':
+        case 'unlike': {
+          // Peer curtiu / descurtiu uma mensagem. Idempotente: chegar
+          // duas vezes não duplica o userId. Também espelha no Map
+          // autoritativo pra o próximo snapshot do RTDB não “apagar”.
+          if (!msg.msgId || !msg.userId) break
+          setMessages(prev => {
+            const next = prev.map(m => {
+              if (m.id !== msg.msgId && m.firestoreId !== msg.msgId) return m
+              const likes = Array.isArray(m.likes) ? [...m.likes] : []
+              const idx = likes.indexOf(msg.userId)
+              if (msg.kind === 'like' && idx === -1) likes.push(msg.userId)
+              else if (msg.kind === 'unlike' && idx !== -1) likes.splice(idx, 1)
+              const keyIds = [m.id, m.firestoreId].filter(Boolean)
+              for (const id of keyIds) likesFromServerRef.current.set(id, likes)
+              return { ...m, likes }
+            })
+            saveHistory(roomKey, next)
+            return next
+          })
+          break
+        }
+        case 'delete': {
+          if (!msg.msgId) break
+          setMessages(prev => {
+            const next = prev.map(m => (
+              m.id === msg.msgId ? { ...m, deleted: true, text: '' } : m
+            ))
+            saveHistory(roomKey, next)
+            return next
+          })
+          break
+        }
+        case 'purge': {
+          setMessages((prev) => {
+            const next = prev.filter((m) => {
+              if (m.kind === 'sys') return true
+              if (msg.authorId) {
+                const mid = m.authorId || null
+                return mid !== msg.authorId
+              }
+              return false
+            })
+            saveHistory(roomKey, next)
+            return next
           })
           break
         }
@@ -561,33 +758,148 @@ export function useChat({ channel, signaling, username, roomKey, userId, authorP
   }, [roomKey])
 
   // ----- Reactions ---------------------------------------------------------
-  // Reactions are a per-user per-message map. Each emoji accumulates a count
-  // and tracks whether the *current* user has voted. Persistence lives in
-  // localStorage; reactions are *local-only* — peers don't see them on this
-  // protocol version. (Future: piggyback on the data channel.)
+  // Reactions por msg: { emoji: { count, users: [userId, ...], mine } }.
+  // Persistido no Firebase RTDB (autoritativo — sobrevive a troca de
+  // sala e logout) e propagado via data channel (fast-path P2P).
+  // Também bump na frequência local pra reordenar a quick bar.
   const toggleReaction = useCallback((msgId, emoji) => {
-    if (!msgId || !emoji) return
+    if (!msgId || !emoji || !userId) return
+    const myId = userId
+
+    /* Optimistic update — mesmo formato do applyReactions pra
+     * não divergir do snapshot RTDB.                                */
+    let willReact = false
     setMessages(prev => {
       const next = prev.map(m => {
         if (m.id !== msgId) return m
         const reactions = { ...(m.reactions || {}) }
-        const cur = reactions[emoji] || { count: 0, mine: false }
-        if (cur.mine) {
-          const nextCount = cur.count - 1
-          if (nextCount <= 0) {
-            delete reactions[emoji]
-          } else {
-            reactions[emoji] = { count: nextCount, mine: false }
-          }
+        const cur = reactions[emoji]
+        const users = Array.isArray(cur?.users) ? [...cur.users] : []
+        const idx = users.indexOf(myId)
+        willReact = idx === -1
+        if (willReact) users.push(myId)
+        else users.splice(idx, 1)
+        if (users.length === 0) {
+          delete reactions[emoji]
         } else {
-          reactions[emoji] = { count: cur.count + 1, mine: true }
+          reactions[emoji] = {
+            count: users.length,
+            users,
+            mine: willReact,
+          }
         }
         return { ...m, reactions }
       })
       saveHistory(roomKey, next)
       return next
     })
-  }, [roomKey])
+
+    /* Atualiza o Map autoritativo pra evitar race com snapshot
+     * RTDB que chegar logo depois — idem likes.                    */
+    if (msgId) {
+      const ref = reactionsFromServerRef.current
+      const byEmoji = ref.get(msgId) || {}
+      const users = Array.isArray(byEmoji[emoji]) ? [...byEmoji[emoji]] : []
+      const idx = users.indexOf(myId)
+      const will = idx === -1
+      if (will) users.push(myId)
+      else users.splice(idx, 1)
+      byEmoji[emoji] = users
+      ref.set(msgId, byEmoji)
+    }
+
+    /* Persiste no RTDB. */
+    if (spaceId && roomId) {
+      const op = willReact
+        ? reactToMessage(spaceId, roomId, msgId, emoji, myId)
+        : unreactToMessage(spaceId, roomId, msgId, emoji, myId)
+      op.catch((err) => console.warn('[reactions] persist', err))
+    }
+
+    /* Bump na frequência local — reordena quick bar. */
+    try {
+      if (willReact) bumpFrequent(emoji)
+      else unbumpFrequent(emoji)
+    } catch { /* localStorage indisponível */ }
+  }, [roomKey, userId, spaceId, roomId])
+
+  // ----- Likes (Sparkles — synced P2P + persisted in RTDB) ---------------
+  // Like = binário por user. Armazenado como `msg.likes: string[]` de
+  // userIds. Persistido no Firebase RTDB (fonte da verdade) e
+  // propagado via data channel (fast-path P2P). Quando o user troca
+  // de sala ou desloga, o RTDB restaura o estado das curtidas.
+  const toggleLike = useCallback((msgId) => {
+    if (!msgId || !userId) return
+    const myId = userId
+
+    let willLike = false
+    let keyIds = [msgId]
+    let nextLikesForMsg = null
+
+    setMessages((prev) => {
+      const target = prev.find((m) => m.id === msgId || m.firestoreId === msgId)
+      if (!target) return prev
+
+      keyIds = [...new Set([target.id, target.firestoreId].filter(Boolean))]
+      const likes = Array.isArray(target.likes) ? [...target.likes] : []
+      const idx = likes.indexOf(myId)
+      willLike = idx === -1
+      if (willLike) likes.push(myId)
+      else likes.splice(idx, 1)
+      nextLikesForMsg = likes
+
+      const next = prev.map((m) => (
+        (m.id === target.id || (target.firestoreId && m.firestoreId === target.firestoreId))
+          ? { ...m, likes }
+          : m
+      ))
+      saveHistory(roomKey, next)
+      return next
+    })
+
+    if (!nextLikesForMsg) return
+
+    /* Atualiza o Map autoritativo sob todos os ids conhecidos da msg. */
+    syncLikesMapKeys(keyIds, nextLikesForMsg)
+
+    if (spaceId && roomId) {
+      const op = willLike
+        ? likeMessageKeys(spaceId, roomId, keyIds, myId)
+        : unlikeMessageKeys(spaceId, roomId, keyIds, myId)
+      op.catch((err) => {
+        console.warn('[likes] persist', err)
+        /* Revert optimistic on hard failure so UI matches RTDB. */
+        setMessages((prev) => {
+          const next = prev.map((m) => {
+            if (!keyIds.includes(m.id) && !keyIds.includes(m.firestoreId)) return m
+            const likes = Array.isArray(m.likes) ? m.likes.filter((u) => u !== myId) : []
+            if (willLike) {
+              /* failed like → remove me */
+              return { ...m, likes }
+            }
+            /* failed unlike → put me back */
+            return likes.includes(myId) ? m : { ...m, likes: [...likes, myId] }
+          })
+          syncLikesMapKeys(keyIds, willLike
+            ? (next.find((m) => keyIds.includes(m.id))?.likes || [])
+            : (next.find((m) => keyIds.includes(m.id))?.likes || []))
+          saveHistory(roomKey, next)
+          return next
+        })
+      })
+    }
+
+    try {
+      if (channel && channel.readyState === 'open') {
+        channel.send(JSON.stringify({
+          kind: willLike ? 'like' : 'unlike',
+          msgId,
+          userId: myId,
+          ts: Date.now(),
+        }))
+      }
+    } catch {}
+  }, [channel, userId, roomKey, spaceId, roomId, syncLikesMapKeys])
 
   // ----- Edit (own message only) -------------------------------------------
   const editMessage = useCallback((msgId, newText) => {
@@ -595,6 +907,7 @@ export function useChat({ channel, signaling, username, roomKey, userId, authorP
       const next = prev.map(m => {
         if (m.id !== msgId) return m
         if (m.direction !== 'out') return m // only own
+        if (m.status === 'sending') return m // block edit during in-flight send
         return {
           ...m,
           text: newText,
@@ -607,19 +920,132 @@ export function useChat({ channel, signaling, username, roomKey, userId, authorP
     })
   }, [roomKey])
 
+  // ----- Pins (persisted on Firestore message docs via signaling) --------
+  const togglePin = useCallback(async (msgId) => {
+    if (!msgId) return
+    let target = null
+    let nextPinned = false
+    setMessages((prev) => {
+      target = prev.find((m) => m.id === msgId || m.firestoreId === msgId)
+      if (!target || target.deleted) return prev
+      nextPinned = !target.pinned
+      const next = prev.map((m) => (
+        (m.id === target.id || (target.firestoreId && m.firestoreId === target.firestoreId))
+          ? {
+              ...m,
+              pinned: nextPinned,
+              pinnedAt: nextPinned ? Date.now() : null,
+              pinnedBy: nextPinned ? (userId || null) : null,
+            }
+          : m
+      ))
+      saveHistory(roomKey, next)
+      return next
+    })
+    if (!target) return
+    try {
+      if (signaling?.pinChatMessage) {
+        await signaling.pinChatMessage(target.firestoreId || target.id, nextPinned)
+      }
+    } catch (err) {
+      console.warn('[pin] persist', err)
+      setMessages((prev) => {
+        const next = prev.map((m) => (
+          (m.id === target.id || (target.firestoreId && m.firestoreId === target.firestoreId))
+            ? {
+                ...m,
+                pinned: !nextPinned,
+                pinnedAt: !nextPinned ? Date.now() : null,
+                pinnedBy: !nextPinned ? (userId || null) : null,
+              }
+            : m
+        ))
+        saveHistory(roomKey, next)
+        return next
+      })
+      throw err
+    }
+  }, [roomKey, signaling, userId])
+
   // ----- Delete -----------------------------------------------------------
   // Own messages always; moderators may delete anyone's when canModerate.
+  // Persist to Firestore so the soft-delete survives room/space switches.
   const deleteMessage = useCallback((msgId, { moderate = false } = {}) => {
+    let allowed = false
     setMessages(prev => {
-      const next = prev.map(m => {
-        if (m.id !== msgId) return m
-        if (m.direction !== 'out' && !moderate) return m
-        return { ...m, deleted: true, text: '' }
+      const target = prev.find(m => m.id === msgId)
+      if (!target) return prev
+      if (target.direction !== 'out' && !moderate) return prev
+      allowed = true
+      const next = prev.map(m => (
+        m.id !== msgId ? m : { ...m, deleted: true, text: '' }
+      ))
+      saveHistory(roomKey, next)
+      return next
+    })
+    if (!allowed) return
+
+    const rawKey = String(roomKey || '')
+    const sep = rawKey.indexOf(':')
+    const chatRoomId = sep >= 0 ? rawKey.slice(sep + 1) : (rawKey || null)
+    signaling?.deleteChatMessage?.(msgId, chatRoomId)?.catch((err) => {
+      console.warn('[chat] delete persist failed:', err)
+    })
+
+    try {
+      if (channel && channel.readyState === 'open') {
+        channel.send(JSON.stringify({
+          kind: 'delete',
+          msgId,
+          userId: userId || signaling?.userId || null,
+          ts: Date.now(),
+        }))
+      }
+    } catch {}
+  }, [roomKey, signaling, channel, userId])
+
+  // Hard-purge messages (incl. soft-deleted stubs). Optimistic local + Firestore.
+  const purgeMessages = useCallback(async ({ authorId = null, beforeTs = null } = {}) => {
+    const rawKey = String(roomKey || '')
+    const sep = rawKey.indexOf(':')
+    const chatRoomId = sep >= 0 ? rawKey.slice(sep + 1) : (rawKey || null)
+
+    setMessages((prev) => {
+      const next = prev.filter((m) => {
+        if (m.kind === 'sys') return true
+        if (authorId) {
+          const mid = m.authorId || (m.direction === 'out' ? userId : null)
+          if (mid !== authorId) return true
+        }
+        if (beforeTs != null && Number(m.ts || 0) >= Number(beforeTs)) return true
+        return false
       })
       saveHistory(roomKey, next)
       return next
     })
-  }, [roomKey])
+
+    let purged = 0
+    try {
+      purged = await signaling?.purgeChatMessages?.(chatRoomId, { authorId, beforeTs }) ?? 0
+    } catch (err) {
+      console.warn('[chat] purge failed:', err)
+      throw err
+    }
+
+    try {
+      if (channel && channel.readyState === 'open') {
+        channel.send(JSON.stringify({
+          kind: 'purge',
+          roomId: chatRoomId,
+          authorId: authorId || null,
+          userId: userId || signaling?.userId || null,
+          ts: Date.now(),
+        }))
+      }
+    } catch {}
+
+    return purged
+  }, [roomKey, signaling, channel, userId])
 
   // Helper exported via closure for callers that need to read images.
   // We keep it private to the module — Composer does its own read.
@@ -635,8 +1061,11 @@ export function useChat({ channel, signaling, username, roomKey, userId, authorP
     postSystem,
     retry,
     toggleReaction,
+    toggleLike,
+    togglePin,
     editMessage,
     deleteMessage,
+    purgeMessages,
   }
 }
 

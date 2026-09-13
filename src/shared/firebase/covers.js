@@ -50,6 +50,44 @@ export async function deleteRoomCover(spaceId, roomId) {
   }
 }
 
+export async function uploadAnnounceCover(spaceId, roomId, cover) {
+  return uploadAnnounceAsset(spaceId, roomId, cover, 'cover')
+}
+
+/** Upload announce cover / icon / author avatar (data URL → Storage URL). */
+export async function uploadAnnounceAsset(spaceId, roomId, dataUrl, kind = 'asset') {
+  if (!spaceId || !roomId || !dataUrl) return null
+  if (typeof dataUrl === 'string' && /^https?:\/\//.test(dataUrl)) return dataUrl
+  if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) return null
+  const blob = dataUrlToBlob(dataUrl)
+  const safeKind = String(kind || 'asset').replace(/[^a-z0-9_-]/gi, '').slice(0, 24) || 'asset'
+  // Use chat/ path — already allowed by deployed storage.rules (announce-assets may not be).
+  const path = `voicecraft/chat/${spaceId}/${roomId}/announce-${safeKind}-${Date.now()}.jpg`
+  const fileRef = ref(storage, path)
+  await uploadBytes(fileRef, blob, { contentType: blob.type || 'image/jpeg' })
+  return getDownloadURL(fileRef)
+}
+
+export async function uploadSpaceIcon(spaceId, icon) {
+  if (!spaceId || !icon) return null
+  if (typeof icon === 'string' && /^https?:\/\//.test(icon)) return icon
+  if (typeof icon !== 'string' || !icon.startsWith('data:image/')) return null
+  const blob = dataUrlToBlob(icon)
+  const path = `voicecraft/avatars/space-${spaceId}.jpg`
+  const fileRef = ref(storage, path)
+  await uploadBytes(fileRef, blob, { contentType: blob.type || 'image/jpeg' })
+  return getDownloadURL(fileRef)
+}
+
+export async function deleteSpaceIcon(spaceId) {
+  if (!spaceId) return
+  try {
+    await deleteObject(ref(storage, `voicecraft/avatars/space-${spaceId}.jpg`))
+  } catch {
+    // already gone
+  }
+}
+
 export function uploadProfileCover(uid, cover) {
   return uploadSpaceCover(`profile-${uid}`, cover)
 }

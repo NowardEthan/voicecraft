@@ -1,14 +1,37 @@
-import { useState } from 'react'
-import { Monitor, AppWindow, X, Info, Volume2 } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Monitor, AppWindow, X, Info, Volume2, Headphones, Sparkles } from 'lucide-react'
 import { ModalShell } from '../../../../../shared/motion/ModalShell.jsx'
 import { looksLikeBrowserWindow } from '../../../../../hooks/useScreenShare'
 
 export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
   const screens = sources.filter((s) => s.isScreen)
   const windows = sources.filter((s) => !s.isScreen)
-  const [withSystemAudio, setWithSystemAudio] = useState(false)
+  const [audioMode, setAudioMode] = useState('off') // 'off' | 'app' | 'system'
+  const [usingHeadphones, setUsingHeadphones] = useState(true)
+  const [processes, setProcesses] = useState([])
+  const [selectedPid, setSelectedPid] = useState('')
 
-  const pick = (sourceId) => onPick?.(sourceId, { withAudio: withSystemAudio })
+  useEffect(() => {
+    if (!open) return
+    if (window.electronAPI?.audioService?.listProcesses) {
+      window.electronAPI.audioService.listProcesses().then((list) => {
+        if (Array.isArray(list)) {
+          setProcesses(list)
+          if (list.length > 0 && !selectedPid) {
+            setSelectedPid(String(list[0].pid))
+          }
+        }
+      }).catch(() => {})
+    }
+  }, [open, selectedPid])
+
+  const withSystemAudio = audioMode === 'system'
+  const pick = (sourceId) => onPick?.(sourceId, {
+    withAudio: audioMode !== 'off',
+    headphones: withSystemAudio && usingHeadphones,
+    audioMode,
+    appPid: audioMode === 'app' && selectedPid ? parseInt(selectedPid, 10) : null,
+  })
 
   return (
     <ModalShell open={open} onClose={onClose} labelledBy="share-title" maxWidth="lg">
@@ -40,24 +63,100 @@ export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
             </p>
           </div>
 
-          <label className="flex items-start gap-3 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2.5 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={withSystemAudio}
-              onChange={(e) => setWithSystemAudio(e.target.checked)}
-              className="mt-0.5 accent-[var(--space-accent)]"
-            />
-            <span className="min-w-0">
-              <span className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-strong">
-                <Volume2 size={13} />
-                Incluir áudio do sistema
-              </span>
-              <span className="block text-[11.5px] text-muted mt-0.5 leading-snug">
-                Captura o áudio do Windows inteiro (não só do app). Muitos jogos em modo exclusivo saem mudos.
-                Seu microfone da call é separado — use fones pra evitar eco.
-              </span>
-            </span>
-          </label>
+          <div className="space-y-2.5">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">
+              Áudio do compartilhamento
+            </p>
+
+            {/* Opção 1: Desligado */}
+            <label className="flex items-center gap-3 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2 cursor-pointer select-none hover:bg-white/[0.05] transition-colors">
+              <input
+                type="radio"
+                name="audioMode"
+                value="off"
+                checked={audioMode === 'off'}
+                onChange={() => setAudioMode('off')}
+                className="accent-[var(--space-accent)]"
+              />
+              <span className="text-[12.5px] font-medium text-strong">Sem áudio (apenas vídeo)</span>
+            </label>
+
+            {/* Opção 2: Estilo Discord — Áudio por App */}
+            <label className="flex flex-col gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2.5 cursor-pointer select-none hover:bg-white/[0.05] transition-colors">
+              <div className="flex items-center gap-3">
+                <input
+                  type="radio"
+                  name="audioMode"
+                  value="app"
+                  checked={audioMode === 'app'}
+                  onChange={() => setAudioMode('app')}
+                  className="accent-[var(--space-accent)]"
+                />
+                <span className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-strong">
+                  <Sparkles size={13} className="text-accent" />
+                  Capturar áudio do aplicativo (estilo Discord — sem eco da call)
+                </span>
+              </div>
+              {audioMode === 'app' && (
+                <div className="pl-6 space-y-1.5 pt-1">
+                  <p className="text-[11.5px] text-muted leading-snug">
+                    Captura apenas o som do jogo ou app selecionado. Os amigos ouvem o jogo sem eco da própria voz e sem precisar mutar o seu PC.
+                  </p>
+                  <select
+                    value={selectedPid}
+                    onChange={(e) => setSelectedPid(e.target.value)}
+                    className="w-full max-w-sm rounded-lg bg-surface2 border border-white/[0.12] text-[12px] text-strong px-2.5 py-1.5 focus:outline-none focus:border-accent"
+                  >
+                    {processes.map((p) => (
+                      <option key={p.pid} value={p.pid}>
+                        {p.name} (PID: {p.pid})
+                      </option>
+                    ))}
+                    {processes.length === 0 && (
+                      <option value="">Nenhum aplicativo com áudio detectado no momento</option>
+                    )}
+                  </select>
+                </div>
+              )}
+            </label>
+
+            {/* Opção 3: Sistema inteiro */}
+            <label className="flex flex-col gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2.5 cursor-pointer select-none hover:bg-white/[0.05] transition-colors">
+              <div className="flex items-center gap-3">
+                <input
+                  type="radio"
+                  name="audioMode"
+                  value="system"
+                  checked={audioMode === 'system'}
+                  onChange={() => setAudioMode('system')}
+                  className="accent-[var(--space-accent)]"
+                />
+                <span className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-strong">
+                  <Volume2 size={13} />
+                  Capturar todo o áudio do Windows (sistema inteiro)
+                </span>
+              </div>
+              {audioMode === 'system' && (
+                <div className="pl-6 space-y-2 pt-1">
+                  <p className="text-[11.5px] text-muted leading-snug">
+                    Captura o som de todas as janelas do Windows. Sem fones, a call fica muda no seu PC pra não gerar eco.
+                  </p>
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={usingHeadphones}
+                      onChange={(e) => setUsingHeadphones(e.target.checked)}
+                      className="accent-[var(--space-accent)]"
+                    />
+                    <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-strong">
+                      <Headphones size={12} />
+                      Estou de fones de ouvido (manter voz da call ativa)
+                    </span>
+                  </label>
+                </div>
+              )}
+            </label>
+          </div>
 
           <SourceGroup title="Telas" icon={Monitor} items={screens} onPick={pick} />
           <SourceGroup title="Janelas" icon={AppWindow} items={windows} onPick={pick} warnBrowser />

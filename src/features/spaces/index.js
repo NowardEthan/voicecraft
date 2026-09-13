@@ -52,12 +52,17 @@ export {
 export {
   parseSpaceInvite,
   normalizeVisibility,
+  getInviteOrigin,
+  buildSpaceInviteUrl,
+  formatInviteCode,
+  buildInviteShareText,
 } from './model/spaceInvite'
 
 export {
   SpaceIcon,
   normalizeSpaceIcon,
   serializeSpaceIcon,
+  isSpaceIconImage,
   ICON_STYLE_CONFIG,
   ICON_STYLES,
   FALLBACK_SPACE_ICON,

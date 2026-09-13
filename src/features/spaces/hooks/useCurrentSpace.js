@@ -56,6 +56,10 @@ function enrichMembers(members, space) {
       status: isString ? null : (m.status || m.statusText || null),
       roleIds: isString ? [] : (Array.isArray(m.roleIds) ? m.roleIds : []),
       perms: isString ? null : (m.perms || null),
+      rulesAcceptedAt: isString ? null : (m.rulesAcceptedAt || null),
+      rulesAcceptedVersion: isString
+        ? 0
+        : Math.max(0, Math.floor(Number(m.rulesAcceptedVersion) || 0)),
     })
   }
   return out
@@ -149,23 +153,48 @@ export function useCurrentSpace(selfProfile = null) {
       const mapKeys = Object.keys(map)
       // Empty snapshot during RTDB reconnect must not wipe everyone's status.
       if (mapKeys.length === 0) return
-      setSpaceMembers((prev) => prev.map((m) => {
-        const p = map[m.userId]
-        if (!p) {
-          // Absent from a non-empty map → they have no live presence node.
-          return { ...m, online: false, location: null, roomName: null }
+      setSpaceMembers((prev) => {
+        // Shallow check: if nothing about any member's online/location/
+        // roomName actually changed, return `prev` so React doesn't
+        // re-render the entire members tree on every harmless RTDB tick.
+        let changed = false
+        for (let i = 0; i < prev.length; i++) {
+          const m = prev[i]
+          const p = map[m.userId]
+          if (!p) {
+            // Absent from a non-empty map → they have no live presence node.
+            if (m.online || m.location || m.roomName) { changed = true; break }
+            continue
+          }
+          const wantOnline = !!p.online
+          const wantRoomId = p.online ? (p.roomId || null) : null
+          const curRoomId = m.location?.roomId ?? null
+          if (!!m.online !== wantOnline) { changed = true; break }
+          if (curRoomId !== wantRoomId) { changed = true; break }
+          if (wantOnline && wantRoomId) {
+            const wantRoomName = (currentSpaceRef.current?.rooms || []).find((r) => r.id === wantRoomId)?.name || m.roomName
+            if (m.roomName !== wantRoomName) { changed = true; break }
+          }
         }
-        return {
-          ...m,
-          online: !!p.online,
-          location: p.online
-            ? { spaceId: info.spaceId, roomId: p.roomId || null }
-            : null,
-          roomName: p.online && p.roomId
-            ? (currentSpaceRef.current?.rooms || []).find((r) => r.id === p.roomId)?.name || m.roomName
-            : null,
-        }
-      }))
+        if (!changed) return prev
+        return prev.map((m) => {
+          const p = map[m.userId]
+          if (!p) {
+            // Absent from a non-empty map → they have no live presence node.
+            return { ...m, online: false, location: null, roomName: null }
+          }
+          return {
+            ...m,
+            online: !!p.online,
+            location: p.online
+              ? { spaceId: info.spaceId, roomId: p.roomId || null }
+              : null,
+            roomName: p.online && p.roomId
+              ? (currentSpaceRef.current?.rooms || []).find((r) => r.id === p.roomId)?.name || m.roomName
+              : null,
+          }
+        })
+      })
     })
     const offRoom    = sig.onRoomChanged((info) => {
       if (info.kind === 'created') {
@@ -226,7 +255,25 @@ export function useCurrentSpace(selfProfile = null) {
     pendingSpaceTokenRef.current = spaceId
     setSwitchingSpaceId(spaceId)
 
-    // Instant rail feedback: paint identity from the list summary while we hydrate.
+    // Instant rail feedback: prefer the in-memory SignalingClient cache
+    // over a fresh list-summary preview. The cache already has
+    // rooms/members attached, so the transition happens in a single
+    // React tick instead of waiting for the network.
+    const cached = sig.getCachedSpace?.(spaceId)
+    if (cached?.id === spaceId) {
+      setCurrentSpace(cached)
+      setSpaceMembers(enrichMembers(cached.members || [], cached))
+      setOptimisticFirstRoom(null)
+      setSwitchingSpaceId(null)
+      pendingSpaceTokenRef.current = 0
+      markSpaceJoined(spaceId)
+      markSpaceVisited(spaceId)
+      // Refresh in the background; don't gate the UI on it.
+      sig.joinSpace(spaceId, { keepVoice: !!opts.keepVoice }).catch(() => {})
+      return
+    }
+
+    // Cache miss: paint identity from the list summary while we hydrate.
     const preview = opts.preview
     if (preview?.id === spaceId) {
       setCurrentSpace((prev) => {

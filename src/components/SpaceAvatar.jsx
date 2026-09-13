@@ -34,10 +34,11 @@ export default function SpaceAvatar({
   const ringClass = withRing
     ? 'ring-2 ring-white ring-offset-1 ring-offset-rail'
     : ''
+  const isImage = iconValue?.type === 'image' && iconValue.src
 
   return (
     <div
-      className={`relative shrink-0 flex items-center justify-center transition-all duration-200 ${radiusClass} ${ringClass} ${className}`}
+      className={`relative shrink-0 flex items-center justify-center overflow-hidden transition-all duration-200 ${radiusClass} ${ringClass} ${className}`}
       style={{
         width: size,
         height: size,
@@ -50,12 +51,20 @@ export default function SpaceAvatar({
         style={surface}
         aria-hidden
       />
-      <SpaceIcon
-        value={iconValue}
-        size={Math.round(size * 0.5)}
-        className="relative drop-shadow-[0_1px_2px_rgba(0,0,0,0.20)]"
-        style={{ color: 'inherit' }}
-      />
+      {isImage ? (
+        <img
+          src={iconValue.src}
+          alt={space?.name || ''}
+          className={`relative z-[1] w-full h-full object-cover ${radiusClass}`}
+        />
+      ) : (
+        <SpaceIcon
+          value={iconValue}
+          size={Math.round(size * 0.5)}
+          className="relative z-[1] drop-shadow-[0_1px_2px_rgba(0,0,0,0.20)]"
+          style={{ color: 'inherit' }}
+        />
+      )}
     </div>
   )
 }

@@ -74,5 +74,15 @@ export default defineConfig({
     port: 5183,
     host: '0.0.0.0',
     strictPort: false,
+    proxy: {
+      // Same-origin proxy so canvas crop can load Storage images in the
+      // browser without bucket CORS (forwards Authorization if set).
+      '/__fb_storage': {
+        target: 'https://firebasestorage.googleapis.com',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (p) => p.replace(/^\/__fb_storage/, ''),
+      },
+    },
   },
 })

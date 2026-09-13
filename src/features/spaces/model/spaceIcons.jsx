@@ -161,18 +161,49 @@ function toCanonical(entry, fallback = {}) {
   }
 }
 
+// ---- Helper to detect if a space icon is an image ----------------------
+export function isSpaceIconImage(input) {
+  if (!input) return false
+  if (typeof input === 'string') {
+    return input.startsWith('data:image/') || /^https?:\/\//.test(input) || input.startsWith('img:')
+  }
+  if (typeof input === 'object' && input.type === 'image' && input.src) return true
+  return false
+}
+
 /**
  * Compact wire format for the signaling server (string, ~20–40 chars):
- *   ph:users-three:outline
+ *   ph:users-three:outline  OR  https://... / data:image/...
  */
 export function serializeSpaceIcon(input) {
   const v = normalizeSpaceIcon(input)
+  if (v.type === 'image') {
+    return v.src
+  }
   return `${v.collection}:${v.name}:${v.style}`
 }
 
-// Normalize any incoming icon value to the canonical {id, collection, name, style}
+// Normalize any incoming icon value to the canonical {id, collection, name, style} or {type: 'image', src, rawSrc, fit}
 export function normalizeSpaceIcon(input) {
   if (!input || input === '[object Object]') return { ...FALLBACK_SPACE_ICON }
+
+  // Custom image format (dataUrl or remote image URL)
+  if (typeof input === 'string') {
+    if (input.startsWith('data:image/') || /^https?:\/\//.test(input)) {
+      return { type: 'image', src: input }
+    }
+    if (input.startsWith('img:')) {
+      return { type: 'image', src: input.slice(4) }
+    }
+  }
+  if (typeof input === 'object' && input.type === 'image' && input.src) {
+    return {
+      type: 'image',
+      src: input.src,
+      rawSrc: input.rawSrc || input.src,
+      fit: input.fit || null,
+    }
+  }
 
   if (typeof input === 'object' && (input.id || input.name)) {
     const name = input.name || input.id
@@ -342,9 +373,11 @@ export function pushRecentIcon(value) {
 export function SpaceIcon({ value, size, className = '', style, title, ...rest }) {
   const ready = useSpaceIconsReady()
   const v = useMemo(() => normalizeSpaceIcon(value), [value])
-  const config = ICON_STYLE_CONFIG[v.style] || ICON_STYLE_CONFIG.outline
+  const isImg = v?.type === 'image' && v.src
+  const config = ICON_STYLE_CONFIG[v?.style] || ICON_STYLE_CONFIG.outline
   const finalSize = size ?? config.size
-  // For outline/rounded, set stroke width via the icon style
+
+  // Always call hooks before any early return (image vs phosphor).
   const iconStyle = useMemo(() => {
     const base = { color: 'currentColor', ...style }
     if (config.strokeWidth != null) {
@@ -352,6 +385,23 @@ export function SpaceIcon({ value, size, className = '', style, title, ...rest }
     }
     return base
   }, [config.strokeWidth, style])
+
+  if (isImg) {
+    return (
+      <img
+        src={v.src}
+        alt={title || ''}
+        title={title}
+        className={`object-cover rounded-[inherit] ${className}`}
+        style={{
+          width: finalSize,
+          height: finalSize,
+          ...style,
+        }}
+        {...rest}
+      />
+    )
+  }
 
   if (!ready) {
     return (

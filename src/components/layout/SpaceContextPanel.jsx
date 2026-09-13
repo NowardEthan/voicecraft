@@ -10,7 +10,7 @@
  * Composition (top → bottom):
  *   1. Identity banner — avatar + name + description + meta
  *   2. Vertical navigation list (Visão geral | Eventos)
- *   3. SALAS section — always visible, with "Criar sala" + room list
+ *   3. SALAS section — always visible; + cria grupo, + em cada grupo cria sala
  *   4. SelfControls — pinned bottom: avatar + name + mic + audio + settings
  *
  * Width: 280 px (within the spec's 260–300 px band).
@@ -72,6 +72,17 @@ export default function SpaceContextPanel({
   const { unreadByRoom, roomKey } = useNotifications()
   const menuRef = useRef(null)        // the gear button (toggle)
   const popoverRef = useRef(null)     // the portal-rendered popover
+
+  // The AppShell used to remount the panel on space change via `key`,
+  // which also wiped ephemeral UI (open menu, confirm dialogs, pending
+  // edits). Without that key we have to reset that state ourselves so
+  // the old Space's popover never lingers over the new one.
+  useEffect(() => {
+    setMenuOpen(false)
+    setMenuPos(null)
+    setSpaceSettingsOpen(false)
+    setConfirmDeleteId(null)
+  }, [space?.id])
 
   useEffect(() => {
     if (!menuOpen) return

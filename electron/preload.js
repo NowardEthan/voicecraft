@@ -16,6 +16,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Paths
   getPaths: () => ipcRenderer.invoke('app:get-paths'),
 
+  /** Bypass CORS: download Storage image bytes via Electron main. */
+  fetchStorageImage: (url, idToken) =>
+    ipcRenderer.invoke('net:fetch-storage-image', { url, idToken }),
+
   // Custom title bar / frameless window
   windowControls: {
     minimize: () => ipcRenderer.invoke('window:minimize'),
@@ -61,15 +65,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
     start: () => ipcRenderer.invoke('audio-service:start'),
     stop: () => ipcRenderer.invoke('audio-service:stop'),
     send: (cmd) => ipcRenderer.invoke('audio-service:send', cmd),
+    listProcesses: () => ipcRenderer.invoke('audio-service:list-processes'),
+    startLoopback: (payload) => ipcRenderer.invoke('audio-service:start-loopback', payload),
+    stopLoopback: (payload) => ipcRenderer.invoke('audio-service:stop-loopback', payload),
     // Subscribe to PCM frames coming from the C++ service.
     onFrame: (cb) => {
       const handler = (_e, payload) => {
-        // payload is a Uint8Array (raw bytes from stdout)
-        const u8 = payload instanceof Uint8Array
-          ? payload
-          : new Uint8Array(payload.buffer || payload)
+        let type = 'mic'
+        let raw = payload
+        if (payload && payload.payload) {
+          type = payload.type || 'mic'
+          raw = payload.payload
+        }
+        // raw is a Uint8Array (raw bytes from stdout)
+        const u8 = raw instanceof Uint8Array
+          ? raw
+          : new Uint8Array(raw?.buffer || raw || [])
         const floats = new Float32Array(u8.buffer, u8.byteOffset, u8.byteLength / 4)
-        cb(floats, u8.byteLength / 4)
+        floats.type = type
+        const meta = { type, floats, sampleRate: 48000, channels: 1 }
+        cb(floats, u8.byteLength / 4, meta)
       }
       ipcRenderer.on('audio:frame', handler)
       return () => ipcRenderer.removeListener('audio:frame', handler)

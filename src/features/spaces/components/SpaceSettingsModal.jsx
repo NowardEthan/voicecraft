@@ -8,8 +8,9 @@ import { createPortal } from 'react-dom'
 import { X, ImagePlus, Trash2, Eye, EyeOff, Bell, BellOff } from 'lucide-react'
 import { ModalShell } from '../../../shared/motion/ModalShell'
 import { SpaceIconPicker } from './SpaceIconPicker'
+import { SpaceIconCropModal } from './SpaceIconCropModal'
 import { ColorIdentityPicker, paletteColorFor, PALETTE } from './ColorIdentityPicker'
-import { SpaceIcon, normalizeSpaceIcon, serializeSpaceIcon, getRecentIcons, pushRecentIcon } from '../model/spaceIcons'
+import { SpaceIcon, normalizeSpaceIcon, serializeSpaceIcon, getRecentIcons, pushRecentIcon, isSpaceIconImage } from '../model/spaceIcons'
 import { flashToast } from '../../../shared/utils/toast'
 import {
   getSpaceCover,
@@ -79,7 +80,9 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose, isCre
   const [error, setError] = useState(null)
   const [iconOpen, setIconOpen] = useState(false)
   const [colorOpen, setColorOpen] = useState(false)
+  const [iconCrop, setIconCrop] = useState(null) // { src, fit }
   const fileInputRef = useRef(null)
+  const iconFileRef = useRef(null)
   const baselineRef = useRef('')
 
   useEffect(() => {
@@ -167,6 +170,37 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose, isCre
   }
 
   const handlePickCover = () => fileInputRef.current?.click()
+
+  const handlePickIconImage = () => {
+    setIconOpen(false)
+    setColorOpen(false)
+    iconFileRef.current?.click()
+  }
+
+  const handleIconFile = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    try {
+      const dataUrl = await readFileAsDataUrl(file)
+      setIconCrop({
+        src: dataUrl,
+        fit: icon?.type === 'image' ? (icon.fit || DEFAULT_COVER_FIT) : DEFAULT_COVER_FIT,
+      })
+    } catch (err) {
+      flashToast(err?.message || 'Falha ao abrir imagem')
+    }
+  }
+
+  const handleApplyIconCrop = ({ dataUrl, fit, rawSrc }) => {
+    setIcon({
+      type: 'image',
+      src: dataUrl,
+      rawSrc: rawSrc || dataUrl,
+      fit: normalizeCoverFit(fit),
+    })
+    setIconCrop(null)
+  }
   const handleFile = async (e) => {
     const file = e.target.files?.[0]
     e.target.value = ''
@@ -233,7 +267,7 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose, isCre
       onClose={onClose}
       labelledBy="space-settings-title"
       maxWidth="2xl"
-      closeOnEscape={!iconOpen && !colorOpen}
+      closeOnEscape={!iconOpen && !colorOpen && !iconCrop}
       panelClassName="rounded-[20px] overflow-hidden"
     >
       <form
@@ -341,27 +375,59 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose, isCre
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <div className="flex items-start gap-3 min-w-0">
                 <span
-                  className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0"
+                  className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0 overflow-hidden"
                   style={identitySurfaceStyle(color)}
                   aria-hidden
                 >
-                  <SpaceIcon value={icon} size={22} style={{ color: 'inherit' }} />
+                  <SpaceIcon
+                    value={icon}
+                    size={isSpaceIconImage(icon) ? 48 : 22}
+                    className={isSpaceIconImage(icon) ? 'rounded-xl' : undefined}
+                    style={{ color: 'inherit' }}
+                  />
                 </span>
                 <div className="min-w-0">
                   <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted mb-1.5">Ícone</p>
-                  <button
-                    ref={iconButtonRef}
-                    type="button"
-                    onClick={() => {
-                      setColorOpen(false)
-                      setIconOpen(v => !v)
-                    }}
-                    className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg text-[12px] font-medium bg-white/[0.05] hover:bg-white/[0.09] text-strong border border-white/[0.08] transition-colors"
-                  >
-                    <ImagePlus size={13} />
-                    Trocar ícone
-                  </button>
-                  <p className="text-[11px] text-muted mt-1.5">Escolha entre diversos estilos.</p>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      ref={iconButtonRef}
+                      type="button"
+                      onClick={() => {
+                        setColorOpen(false)
+                        setIconOpen(v => !v)
+                      }}
+                      className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg text-[12px] font-medium bg-white/[0.05] hover:bg-white/[0.09] text-strong border border-white/[0.08] transition-colors"
+                    >
+                      <ImagePlus size={13} />
+                      Trocar ícone
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handlePickIconImage}
+                      className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg text-[12px] font-medium bg-white/[0.05] hover:bg-white/[0.09] text-strong border border-white/[0.08] transition-colors"
+                    >
+                      Enviar imagem
+                    </button>
+                    {isSpaceIconImage(icon) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const src = icon?.rawSrc || icon?.src
+                          if (!src) return
+                          setIconCrop({
+                            src,
+                            fit: icon?.fit || DEFAULT_COVER_FIT,
+                          })
+                        }}
+                        className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg text-[12px] font-medium bg-white/[0.05] hover:bg-white/[0.09] text-strong border border-white/[0.08] transition-colors"
+                      >
+                        Ajustar
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-muted mt-1.5">
+                    Ícones prontos ou PNG/JPEG com crop, zoom e preview.
+                  </p>
                 </div>
               </div>
               <ColorIdentityPicker
@@ -434,6 +500,14 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose, isCre
               type="file"
               accept="image/jpeg,image/png,image/webp,image/gif"
               onChange={handleFile}
+              className="hidden"
+              aria-hidden
+            />
+            <input
+              ref={iconFileRef}
+              type="file"
+              accept="image/png,image/jpeg,image/jpg,image/webp"
+              onChange={handleIconFile}
               className="hidden"
               aria-hidden
             />
@@ -591,6 +665,7 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose, isCre
       current={icon}
       recents={recents}
       enableEmojis={false}
+      onUploadImage={handlePickIconImage}
       onPick={(next) => {
         setIcon(next)
         setRecents(pushRecentIcon(next))
@@ -598,6 +673,16 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose, isCre
       }}
       onClose={() => setIconOpen(false)}
       anchorRef={iconButtonRef}
+    />
+    <SpaceIconCropModal
+      open={!!iconCrop}
+      src={iconCrop?.src}
+      initialFit={iconCrop?.fit}
+      spaceColor={color}
+      spaceName={name || space?.name || 'Space'}
+      onCancel={() => setIconCrop(null)}
+      onPickAnother={handlePickIconImage}
+      onApply={handleApplyIconCrop}
     />
     </>,
     document.body,
