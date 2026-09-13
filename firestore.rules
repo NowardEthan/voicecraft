@@ -53,8 +53,57 @@ service cloud.firestore {
       return isSpaceCreator(spaceId) || memberHasPerm(spaceId, 'assign_roles');
     }
 
+    // Join: add only self. Leave: remove only self.
+    // Kick / edit: remove exactly one other member (size −1, kicker stays).
+    function memberIdsJoinSelf() {
+      return request.resource.data.memberIds.hasAll(resource.data.memberIds)
+        && request.resource.data.memberIds.size() == resource.data.memberIds.size() + 1
+        && request.resource.data.memberIds.hasAny([request.auth.uid])
+        && !resource.data.memberIds.hasAny([request.auth.uid]);
+    }
+
+    function memberIdsLeaveSelf() {
+      return resource.data.memberIds.hasAll(request.resource.data.memberIds)
+        && resource.data.memberIds.size() == request.resource.data.memberIds.size() + 1
+        && resource.data.memberIds.hasAny([request.auth.uid])
+        && !request.resource.data.memberIds.hasAny([request.auth.uid]);
+    }
+
+    function memberIdsRemoveOneOther(spaceId) {
+      return resource.data.memberIds.hasAll(request.resource.data.memberIds)
+        && resource.data.memberIds.size() == request.resource.data.memberIds.size() + 1
+        && resource.data.memberIds.hasAny([request.auth.uid])
+        && request.resource.data.memberIds.hasAny([request.auth.uid])
+        && (
+          isSpaceCreator(spaceId)
+          || memberHasPerm(spaceId, 'kick')
+          || memberHasPerm(spaceId, 'edit_space')
+        );
+    }
+
+    function memberIdsChangeAllowed(spaceId) {
+      return memberIdsJoinSelf()
+        || memberIdsLeaveSelf()
+        || memberIdsRemoveOneOther(spaceId);
+    }
+
+    // After Google/email re-login, claim ownership if the previous createdBy
+    // Auth UID belongs to the same email and is no longer in memberIds.
+    function reclaimCreatorSameEmail() {
+      return signedIn()
+        && request.auth.token.email != null
+        && request.resource.data.createdBy == request.auth.uid
+        && resource.data.createdBy != request.auth.uid
+        && exists(/databases/$(database)/documents/vc_users/$(resource.data.createdBy))
+        && get(/databases/$(database)/documents/vc_users/$(resource.data.createdBy)).data.email is string
+        && get(/databases/$(database)/documents/vc_users/$(resource.data.createdBy)).data.email.lower()
+          == request.auth.token.email.lower()
+        && request.resource.data.memberIds.hasAny([request.auth.uid])
+        && !request.resource.data.memberIds.hasAny([resource.data.createdBy]);
+    }
+
     // Creator / edit_space: any fields.
-    // Members without edit_space: only memberIds / roomCount (join/leave).
+    // Join/leave/kick: memberIds (±1) and optional roomCount.
     // manage_events holders may also touch events.
     // mod_chat holders may update chatAutomation only.
     function spaceUpdateAllowed(spaceId) {
@@ -69,8 +118,37 @@ service cloud.firestore {
           canModChat(spaceId)
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['chatAutomation'])
         )
-        || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberIds', 'roomCount'])
+        || (
+          canManageRooms(spaceId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['roomCount'])
+        )
+        || (
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberIds', 'roomCount'])
+          && memberIdsChangeAllowed(spaceId)
+        )
+        || (
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberIds'])
+          && memberIdsChangeAllowed(spaceId)
+        )
+        || (
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['memberIds', 'createdBy'])
+          && reclaimCreatorSameEmail()
+          && resource.data.memberIds.hasAll(request.resource.data.memberIds)
+          && resource.data.memberIds.size() == request.resource.data.memberIds.size() + 1
+          && request.resource.data.memberIds.hasAny([request.auth.uid])
+          && !request.resource.data.memberIds.hasAny([resource.data.createdBy])
+        )
       );
+    }
+
+    function sameAccountEmail(uid) {
+      return signedIn()
+        && request.auth.token.email != null
+        && exists(/databases/$(database)/documents/vc_users/$(uid))
+        && get(/databases/$(database)/documents/vc_users/$(uid)).data.email is string
+        && get(/databases/$(database)/documents/vc_users/$(uid)).data.email.lower()
+          == request.auth.token.email.lower();
     }
 
     function tagOwnerOrderOnly(uid) {
@@ -134,7 +212,15 @@ service cloud.firestore {
 
       match /members/{uid} {
         allow read: if signedIn();
-        allow create, delete: if signedIn();
+        // Create own membership row only. Delete: self, kick/creator, or
+        // leftover Auth UID for the same email (re-login cleanup).
+        allow create: if signedIn() && request.auth.uid == uid;
+        allow delete: if signedIn() && (
+          request.auth.uid == uid
+          || isSpaceCreator(spaceId)
+          || memberHasPerm(spaceId, 'kick')
+          || sameAccountEmail(uid)
+        );
         allow update: if signedIn() && (
           isSpaceCreator(spaceId)
           || memberRoleAssignUpdate(spaceId, uid)

@@ -10,6 +10,10 @@ import {
 } from 'lucide-react'
 import { PersonAvatar } from '../../features/people'
 import { UserTagChips } from '../../features/people/components/UserTagChips'
+import {
+  memberPresenceKind,
+  PRESENCE_DOT,
+} from '../../features/people/model/presenceKind'
 import { PURPOSE_BY_KEY } from '../../features/rooms'
 import { resolveCardTheme } from '../../features/account/model/profileCardThemes'
 import { CardThemeFx } from '../../features/account/components/CardThemeFx'
@@ -88,18 +92,30 @@ function memberStatus(member, space) {
       textColor: 'text-muted',
       label: member.statusText,
       ring: false,
-      dot: '#60A5FA',
+      dot: member.online ? PRESENCE_DOT.online : (member.appOnline ? PRESENCE_DOT.away : '#60A5FA'),
     }
   }
 
-  if (member.online) {
+  const kind = memberPresenceKind(member)
+  if (kind === 'online') {
     return {
       Icon: null,
       color: null,
       textColor: 'text-muted',
       label: 'Online',
       ring: false,
-      dot: '#22C55E',
+      dot: PRESENCE_DOT.online,
+    }
+  }
+
+  if (kind === 'away') {
+    return {
+      Icon: Headphones,
+      color: PRESENCE_DOT.away,
+      textColor: 'text-muted',
+      label: 'Ausente',
+      ring: false,
+      dot: PRESENCE_DOT.away,
     }
   }
 
@@ -109,7 +125,7 @@ function memberStatus(member, space) {
     textColor: 'text-muted',
     label: seenLabel(member.lastSeen),
     ring: false,
-    dot: '#6B7280',
+    dot: PRESENCE_DOT.offline,
   }
 }
 
@@ -141,16 +157,20 @@ export default function PeoplePanel({
   const sections = useMemo(() => {
     const inRoom = []
     const online = []
+    const away = []
     const offline = []
     for (const m of filtered) {
-      if (m.location?.roomId) inRoom.push(m)
-      else if (m.online) online.push(m)
+      const kind = memberPresenceKind(m)
+      if (kind === 'in_room') inRoom.push(m)
+      else if (kind === 'online') online.push(m)
+      else if (kind === 'away') away.push(m)
       else offline.push(m)
     }
     return [
       { key: 'room', label: 'Na sala agora', dot: accent, items: sortMembers(inRoom, currentUserId) },
-      { key: 'online', label: 'Online', dot: '#22C55E', items: sortMembers(online, currentUserId) },
-      { key: 'offline', label: 'Offline', dot: '#6B7280', items: sortMembers(offline, currentUserId) },
+      { key: 'online', label: 'Online', dot: PRESENCE_DOT.online, items: sortMembers(online, currentUserId) },
+      { key: 'away', label: 'Ausente', dot: PRESENCE_DOT.away, items: sortMembers(away, currentUserId) },
+      { key: 'offline', label: 'Offline', dot: PRESENCE_DOT.offline, items: sortMembers(offline, currentUserId) },
     ].filter((s) => s.items.length > 0)
   }, [filtered, currentUserId, accent])
 

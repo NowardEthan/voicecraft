@@ -305,50 +305,48 @@ export default function TextRoomView({
         onUnpinMessage={togglePin}
       />
 
-      <div className="flex-1 min-h-0 flex flex-col relative">
-        {rulesActive ? (
-          <div className="shrink-0 border-b border-line/60 bg-[#0d0f14]/80 backdrop-blur-sm max-h-[42%] overflow-y-auto">
-            <div className="py-2">
-              <RulesCard
-                rules={rulesCfg}
-                spaceName={space?.name || ''}
-                memberCount={space?.memberCount || members.length}
-                accepted={rulesAccepted}
-                accepting={acceptingRules}
-                onAccept={handleAcceptRules}
-                showAccept
-              />
-            </div>
-          </div>
-        ) : null}
-        <div className="flex-1 min-h-0 relative">
-        <MessageList
-          messages={feedMessages}
-          currentUserName={currentUserName}
-          currentUserId={currentUserId}
-          authorColors={authorColors}
-          roomKey={roomKey}
-          onRetry={handleRetry}
-          onImageClick={(url) => setLightbox(url)}
-          emptyHint="Nenhuma mensagem ainda. Mande a primeira."
-          query=""
-          onReply={handleReply}
-          onToggleReaction={chat.toggleReaction}
-          onToggleLike={chat.toggleLike}
-          quickReactions={quickReactions}
-          onEdit={chat.editMessage}
-          onDelete={(id) => chat.deleteMessage(id, { moderate: canModerateChat })}
-          canModerate={canModerateChat}
-          members={members}
-          density={density}
-          onTogglePin={togglePin}
-          typingTracker={typingTracker}
-          allRooms={space?.rooms || []}
-          onRoomMention={handleRoomMention}
-          jumpToId={jumpToId}
-          jumpTick={jumpTick}
-          canPinAll={canModerateChat}
-        />
+      <div className="flex-1 min-h-0 flex flex-col relative overflow-hidden">
+        <div className="flex-1 min-h-0 relative overflow-hidden">
+          <MessageList
+            messages={feedMessages}
+            currentUserName={currentUserName}
+            currentUserId={currentUserId}
+            authorColors={authorColors}
+            roomKey={roomKey}
+            onRetry={handleRetry}
+            onImageClick={(url) => setLightbox(url)}
+            emptyHint="Nenhuma mensagem ainda. Mande a primeira."
+            query=""
+            onReply={handleReply}
+            onToggleReaction={chat.toggleReaction}
+            onToggleLike={chat.toggleLike}
+            quickReactions={quickReactions}
+            onEdit={chat.editMessage}
+            onDelete={(id) => chat.deleteMessage(id, { moderate: canModerateChat })}
+            canModerate={canModerateChat}
+            members={members}
+            density={density}
+            onTogglePin={togglePin}
+            typingTracker={typingTracker}
+            allRooms={space?.rooms || []}
+            onRoomMention={handleRoomMention}
+            jumpToId={jumpToId}
+            jumpTick={jumpTick}
+            canPinAll={canModerateChat}
+            listHeader={rulesActive ? (
+              <div className="pb-1">
+                <RulesCard
+                  rules={rulesCfg}
+                  spaceName={space?.name || ''}
+                  memberCount={space?.memberCount || members.length}
+                  accepted={rulesAccepted}
+                  accepting={acceptingRules}
+                  onAccept={handleAcceptRules}
+                  showAccept
+                />
+              </div>
+            ) : null}
+          />
         </div>
 
         <CommandsFab

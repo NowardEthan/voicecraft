@@ -51,6 +51,7 @@ export const startAfter = (...a) => a
 export const serverTimestamp = () => Date.now()
 export const arrayUnion = (...a) => a
 export const arrayRemove = (...a) => a
+export const deleteField = () => ({})
 `)
 
 // firebase/auth
@@ -76,6 +77,8 @@ export const VC = { users: 'vc_users', spaces: 'vc_spaces', userTags: 'vc_user_t
 writeMock('firebase_covers.mjs', `
 export const deleteSpaceCover = () => Promise.resolve()
 export const uploadSpaceCover = () => Promise.resolve(null)
+export const uploadSpaceIcon = () => Promise.resolve(null)
+export const deleteSpaceIcon = () => Promise.resolve()
 export const uploadRoomCover = () => Promise.resolve(null)
 export const deleteRoomCover = () => Promise.resolve()
 export const uploadAnnounceAsset = () => Promise.resolve(null)
@@ -543,7 +546,7 @@ test('I7 — _reconcileMemberDocs is fire-and-forget at every joinSpace call sit
   const noAwait = !/await\s+this\._reconcileMemberDocs/.test(src)
   assert.ok(noAwait, 'I7: _reconcileMemberDocs must never be awaited')
   // Must be invoked at least twice (cache-hit and cache-miss branches).
-  const calls = src.match(/this\._reconcileMemberDocs\(spaceId,/g) || []
+  const calls = src.match(/this\._reconcileMemberDocs\(spaceId\)/g) || []
   assert.ok(calls.length >= 2,
     `I7: expected >=2 fire-and-forget call sites, found ${calls.length}`)
 })
@@ -604,11 +607,19 @@ test('Multiple Spaces round-trip correctly', () => {
 // ---------------------------------------------------------------
 test('C3 — _reconcileMemberDocs is fire-and-forget (>=2 call sites, none awaited)', () => {
   const src = readSrc('shared/connection/signalingClient.js')
-  const matches = src.match(/_reconcileMemberDocs\(spaceId,[\s\S]*?\)\s*\n\s*\.catch\(/g) || []
+  const matches = src.match(/_reconcileMemberDocs\(spaceId\)\s*\n\s*\.catch\(/g) || []
   assert.ok(matches.length >= 2,
     `expected >=2 fire-and-forget call sites, found ${matches.length}`)
   assert.equal(/await\s+this\._reconcileMemberDocs/.test(src), false,
     'joinSpace must not await _reconcileMemberDocs')
+})
+
+test('C3b — _reconcileMemberDocs never mass-deletes from a canonicalIds Set', () => {
+  const src = readSrc('shared/connection/signalingClient.js')
+  assert.equal(/canonicalIds/.test(src), false,
+    'stale canonicalIds reconcile caused mutual kicks; must not return')
+  assert.ok(/email === myEmail/.test(src),
+    'reconcile may only remove leftover Auth UIDs for the same email')
 })
 
 test('C3 — cache-miss path runs _hydrateSpace exactly once', () => {

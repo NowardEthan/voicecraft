@@ -1,7 +1,16 @@
-import { useState, useEffect } from 'react'
-import { Monitor, AppWindow, X, Info, Volume2, Headphones, Sparkles } from 'lucide-react'
+import { useState, useEffect, useMemo } from 'react'
+import { Monitor, AppWindow, X, Info, Volume2, Headphones, Sparkles, Search } from 'lucide-react'
 import { ModalShell } from '../../../../../shared/motion/ModalShell.jsx'
 import { looksLikeBrowserWindow } from '../../../../../hooks/useScreenShare'
+
+function processLabel(p) {
+  const title = String(p.title || '').trim()
+  const name = String(p.name || '').trim()
+  if (title && name && title.toLowerCase() !== name.toLowerCase()) {
+    return { primary: title, secondary: name }
+  }
+  return { primary: title || name || `PID ${p.pid}`, secondary: null }
+}
 
 export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
   const screens = sources.filter((s) => s.isScreen)
@@ -10,25 +19,46 @@ export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
   const [usingHeadphones, setUsingHeadphones] = useState(true)
   const [processes, setProcesses] = useState([])
   const [selectedPid, setSelectedPid] = useState('')
+  const [processQuery, setProcessQuery] = useState('')
+  const [loadingProcs, setLoadingProcs] = useState(false)
 
   useEffect(() => {
-    if (!open) return
-    if (window.electronAPI?.audioService?.listProcesses) {
-      window.electronAPI.audioService.listProcesses().then((list) => {
-        if (Array.isArray(list)) {
-          setProcesses(list)
-          if (list.length > 0 && !selectedPid) {
-            setSelectedPid(String(list[0].pid))
-          }
-        }
-      }).catch(() => {})
+    if (!open) {
+      setProcessQuery('')
+      return
     }
-  }, [open, selectedPid])
+    if (!window.electronAPI?.audioService?.listProcesses) return
+    let cancelled = false
+    setLoadingProcs(true)
+    window.electronAPI.audioService.listProcesses()
+      .then((list) => {
+        if (cancelled || !Array.isArray(list)) return
+        setProcesses(list)
+        setSelectedPid((prev) => {
+          if (prev && list.some((p) => String(p.pid) === String(prev))) return prev
+          return list[0] ? String(list[0].pid) : ''
+        })
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoadingProcs(false) })
+    return () => { cancelled = true }
+  }, [open])
+
+  const filteredProcesses = useMemo(() => {
+    const q = processQuery.trim().toLowerCase()
+    if (!q) return processes
+    return processes.filter((p) => {
+      const title = String(p.title || '').toLowerCase()
+      const name = String(p.name || '').toLowerCase()
+      return title.includes(q) || name.includes(q) || String(p.pid).includes(q)
+    })
+  }, [processes, processQuery])
 
   const withSystemAudio = audioMode === 'system'
   const pick = (sourceId) => onPick?.(sourceId, {
-    withAudio: audioMode !== 'off',
-    headphones: withSystemAudio && usingHeadphones,
+    // Desktop loopback only for full system audio. App mode uses WASAPI by PID.
+    withAudio: withSystemAudio,
+    headphones: audioMode === 'app' || (withSystemAudio && usingHeadphones),
     audioMode,
     appPid: audioMode === 'app' && selectedPid ? parseInt(selectedPid, 10) : null,
   })
@@ -82,8 +112,8 @@ export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
             </label>
 
             {/* Opção 2: Estilo Discord — Áudio por App */}
-            <label className="flex flex-col gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2.5 cursor-pointer select-none hover:bg-white/[0.05] transition-colors">
-              <div className="flex items-center gap-3">
+            <div className="flex flex-col gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2.5 hover:bg-white/[0.05] transition-colors">
+              <label className="flex items-center gap-3 cursor-pointer select-none">
                 <input
                   type="radio"
                   name="audioMode"
@@ -96,29 +126,65 @@ export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
                   <Sparkles size={13} className="text-accent" />
                   Capturar áudio do aplicativo (estilo Discord — sem eco da call)
                 </span>
-              </div>
+              </label>
               {audioMode === 'app' && (
-                <div className="pl-6 space-y-1.5 pt-1">
+                <div className="pl-6 space-y-2 pt-1">
                   <p className="text-[11.5px] text-muted leading-snug">
-                    Captura apenas o som do jogo ou app selecionado. Os amigos ouvem o jogo sem eco da própria voz e sem precisar mutar o seu PC.
+                    Só apps com janela aberta. Busque pelo nome do jogo ou janela.
                   </p>
-                  <select
-                    value={selectedPid}
-                    onChange={(e) => setSelectedPid(e.target.value)}
-                    className="w-full max-w-sm rounded-lg bg-surface2 border border-white/[0.12] text-[12px] text-strong px-2.5 py-1.5 focus:outline-none focus:border-accent"
+                  <div className="relative max-w-md">
+                    <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />
+                    <input
+                      type="search"
+                      value={processQuery}
+                      onChange={(e) => setProcessQuery(e.target.value)}
+                      placeholder="Buscar app ou janela…"
+                      className="w-full rounded-lg bg-surface2 border border-white/[0.12] text-[12px] text-strong pl-8 pr-2.5 py-1.5 focus:outline-none focus:border-accent"
+                    />
+                  </div>
+                  <div
+                    role="listbox"
+                    aria-label="Aplicativos abertos"
+                    className="max-w-md max-h-40 overflow-y-auto rounded-lg border border-white/[0.12] bg-surface2 divide-y divide-white/[0.06]"
                   >
-                    {processes.map((p) => (
-                      <option key={p.pid} value={p.pid}>
-                        {p.name} (PID: {p.pid})
-                      </option>
-                    ))}
-                    {processes.length === 0 && (
-                      <option value="">Nenhum aplicativo com áudio detectado no momento</option>
+                    {loadingProcs && (
+                      <p className="px-2.5 py-2 text-[12px] text-muted">Carregando apps abertos…</p>
                     )}
-                  </select>
+                    {!loadingProcs && filteredProcesses.length === 0 && (
+                      <p className="px-2.5 py-2 text-[12px] text-muted">
+                        {processQuery.trim()
+                          ? 'Nenhum app bate com a busca.'
+                          : 'Nenhum aplicativo com janela aberta encontrado.'}
+                      </p>
+                    )}
+                    {filteredProcesses.map((p) => {
+                      const { primary, secondary } = processLabel(p)
+                      const selected = String(selectedPid) === String(p.pid)
+                      return (
+                        <button
+                          key={p.pid}
+                          type="button"
+                          role="option"
+                          aria-selected={selected}
+                          onClick={() => setSelectedPid(String(p.pid))}
+                          className={
+                            'w-full text-left px-2.5 py-1.5 transition-colors ' +
+                            (selected
+                              ? 'bg-accent/15 text-strong'
+                              : 'text-strong hover:bg-white/[0.06]')
+                          }
+                        >
+                          <span className="block text-[12px] font-medium truncate">{primary}</span>
+                          {secondary && (
+                            <span className="block text-[10.5px] text-muted truncate">{secondary}</span>
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
                 </div>
               )}
-            </label>
+            </div>
 
             {/* Opção 3: Sistema inteiro */}
             <label className="flex flex-col gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2.5 cursor-pointer select-none hover:bg-white/[0.05] transition-colors">

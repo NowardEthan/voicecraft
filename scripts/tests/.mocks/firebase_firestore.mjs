@@ -17,3 +17,4 @@ export const startAfter = (...a) => a
 export const serverTimestamp = () => Date.now()
 export const arrayUnion = (...a) => a
 export const arrayRemove = (...a) => a
+export const deleteField = () => ({})

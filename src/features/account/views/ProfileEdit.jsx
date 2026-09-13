@@ -83,6 +83,8 @@ export function ProfileEdit({ profile, saving, error, onSave, onAvatar }) {
             onChange={set('about')}
             maxLength={600}
             rows={5}
+            spellCheck
+            lang="pt-BR"
             className="w-full px-3 py-2.5 rounded-xl bg-[#0d0e12] border border-white/[0.08] text-[13.5px] text-strong placeholder:text-muted resize-none focus:outline-none focus:border-accent"
             placeholder="Tecnologia, música, jogos… o que você gosta de criar junto."
           />

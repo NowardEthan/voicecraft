@@ -17,6 +17,7 @@ import { enumerateMics, watchDeviceChanges } from '../../../../utils/devices'
 import { flashToast } from '../../../../shared/utils/toast'
 import { playCallSound, unlockCallSounds, configureCallSounds } from '../../../../shared/audio/callSounds'
 import { useScreenShare, looksLikeBrowserWindow } from '../../../../hooks/useScreenShare'
+import { startAppLoopbackCapture } from '../../../../hooks/appLoopbackCapture'
 import { getSharedSignaling } from '../../../../shared/connection/useSignaling'
 import { makeActivityEvent } from './useVoiceRoom'
 import {
@@ -166,6 +167,7 @@ export function useLiveKitRoom({
   const localVideoTrackRef = useRef(null)
   const localScreenTrackRef = useRef(null)
   const localScreenAudioTrackRef = useRef(null)
+  const appLoopbackStopRef = useRef(null)
   const screenPublishingRef = useRef(false)
   const callReadyRef = useRef(false)
   const remoteAudiosRef = useRef(new Map())
@@ -754,6 +756,11 @@ export function useLiveKitRoom({
     screenPublishingRef.current = false
     setScreenSharing(false)
     setScreenAudioCaptureActive(false)
+    const stopLoop = appLoopbackStopRef.current
+    appLoopbackStopRef.current = null
+    if (stopLoop) {
+      try { await stopLoop() } catch {}
+    }
     const connected = lkRoom?.state === ConnectionState.Connected
     for (const track of [videoTrack, audioTrack]) {
       if (!track) continue
@@ -810,6 +817,32 @@ export function useLiveKitRoom({
 
       localScreenTrackRef.current = publication?.track || localTrack
 
+      // App audio (Discord-style): WASAPI per-PID — does not re-capture call playback,
+      // so we keep hearing friends (headphones=true, no duck).
+      if (opts.audioMode === 'app' && opts.appPid) {
+        try {
+          const loop = await startAppLoopbackCapture(opts.appPid)
+          appLoopbackStopRef.current = loop.stop
+          try { loop.audioTrack.contentHint = 'music' } catch {}
+          const localAudio = new LocalAudioTrack(loop.audioTrack, undefined, true)
+          localAudio.source = Track.Source.ScreenShareAudio
+          const audioPub = await lkRoom.localParticipant.publishTrack(localAudio, {
+            source: Track.Source.ScreenShareAudio,
+            name: 'screen-audio',
+            dtx: false,
+            red: true,
+          })
+          localScreenAudioTrackRef.current = audioPub?.track || localAudio
+          setScreenAudioCaptureActive(true, { headphones: true })
+          flashToast('Áudio do aplicativo capturado — você continua ouvindo a call')
+          await ensureLocalMicHealthy()
+        } catch (audioErr) {
+          console.warn('[screenShare] app loopback failed', audioErr?.message || audioErr)
+          setScreenAudioCaptureActive(false)
+          flashToast(audioErr?.message || 'Não deu pra capturar áudio do app — vídeo segue')
+          await ensureLocalMicHealthy()
+        }
+      } else {
       // System / display audio — separate LiveKit source from the mic.
       // Loopback is system-wide (not per-app); exclusive-mode games often stay silent.
       const audioMedia = mediaStream.getAudioTracks().find((t) => t && t.readyState !== 'ended') || null
@@ -838,13 +871,9 @@ export function useLiveKitRoom({
           localScreenAudioTrackRef.current = audioPub?.track || localAudio
           const headphones = opts.headphones === true
           setScreenAudioCaptureActive(true, { headphones })
-          if (opts.audioMode === 'app') {
-            flashToast('Áudio do aplicativo capturado (estilo Discord) — sem eco da call!')
-          } else {
-            flashToast(headphones
-              ? 'Áudio do sistema + fones — se ouvir eco, desmarque "Estou de fones" e compartilhe de novo'
-              : 'Áudio do sistema: call muda no seu PC pra não ter eco (marque "Estou de fones" pra ouvir)')
-          }
+          flashToast(headphones
+            ? 'Áudio do sistema + fones — se ouvir eco, desmarque "Estou de fones" e compartilhe de novo'
+            : 'Áudio do sistema: call muda no seu PC pra não ter eco (marque "Estou de fones" pra ouvir)')
           // Windows loopback can disturb the mic graph; keep voice on the call.
           await ensureLocalMicHealthy()
         } catch (audioErr) {
@@ -856,6 +885,7 @@ export function useLiveKitRoom({
         }
       } else {
         setScreenAudioCaptureActive(false)
+      }
       }
 
       setScreenSharing(true)
@@ -912,12 +942,14 @@ export function useLiveKitRoom({
       }
       const q = settings?.screenQuality || '720p'
       const fr = settings?.screenFramerate || 15
-      const withAudio = opts.withAudio === true
-      const headphones = withAudio && opts.headphones === true
-      const started = await screenShare.startWithSource(sourceId, q, fr, { withAudio })
+      const audioMode = opts.audioMode || (opts.withAudio ? 'system' : 'off')
+      // Only full-system share uses desktop loopback (re-captures call → needs duck/headphones).
+      const withDesktopAudio = audioMode === 'system' && opts.withAudio === true
+      const headphones = audioMode === 'app' || (withDesktopAudio && opts.headphones === true)
+      const started = await screenShare.startWithSource(sourceId, q, fr, { withAudio: withDesktopAudio })
       if (started) await publishScreenStream(started, {
         headphones,
-        audioMode: opts.audioMode,
+        audioMode,
         appPid: opts.appPid,
       })
     } catch (err) {

@@ -4,6 +4,7 @@ import {
   Type, Palette, Minus, Plus,
 } from 'lucide-react'
 import { htmlToPlainText } from '../announceSchema.js'
+import { EmojiInsertButton } from './EmojiInsertButton'
 
 const FONTS = [
   { id: 'inherit', label: 'Padrão' },
@@ -168,12 +169,16 @@ const AnnounceRichText = forwardRef(function AnnounceRichText({
         <Sep />
         <ToolBtn title="Diminuir indent" onClick={() => run('outdent')}><Minus size={13} /></ToolBtn>
         <ToolBtn title="Aumentar indent" onClick={() => run('indent')}><Plus size={13} /></ToolBtn>
+        <Sep />
+        <EmojiInsertButton onPick={(emoji) => insertText(emoji)} />
       </div>
 
       <div
         ref={setRefs}
         contentEditable
         suppressContentEditableWarning
+        spellCheck
+        lang="pt-BR"
         role="textbox"
         aria-multiline="true"
         data-placeholder={placeholder}

@@ -110,6 +110,14 @@ function messagesCol(spaceId, roomId) {
   return collection(db, VC.spaces, spaceId, 'rooms', roomId, 'messages')
 }
 
+function scheduledAnnouncementsCol(spaceId, roomId) {
+  return collection(db, VC.spaces, spaceId, 'rooms', roomId, 'scheduled_announcements')
+}
+
+function scheduledAnnouncementRef(spaceId, roomId, id) {
+  return doc(db, VC.spaces, spaceId, 'rooms', roomId, 'scheduled_announcements', id)
+}
+
 function toMemberView(id, data = {}) {
   return {
     userId: id,
@@ -941,18 +949,11 @@ export class SignalingClient {
       // We don't gate the UI on these — the cached data already paints.
       this._writeJoinPresence(spaceId).catch((err) => console.warn('[joinSpace] presence', err))
 
-      // Fire-and-forget reconcile; the result can't be known fast enough
-      // to gate navigation, and a reconcile failure is recoverable on
-      // the next manual refresh.
+      // Only clean leftover Auth UIDs for this account — never mass-delete
+      // members from a possibly stale cache of memberIds (that was kicking people).
       if (this.userId) {
-        const canonicalIds = new Set([
-          ...(Array.isArray(cached.memberIds) ? cached.memberIds : []),
-          this.userId,
-        ])
-        if (canonicalIds.size > 0) {
-          this._reconcileMemberDocs(spaceId, canonicalIds)
-            .catch((err) => console.warn('[joinSpace] reconcile', err))
-        }
+        this._reconcileMemberDocs(spaceId)
+          .catch((err) => console.warn('[joinSpace] reconcile', err))
       }
 
       // Still attach fresh listeners so we react to new messages / room
@@ -1018,7 +1019,7 @@ export class SignalingClient {
       this.roomId = voiceRoomId
     } else {
       this.voiceSpaceId = null
-        this.roomId = null
+      this.roomId = null
     }
 
     const [space] = await Promise.all([
@@ -1028,20 +1029,15 @@ export class SignalingClient {
       voicePresenceWrite,
     ])
 
-    // Fire-and-forget reconcile: never block joinSpace on this. Errors
-    // are logged so debugging orphan member docs stays possible.
+    // Fire-and-forget: clean duplicate Auth UIDs for this account only.
     if (this.userId) {
-      const canonicalIds = new Set(memberIds)
-      canonicalIds.add(this.userId)
-      if (canonicalIds.size > 0) {
-        this._reconcileMemberDocs(spaceId, canonicalIds)
-          .catch((err) => console.warn('[joinSpace] reconcile', err))
-      }
+      this._reconcileMemberDocs(spaceId)
+        .catch((err) => console.warn('[joinSpace] reconcile', err))
     }
 
     this._attachSpaceListeners(spaceId)
     this._bindSpacePresence(spaceId)
-        this._emit('spaceChanged', {
+    this._emit('spaceChanged', {
       space,
       currentSpace: space,
       currentRoom: preserving ? { id: voiceRoomId } : null,
@@ -1068,21 +1064,21 @@ export class SignalingClient {
   }
 
   /**
-   * Remove members/* not listed in memberIds, and any other member whose
-   * vc_users.email matches the current account (leftover Auth UID after
-   * Google/email re-login with the same person).
+   * Clean leftover member docs for THIS account only (same email, other Auth UID
+   * after Google/email re-login). Never deletes other people — a stale cached
+   * memberIds list previously caused mass kicks on join.
+   * Removes one UID at a time so Firestore rules (±1 memberIds) stay happy.
    */
-  async _reconcileMemberDocs(spaceId, canonicalIds) {
-    const snap = await getDocs(membersCol(spaceId))
+  async _reconcileMemberDocs(spaceId) {
+    if (!spaceId || !this.userId) return
     const myEmail = (auth.currentUser?.email || '').trim().toLowerCase()
+    if (!myEmail) return
+
+    const snap = await getDocs(membersCol(spaceId))
     const toDelete = []
 
     for (const d of snap.docs) {
-      if (!canonicalIds.has(d.id)) {
-        toDelete.push(d.id)
-        continue
-      }
-      if (!myEmail || d.id === this.userId) continue
+      if (d.id === this.userId) continue
       try {
         const userSnap = await getDoc(doc(db, VC.users, d.id))
         const email = String(userSnap.data()?.email || '').trim().toLowerCase()
@@ -1095,17 +1091,25 @@ export class SignalingClient {
     const unique = [...new Set(toDelete)].slice(0, 40)
     const spaceSnap = await getDoc(spaceRef(spaceId))
     const createdBy = spaceSnap.data()?.createdBy
-    const claimOwner = !!(createdBy && unique.includes(createdBy) && this.userId)
 
-    const batch = writeBatch(db)
-    unique.forEach((uid) => {
-      batch.delete(memberRef(spaceId, uid))
-    })
-    batch.update(spaceRef(spaceId), {
-      memberIds: arrayRemove(...unique),
-      ...(claimOwner ? { createdBy: this.userId } : {}),
-    })
-    await batch.commit()
+    for (const uid of unique) {
+      try {
+        await deleteDoc(memberRef(spaceId, uid))
+      } catch (err) {
+        console.warn('[reconcile] member doc', uid, err)
+      }
+      try {
+        const claimOwner = createdBy === uid
+        await updateDoc(spaceRef(spaceId), {
+          memberIds: arrayRemove(uid),
+          ...(claimOwner ? { createdBy: this.userId } : {}),
+        })
+      } catch (err) {
+        // No kick/edit on this space: orphan may linger in memberIds until
+        // an admin removes it; membership doc is already gone above.
+        console.warn('[reconcile] memberIds', uid, err)
+      }
+    }
   }
 
   async leaveSpace(spaceId) {
@@ -2099,10 +2103,91 @@ export class SignalingClient {
       announce: { ...announce },
     }
     await setDoc(
-      doc(collection(db, VC.spaces, this.spaceId, 'rooms', rid, 'scheduled_announcements'), id),
+      doc(scheduledAnnouncementsCol(this.spaceId, rid), id),
       JSON.parse(JSON.stringify(docData)),
     )
     return docData
+  }
+
+  /** List pending scheduled announcements for a room (mods only). */
+  async listScheduledAnnouncements(roomId = null) {
+    const rid = roomId || this.roomId
+    if (!this.spaceId || !rid) return []
+    this._assertCan('mod_chat', 'precisa da permissão Moderar chat')
+    const col = scheduledAnnouncementsCol(this.spaceId, rid)
+    const q = query(col, where('status', '==', 'scheduled'), limit(40))
+    const snap = await getDocs(q)
+    return snap.docs
+      .map((d) => {
+        const data = d.data() || {}
+        return {
+          ...data,
+          id: data.id || d.id,
+          firestoreId: d.id,
+          publishAt: Number(data.publishAt || data.announce?.scheduledFor || 0) || 0,
+          announce: data.announce || {},
+        }
+      })
+      .sort((a, b) => (a.publishAt || 0) - (b.publishAt || 0))
+  }
+
+  /** Update a pending scheduled announcement (content and/or time). */
+  async updateScheduledAnnouncement(roomId, scheduleId, payload = {}) {
+    const rid = roomId || this.roomId
+    if (!this.spaceId || !rid || !scheduleId) throw new Error('Agendamento inválido')
+    this._assertCan('mod_chat', 'precisa da permissão Moderar chat')
+
+    const ref = scheduledAnnouncementRef(this.spaceId, rid, scheduleId)
+    const snap = await getDoc(ref)
+    if (!snap.exists()) throw new Error('Agendamento não encontrado')
+    if (snap.data()?.status !== 'scheduled') throw new Error('Este anúncio já não está agendado')
+
+    const announce = await this._prepareAnnouncePayload(rid, payload)
+    const publishAt = Number(announce.scheduledFor || payload.publishAt || 0)
+    if (!publishAt || publishAt <= Date.now() + 15_000) {
+      throw new Error('Horário de agendamento inválido')
+    }
+    const next = {
+      ...announce,
+      scheduledFor: publishAt,
+    }
+    await updateDoc(ref, {
+      announce: JSON.parse(JSON.stringify(next)),
+      publishAt,
+      updatedAt: Date.now(),
+      updatedBy: this.userId,
+    })
+    return {
+      id: scheduleId,
+      firestoreId: scheduleId,
+      publishAt,
+      status: 'scheduled',
+      announce: next,
+    }
+  }
+
+  /** Cancel / delete a pending scheduled announcement. */
+  async cancelScheduledAnnouncement(roomId, scheduleId) {
+    const rid = roomId || this.roomId
+    if (!this.spaceId || !rid || !scheduleId) throw new Error('Agendamento inválido')
+    this._assertCan('mod_chat', 'precisa da permissão Moderar chat')
+    await deleteDoc(scheduledAnnouncementRef(this.spaceId, rid, scheduleId))
+    return { ok: true }
+  }
+
+  /** Publish a scheduled announcement immediately. */
+  async publishScheduledAnnouncementNow(roomId, scheduleId) {
+    const rid = roomId || this.roomId
+    if (!this.spaceId || !rid || !scheduleId) throw new Error('Agendamento inválido')
+    this._assertCan('mod_chat', 'precisa da permissão Moderar chat')
+    const ref = scheduledAnnouncementRef(this.spaceId, rid, scheduleId)
+    const snap = await getDoc(ref)
+    if (!snap.exists()) throw new Error('Agendamento não encontrado')
+    const data = snap.data() || {}
+    if (data.status !== 'scheduled') throw new Error('Este anúncio já não está agendado')
+    await this.sendChatAnnouncement(rid, data.announce || {})
+    await updateDoc(ref, { status: 'published', publishedAt: Date.now() })
+    return { ok: true }
   }
 
   /**
@@ -2114,7 +2199,7 @@ export class SignalingClient {
     if (!this.spaceId || !rid) return 0
     if (!this.can('mod_chat')) return 0
 
-    const col = collection(db, VC.spaces, this.spaceId, 'rooms', rid, 'scheduled_announcements')
+    const col = scheduledAnnouncementsCol(this.spaceId, rid)
     const q = query(col, where('status', '==', 'scheduled'), limit(40))
     let snap
     try {

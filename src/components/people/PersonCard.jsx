@@ -22,6 +22,11 @@ import {
 } from 'lucide-react'
 import { PersonAvatar } from '../../features/people'
 import { UserTagChips } from '../../features/people/components/UserTagChips'
+import {
+  memberPresenceKind,
+  presenceLabel,
+  PRESENCE_DOT,
+} from '../../features/people/model/presenceKind'
 import { PURPOSE_BY_KEY } from '../../features/rooms'
 
 const PURPOSE_BADGE_ICON = {
@@ -47,10 +52,11 @@ export default function PersonCard({
 }) {
   if (!member) return null
 
-  const online = !!member.online
-  const inRoom = !!member.location?.roomId
+  const presence = memberPresenceKind(member)
+  const inRoom = presence === 'in_room'
   const roomName = member.roomName
   const name = member.displayName || 'convidado'
+  const active = presence === 'in_room' || presence === 'online' || presence === 'away'
 
   const purposeOfRoom = inRoom
     ? (space?.rooms || []).find(r => r.id === member.location.roomId)
@@ -59,15 +65,20 @@ export default function PersonCard({
     ? PURPOSE_BY_KEY[purposeOfRoom.purpose || (purposeOfRoom.type === 'voice' ? 'voice' : 'conversation')]
     : null
   const BadgeIcon = purpose ? PURPOSE_BADGE_ICON[purpose.key] || Radio : null
+  const dotColor = presence === 'in_room'
+    ? (purpose?.color || 'var(--space-accent)')
+    : (PRESENCE_DOT[presence] || PRESENCE_DOT.offline)
 
   // Left rail accent bar (DESIGN_SYSTEM §5).
   const railClass = inCurrentRoom
     ? 'bg-accent'
     : inRoom
       ? 'bg-accent/70'
-      : online
+      : presence === 'online'
         ? 'bg-positive'
-        : 'bg-transparent'
+        : presence === 'away'
+          ? 'bg-warning'
+          : 'bg-transparent'
 
   // Avatar ring: 2px --space-accent + breathing pulse when speaking.
   const avatarWrapClass = speaking
@@ -114,13 +125,11 @@ export default function PersonCard({
           className={`shadow-sm transition-transform duration-200 group-hover:scale-105 ${avatarWrapClass}`}
         />
 
-        {/* Online dot */}
+        {/* Presence dot */}
         <span
-          className={
-            `absolute -bottom-0.5 -right-0.5 rounded-full border-2 border-panel ` +
-            (online ? 'bg-positive' : 'bg-line')
-          }
-          style={{ width: 11, height: 11 }}
+          className="absolute -bottom-0.5 -right-0.5 rounded-full border-2 border-panel"
+          style={{ width: 11, height: 11, backgroundColor: dotColor }}
+          title={presenceLabel(presence === 'in_room' ? 'online' : presence)}
         />
 
         {/* In-room purpose badge */}
@@ -151,7 +160,7 @@ export default function PersonCard({
           <span
             className={
               'text-[13px] font-semibold truncate transition-colors ' +
-              (online ? 'text-strong' : 'text-muted')
+              (active ? 'text-strong' : 'text-muted')
             }
           >
             {name}
@@ -179,8 +188,8 @@ export default function PersonCard({
                 em <span className="text-accent font-medium">{roomName || 'sala'}</span>
               </span>
             ) : (
-              <span className={online ? 'text-muted' : 'text-muted/70'}>
-                {online ? 'online' : 'offline'}
+              <span className={active ? 'text-muted' : 'text-muted/70'}>
+                {presenceLabel(presence).toLowerCase()}
               </span>
             )}
           </p>

@@ -179,7 +179,7 @@ export function RulesCard({
 
           {bodyHtml ? (
             <div
-              className="rounded-md px-2.5 py-2 text-[12px] leading-relaxed max-h-[220px] overflow-y-auto"
+              className="rounded-md px-2.5 py-2 text-[12px] leading-relaxed"
               style={{
                 color: 'var(--vc-text)',
                 background: 'rgba(255,255,255,0.03)',

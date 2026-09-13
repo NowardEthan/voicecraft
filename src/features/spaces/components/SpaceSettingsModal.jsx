@@ -547,6 +547,8 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose, isCre
                   onChange={(e) => setDescription(e.target.value)}
                   maxLength={256}
                   rows={3}
+                  spellCheck
+                  lang="pt-BR"
                   className="w-full min-h-[72px] px-3 py-2 rounded-xl text-[13px] resize-none bg-[#0d0e12] border border-white/[0.08] text-strong focus:outline-none focus:border-accent/50 placeholder:text-muted"
                   placeholder="Do que se trata este Space?"
                   style={descFont}
@@ -569,6 +571,8 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose, isCre
                   onChange={(e) => setSlogan(e.target.value)}
                   maxLength={80}
                   rows={2}
+                  spellCheck
+                  lang="pt-BR"
                   className="w-full min-h-[56px] px-3 py-2 rounded-xl text-[13px] resize-none bg-[#0d0e12] border border-white/[0.08] text-strong focus:outline-none focus:border-accent/50 placeholder:text-muted"
                   placeholder={'Good Games\nBetter People.'}
                   style={sloganFont}

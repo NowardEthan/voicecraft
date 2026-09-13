@@ -19,6 +19,11 @@ import { monthLabel } from '../../account/model/profile'
 import { resolveCardTheme } from '../../account/model/profileCardThemes'
 import { CardThemeFx } from '../../account/components/CardThemeFx'
 import { subscribeUserTags } from '../model/userTagsStore'
+import {
+  memberPresenceKind,
+  presenceLabel,
+  PRESENCE_DOT,
+} from '../model/presenceKind'
 
 const PURPOSE_ICON = {
   voice: Radio,
@@ -73,20 +78,25 @@ export default function ProfilePopover({
     const purpose = purposeOfRoom
       ? PURPOSE_BY_KEY[purposeOfRoom.purpose || (purposeOfRoom.type === 'voice' ? 'voice' : 'conversation')]
       : null
-    return { inRoom, purposeOfRoom, purpose }
+    const presence = memberPresenceKind(member)
+    return { inRoom, purposeOfRoom, purpose, presence }
   }, [member, space])
 
   if (!open || !member) return null
 
   const name = member.displayName || 'convidado'
   const hasCover = typeof member.cover === 'string' && (member.cover.startsWith('http') || member.cover.startsWith('data:image/'))
-  const { inRoom, purposeOfRoom, purpose } = derived
+  const { inRoom, purposeOfRoom, purpose, presence } = derived
   const PurposeIcon = purpose ? PURPOSE_ICON[purpose.key] || Radio : Gamepad2
   const subjectIsCreator = space?.createdBy === member.userId
   const theme = resolveCardTheme(member.cardThemeId, space?.color || null)
   const accent = theme.accent
   const bodyBg = theme.bodyBg || '#0e1016'
   const isSelf = currentUserId && member.userId === currentUserId
+  const presenceDot = presence === 'in_room'
+    ? (purpose?.color || accent)
+    : (PRESENCE_DOT[presence] || PRESENCE_DOT.offline)
+  const presenceTitle = presenceLabel(presence === 'in_room' ? 'online' : presence)
   const since = member.createdAt ? monthLabel(member.createdAt) : null
 
   const bannerBg = hasCover
@@ -174,12 +184,9 @@ export default function ProfilePopover({
                   />
                 </div>
                 <span
-                  className={
-                    'absolute bottom-1 left-1 w-3.5 h-3.5 rounded-full border-[3px] ' +
-                    (member.online ? 'bg-positive' : 'bg-line')
-                  }
-                  style={{ borderColor: bodyBg }}
-                  title={member.online ? 'online' : 'offline'}
+                  className="absolute bottom-1 left-1 w-3.5 h-3.5 rounded-full border-[3px]"
+                  style={{ borderColor: bodyBg, backgroundColor: presenceDot }}
+                  title={presenceTitle}
                 />
               </div>
             </div>
@@ -230,8 +237,11 @@ export default function ProfilePopover({
           <div className="mt-3.5 flex items-center gap-3 px-3 py-2.5 rounded-2xl bg-black/25 border border-white/[0.06]">
             <div className="min-w-0 flex-1">
               <p className="flex items-center gap-1.5 text-[13px] font-semibold text-strong">
-                <span className={'w-2 h-2 rounded-full ' + (member.online ? 'bg-positive' : 'bg-line')} />
-                {member.online ? 'Online' : 'Offline'}
+                <span
+                  className="w-2 h-2 rounded-full"
+                  style={{ backgroundColor: presenceDot }}
+                />
+                {presence === 'in_room' ? 'Online' : presenceLabel(presence)}
               </p>
               {inRoom && purposeOfRoom ? (
                 <p className="mt-0.5 flex items-center gap-1.5 text-[12px] text-muted truncate">
@@ -243,6 +253,10 @@ export default function ProfilePopover({
                     </span>
                   </span>
                 </p>
+              ) : presence === 'away' ? (
+                <p className="mt-0.5 text-[12px] text-muted">No app, fora deste Space</p>
+              ) : presence === 'offline' ? (
+                <p className="mt-0.5 text-[12px] text-muted">Fora do app</p>
               ) : (
                 <p className="mt-0.5 text-[12px] text-muted">Por aqui no Space</p>
               )}

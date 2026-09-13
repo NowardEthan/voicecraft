@@ -591,50 +591,118 @@ ipcMain.handle('audio-service:send', (_e, obj) => { sendAudioCommand(obj); retur
 // Active loopback sessions: Map<sessionId, { processId, startedAt }>
 const activeLoopbackSessions = new Map()
 
-// Helper: list audio-capable processes in Windows (C1 / A1)
+/** Low-level / shell processes users never want for app audio capture. */
+const PROCESS_DENY = new Set([
+  'system', 'idle', 'registry', 'secure system', 'memory compression',
+  'smss', 'csrss', 'wininit', 'services', 'lsass', 'svchost', 'fontdrvhost',
+  'dwm', 'conhost', 'dllhost', 'sihost', 'taskhostw', 'runtimebroker',
+  'searchhost', 'shellexperiencehost', 'startmenuexperiencehost',
+  'textinputhost', 'applicationframehost', 'systemsettings',
+  'securityhealthservice', 'securityhealthsystray', 'widgetservice',
+  'widgets', 'crossdeviceresume', 'backgroundtaskhost', 'wudfhost',
+  'spoolsv', 'dashost', 'audiodg', 'lsm', 'winlogon', 'userinit',
+  'explorer', // shell — raramente útil pra capturar áudio
+])
+
+/**
+ * List processes useful for WASAPI-by-PID capture.
+ * Prefer apps with a visible main window (what users actually have open).
+ */
 function listAudioCapableProcesses() {
   return new Promise((resolve) => {
     const cp = require('child_process')
     const selfPid = process.pid
-    const selfName = 'VoiceCraft'
+    const fallback = [{ pid: selfPid, name: 'VoiceCraft', title: 'VoiceCraft', hasWindow: true, icon: '' }]
 
-    if (process.platform === 'win32') {
-      const timer = setTimeout(() => {
-        resolve([{ pid: selfPid, name: selfName, icon: '' }])
-      }, 2000)
+    if (process.platform !== 'win32') {
+      resolve(fallback)
+      return
+    }
 
-      cp.execFile('tasklist', ['/FO', 'CSV', '/NH'], { windowsHide: true, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+    const ps = [
+      'Get-Process |',
+      'Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle } |',
+      'Select-Object Id, ProcessName, MainWindowTitle |',
+      'ConvertTo-Json -Compress',
+    ].join(' ')
+
+    const timer = setTimeout(() => resolve(fallback), 3500)
+
+    cp.execFile(
+      'powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps],
+      { windowsHide: true, maxBuffer: 2 * 1024 * 1024 },
+      (err, stdout) => {
         clearTimeout(timer)
-        if (err || !stdout) {
-          return resolve([{ pid: selfPid, name: selfName, icon: '' }])
+        if (err || !stdout || !String(stdout).trim()) {
+          listProcessesViaTasklistFiltered().then(resolve).catch(() => resolve(fallback))
+          return
         }
         try {
-          const lines = stdout.split(/\r?\n/)
+          let rows = JSON.parse(String(stdout).trim())
+          if (!Array.isArray(rows)) rows = rows ? [rows] : []
           const seen = new Set()
           const list = []
-          seen.add(selfPid)
-          list.push({ pid: selfPid, name: selfName, icon: '' })
-
-          for (const line of lines) {
-            if (!line.trim()) continue
-            const parts = line.split('","').map(s => s.replace(/^"|"$/g, ''))
-            if (parts.length >= 2) {
-              const name = parts[0]
-              const pid = parseInt(parts[1], 10)
-              if (pid > 0 && !seen.has(pid)) {
-                seen.add(pid)
-                list.push({ pid, name, icon: '' })
-              }
-            }
+          for (const row of rows) {
+            const pid = Number(row.Id)
+            const name = String(row.ProcessName || '').trim()
+            const title = String(row.MainWindowTitle || '').trim()
+            if (!pid || pid === selfPid || !name || !title) continue
+            if (PROCESS_DENY.has(name.toLowerCase())) continue
+            if (seen.has(pid)) continue
+            seen.add(pid)
+            list.push({
+              pid,
+              name,
+              title,
+              hasWindow: true,
+              icon: '',
+            })
           }
-          resolve(list)
+          list.sort((a, b) => String(a.title).localeCompare(String(b.title), 'pt'))
+          if (list.length > 0) resolve(list)
+          else listProcessesViaTasklistFiltered().then(resolve).catch(() => resolve(fallback))
         } catch {
-          resolve([{ pid: selfPid, name: selfName, icon: '' }])
+          listProcessesViaTasklistFiltered().then(resolve).catch(() => resolve(fallback))
         }
-      })
-    } else {
-      resolve([{ pid: selfPid, name: selfName, icon: '' }])
-    }
+      },
+    )
+  })
+}
+
+/** Fallback: tasklist minus obvious system processes (still noisy). */
+function listProcessesViaTasklistFiltered() {
+  return new Promise((resolve) => {
+    const cp = require('child_process')
+    const selfPid = process.pid
+    cp.execFile(
+      'tasklist',
+      ['/FO', 'CSV', '/NH'],
+      { windowsHide: true, maxBuffer: 1024 * 1024 },
+      (err, stdout) => {
+        if (err || !stdout) {
+          return resolve([{ pid: selfPid, name: 'VoiceCraft', title: 'VoiceCraft', hasWindow: true, icon: '' }])
+        }
+        const seen = new Set()
+        const list = []
+        for (const line of String(stdout).split(/\r?\n/)) {
+          if (!line.trim()) continue
+          const parts = line.split('","').map((s) => s.replace(/^"|"$/g, ''))
+          if (parts.length < 2) continue
+          const rawName = parts[0]
+          const name = rawName.replace(/\.exe$/i, '')
+          const pid = parseInt(parts[1], 10)
+          if (!pid || pid === selfPid || seen.has(pid)) continue
+          if (PROCESS_DENY.has(name.toLowerCase())) continue
+          // Skip bare system-ish names and services without a friendly face
+          if (/^svc/i.test(name) || name.toLowerCase() === 'system') continue
+          seen.add(pid)
+          list.push({ pid, name, title: name, hasWindow: false, icon: '' })
+        }
+        list.sort((a, b) => String(a.title).localeCompare(String(b.title), 'pt'))
+        resolve(list)
+      },
+    )
   })
 }
 
@@ -949,6 +1017,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      spellcheck: true,
       // Presence / signaling websockets must keep ticking while unfocused.
       backgroundThrottling: false,
     },
@@ -959,6 +1028,62 @@ function createWindow() {
   })
 
   applyWindowsTaskbarIcon(mainWindow, appIcon, appIconPng)
+
+  // Portuguese spellcheck (+ English fallback). Suggestions via right-click.
+  try {
+    const sess = mainWindow.webContents.session
+    const wanted = ['pt-BR', 'en-US']
+    const available = typeof sess.availableSpellCheckerLanguages === 'object'
+      ? sess.availableSpellCheckerLanguages
+      : []
+    const langs = wanted.filter((l) => !available.length || available.includes(l))
+    if (langs.length) sess.setSpellCheckerLanguages(langs)
+    else sess.setSpellCheckerLanguages(['en-US'])
+  } catch (err) {
+    console.warn('[spellcheck] languages', err?.message || err)
+  }
+
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    const items = []
+    if (params.misspelledWord) {
+      for (const suggestion of (params.dictionarySuggestions || []).slice(0, 6)) {
+        items.push({
+          label: suggestion,
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.replaceMisspelling(suggestion)
+            }
+          },
+        })
+      }
+      if (items.length) items.push({ type: 'separator' })
+      items.push({
+        label: 'Adicionar ao dicionário',
+        click: () => {
+          try {
+            mainWindow.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord)
+          } catch { /* ignore */ }
+        },
+      })
+      items.push({ type: 'separator' })
+    }
+    if (params.isEditable) {
+      items.push(
+        { role: 'undo', label: 'Desfazer' },
+        { role: 'redo', label: 'Refazer' },
+        { type: 'separator' },
+        { role: 'cut', label: 'Recortar', enabled: params.editFlags?.canCut !== false },
+        { role: 'copy', label: 'Copiar', enabled: params.editFlags?.canCopy !== false },
+        { role: 'paste', label: 'Colar', enabled: params.editFlags?.canPaste !== false },
+        { role: 'selectAll', label: 'Selecionar tudo' },
+      )
+    } else if (params.selectionText) {
+      items.push({ role: 'copy', label: 'Copiar' })
+    }
+    if (!items.length) return
+    Menu.buildFromTemplate(items).popup({ window: mainWindow })
+  })
 
   // No File / Edit / View menu — custom title bar owns chrome.
   Menu.setApplicationMenu(null)

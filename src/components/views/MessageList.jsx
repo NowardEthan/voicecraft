@@ -105,6 +105,8 @@ export default function MessageList({
   jumpToId = null,
   jumpTick = 0,
   canPinAll = false,
+  /** Optional node rendered at the top of the same scroll as messages (rules, etc.). */
+  listHeader = null,
 }) {
   const scrollerRef = useRef(null)
   const [unseen, setUnseen] = useState(0)
@@ -299,18 +301,27 @@ export default function MessageList({
       }
     }
 
+    const isCardKind = (kind) => (
+      kind === 'sys' || kind === 'announce'
+      || kind === 'lobby_event' || kind === 'lobby_welcome'
+    )
+
     const out = []
     let lastDay = null
+    let lastContentKind = null
     let unreadInserted = false
     for (const g of groups) {
-      const first = (g.kind === 'sys' || g.kind === 'announce'
-        || g.kind === 'lobby_event' || g.kind === 'lobby_welcome')
-        ? g.message
-        : g.items[0]
+      const first = isCardKind(g.kind) ? g.message : g.items[0]
       const ts = first?.ts || 0
       const day = dayKey(ts)
       if (day !== lastDay) {
-        out.push({ kind: 'day', key: `day-${day}`, label: formatDayLabel(ts) })
+        // Avoid a hard "two panes" cut under rules/announcements/lobby cards.
+        const hideDivider = (listHeader && lastDay === null)
+          || isCardKind(g.kind)
+          || isCardKind(lastContentKind)
+        if (!hideDivider) {
+          out.push({ kind: 'day', key: `day-${day}`, label: formatDayLabel(ts) })
+        }
         lastDay = day
       }
       if (!unreadInserted && lastReadTs > 0 && ts > lastReadTs) {
@@ -318,9 +329,10 @@ export default function MessageList({
         unreadInserted = true
       }
       out.push(g)
+      lastContentKind = g.kind
     }
     return out
-  }, [filteredMessages, currentUserName, currentUserId, authorColors, lastReadTs, dens.groupBreakMs])
+  }, [filteredMessages, currentUserName, currentUserId, authorColors, lastReadTs, dens.groupBreakMs, listHeader])
 
   const typingText = useMemo(() => {
     const peers = typingState?.peers || []
@@ -349,15 +361,16 @@ function renderTypingLabel(text) {
 
   return (
     <div
-      className="relative flex-1 min-h-0 overflow-hidden"
+      className="absolute inset-0 overflow-hidden"
       data-chat-density={densityKey}
       style={dens.vars}
     >
       <div
         ref={scrollerRef}
         onScroll={handleScroll}
-        className={'h-full overflow-y-auto ' + dens.listPy}
+        className={'h-full overflow-y-auto overscroll-contain ' + dens.listPy}
       >
+        {listHeader}
         {loading ? (
           <SkeletonStack />
         ) : filteredMessages.length === 0 ? (

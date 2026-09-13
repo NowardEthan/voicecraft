@@ -13,6 +13,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getSharedSignaling } from '../../../shared/connection/useSignaling'
+import { listenUsersPresence } from '../../../shared/firebase/presence'
 import { flashToast } from '../../../shared/utils/toast'
 import { serializeSpaceIcon } from '../model/spaceIcons'
 import { markSpaceJoined, markSpaceLeft, markSpaceVisited } from '../model/spacePreferences'
@@ -51,6 +52,7 @@ function enrichMembers(members, space) {
       createdAt: isString ? null : (m.createdAt || null),
       lastSeen: isString ? null : (m.lastSeen || null),
       online: isString ? true : (m.online !== false),
+      appOnline: isString ? false : !!m.appOnline,
       location: loc,
       roomName,
       status: isString ? null : (m.status || m.statusText || null),
@@ -63,6 +65,17 @@ function enrichMembers(members, space) {
     })
   }
   return out
+}
+
+/** Keep appOnline across Firestore/space rehydrates. */
+function mergeAppOnline(prev, next) {
+  if (!prev?.length) return next
+  const map = new Map(prev.map((m) => [m.userId, !!m.appOnline]))
+  return next.map((m) => {
+    const kept = map.get(m.userId)
+    if (kept == null || !!m.appOnline === kept) return m
+    return { ...m, appOnline: kept }
+  })
 }
 
 function applySelfProfile(members, self) {
@@ -111,7 +124,7 @@ export function useCurrentSpace(selfProfile = null) {
             setSwitchingSpaceId(null)
           }
           setCurrentSpace(info.space)
-          setSpaceMembers(enrichMembers(info.space.members || [], info.space))
+          setSpaceMembers((prev) => mergeAppOnline(prev, enrichMembers(info.space.members || [], info.space)))
         }
       }
       if (info.deleted) {
@@ -121,7 +134,7 @@ export function useCurrentSpace(selfProfile = null) {
       if (info.updated && info.space) {
         setCurrentSpace(prev => prev?.id === info.space.id ? { ...prev, ...info.space } : prev)
         if (info.space.members) {
-          setSpaceMembers(enrichMembers(info.space.members, info.space))
+          setSpaceMembers((prev) => mergeAppOnline(prev, enrichMembers(info.space.members, info.space)))
         }
       }
       if (info.currentSpace === null && !info.space && info.spaces === undefined && info.deleted === undefined) {
@@ -186,6 +199,8 @@ export function useCurrentSpace(selfProfile = null) {
           return {
             ...m,
             online: !!p.online,
+            // In this Space ⇒ definitely in the app; keep prior appOnline otherwise.
+            appOnline: !!p.online || !!m.appOnline,
             location: p.online
               ? { spaceId: info.spaceId, roomId: p.roomId || null }
               : null,
@@ -240,6 +255,32 @@ export function useCurrentSpace(selfProfile = null) {
     }
   }, [sig])
 
+  // Global app presence → "Ausente" when the user is in the app (or in
+  // voice elsewhere) but not present in this Space's RTDB map.
+  const memberIdsKey = useMemo(
+    () => spaceMembers.map((m) => m.userId).filter(Boolean).sort().join(','),
+    [spaceMembers],
+  )
+
+  useEffect(() => {
+    const ids = memberIdsKey ? memberIdsKey.split(',') : []
+    if (ids.length === 0) return undefined
+    return listenUsersPresence(ids, (map) => {
+      setSpaceMembers((prev) => {
+        let changed = false
+        const next = prev.map((m) => {
+          const p = map[m.userId]
+          if (!p) return m
+          const want = !!p.online
+          if (!!m.appOnline === want) return m
+          changed = true
+          return { ...m, appOnline: want }
+        })
+        return changed ? next : prev
+      })
+    })
+  }, [memberIdsKey])
+
   // Select / clear
   const selectSpace = useCallback(async (spaceId, opts = {}) => {
     if (!spaceId) {
@@ -262,7 +303,7 @@ export function useCurrentSpace(selfProfile = null) {
     const cached = sig.getCachedSpace?.(spaceId)
     if (cached?.id === spaceId) {
       setCurrentSpace(cached)
-      setSpaceMembers(enrichMembers(cached.members || [], cached))
+      setSpaceMembers((prev) => mergeAppOnline(prev, enrichMembers(cached.members || [], cached)))
       setOptimisticFirstRoom(null)
       setSwitchingSpaceId(null)
       pendingSpaceTokenRef.current = 0
@@ -306,7 +347,7 @@ export function useCurrentSpace(selfProfile = null) {
       markSpaceJoined(spaceId)
       markSpaceVisited(spaceId)
       setCurrentSpace(full)
-      setSpaceMembers(enrichMembers(full.members || [], full))
+      setSpaceMembers((prev) => mergeAppOnline(prev, enrichMembers(full.members || [], full)))
       setOptimisticFirstRoom(null)
       setSwitchingSpaceId(null)
     } catch (err) {

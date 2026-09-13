@@ -30,7 +30,7 @@ export default class ErrorBoundary extends Component {
   render() {
     if (this.state.error) {
       return (
-        <div className="flex-1 flex items-center justify-center p-8 bg-black">
+        <div className="flex-1 flex items-center justify-center p-8 bg-black h-full min-h-0">
           <div className="max-w-md w-full rounded-2xl border border-danger/30 bg-danger/10 p-6">
             <div className="flex items-start gap-3 mb-4">
               <div className="w-9 h-9 rounded-full bg-danger/20 flex items-center justify-center flex-shrink-0">
@@ -69,6 +69,13 @@ export default class ErrorBoundary extends Component {
               </button>
             </div>
           </div>
+        </div>
+      )
+    }
+    if (this.props.className) {
+      return (
+        <div className={this.props.className}>
+          {this.props.children}
         </div>
       )
     }

@@ -130,6 +130,8 @@ function ThoughtComposer({ selfStatus, onStatusChange, onSendThought }) {
           onBlur={saveStatus}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveStatus(); e.currentTarget.blur() } }}
           placeholder="Seu status (ex.: Só na vibe)"
+          spellCheck
+          lang="pt-BR"
           className="w-full h-8 px-3 rounded-pill bg-white/[0.04] border border-white/[0.08] text-[12px] text-strong placeholder:text-muted focus:outline-none focus:border-accent/40"
         />
       )}
@@ -141,6 +143,8 @@ function ThoughtComposer({ selfStatus, onStatusChange, onSendThought }) {
           maxLength={180}
           onChange={(e) => setText(e.target.value)}
           placeholder="Compartilhe um pensamento…"
+          spellCheck
+          lang="pt-BR"
           className="flex-1 min-w-0 h-9 px-3 rounded-pill bg-white/[0.04] border border-white/[0.08] text-[12.5px] text-strong placeholder:text-muted focus:outline-none focus:border-accent/40"
         />
       </form>

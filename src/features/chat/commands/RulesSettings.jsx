@@ -15,6 +15,7 @@ import {
 } from '../rulesSchema'
 import { RulesCard } from '../RulesCards'
 import AnnounceRichText from './AnnounceRichText'
+import { EmojiTextInput } from './EmojiInsertButton'
 import { flashToast } from '../../../shared/utils/toast'
 import { DEFAULT_COVER_FIT } from '../../spaces/model/spaceCover'
 import {
@@ -282,11 +283,11 @@ export default function RulesSettings({
             </div>
             <label className="flex-1 min-w-0 block space-y-1">
               <span className="text-[10.5px] text-muted">Título</span>
-              <input
+              <EmojiTextInput
                 value={draft.title}
-                onChange={(e) => patch({ title: e.target.value })}
+                onChange={(title) => patch({ title })}
                 placeholder="Regras do Space"
-                className="w-full h-11 rounded-xl bg-[#1a1e28] border border-line px-3 text-[13px] text-ink outline-none"
+                inputClassName="flex-1 min-w-0 h-11 rounded-xl bg-[#1a1e28] border border-line px-3 text-[13px] text-ink outline-none"
               />
             </label>
           </div>

@@ -603,9 +603,9 @@ export default function AppShell({ account }) {
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -10 }}
               transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
-              className="absolute inset-0 flex flex-col min-h-0 z-[1]"
+              className="absolute inset-0 flex flex-col min-h-0 z-[1] overflow-hidden"
             >
-              <ErrorBoundary key={selectedRoom.id}>
+              <ErrorBoundary key={selectedRoom.id} className="h-full min-h-0 flex flex-col">
                 <Suspense fallback={<ViewLoader />}>
                   <ConversationRoom
                     room={selectedRoom}

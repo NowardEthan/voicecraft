@@ -649,6 +649,10 @@ export default function Composer({
                 rows={1}
                 disabled={disabled}
                 placeholder=""
+                spellCheck
+                lang="pt-BR"
+                autoCorrect="on"
+                autoCapitalize="sentences"
                 className="w-full resize-none bg-transparent text-[14px] text-strong focus:outline-none leading-[1.45] px-2 py-2 overflow-y-auto"
                 style={{ maxHeight: TEXTAREA_MAX_PX }}
               />

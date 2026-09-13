@@ -512,6 +512,8 @@ function Step1Identity({
               onChange={e => setDescription(e.target.value)}
               maxLength={256}
               rows={3}
+              spellCheck
+              lang="pt-BR"
               placeholder="do que se trata este Space?"
               style={{ ...descFamily, height: '76px' }}
               className="w-full px-3.5 py-3 bg-[#0f1014] border border-line rounded-[10px] text-[14px] text-strong placeholder:text-muted resize-none focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/25 transition-colors"

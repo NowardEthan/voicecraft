@@ -12,6 +12,7 @@ import {
 } from '../announceSchema.js'
 import AnnouncementCard from '../AnnouncementCard'
 import AnnounceRichText from './AnnounceRichText'
+import { EmojiTextInput } from './EmojiInsertButton'
 import {
   SpaceCoverFitControls,
   SpaceCoverLayer,
@@ -54,16 +55,30 @@ export default function AnnounceEditor({
   currentUserName,
   currentUserPhoto,
   editingMessage = null,
+  editingScheduled = null,
   onBack,
   onPublished,
   onUpdated,
 }) {
   const editingId = editingMessage?.id || editingMessage?.firestoreId || null
-  const isEditing = !!editingId
+  const scheduledId = editingScheduled?.id || editingScheduled?.firestoreId || null
+  const isEditingPublished = !!editingId
+  const isEditingScheduled = !!scheduledId
+  const isEditing = isEditingPublished || isEditingScheduled
+
+  const seedAnnounce = editingMessage?.announce
+    || editingScheduled?.announce
+    || null
+  const seedScheduleAt = editingScheduled
+    ? Number(editingScheduled.publishAt || editingScheduled.announce?.scheduledFor || 0) || null
+    : null
 
   const [draft, setDraft] = useState(() => emptyAnnounceDraft(
-    editingMessage?.announce
-      ? normalizeAnnounce(editingMessage.announce)
+    seedAnnounce
+      ? normalizeAnnounce({
+        ...seedAnnounce,
+        scheduledFor: seedScheduleAt || seedAnnounce.scheduledFor || null,
+      })
       : {
         authorMode: 'me',
         authorUserId: currentUserId || null,
@@ -72,7 +87,7 @@ export default function AnnounceEditor({
       },
   ))
   const [saving, setSaving] = useState(false)
-  const [scheduleOn, setScheduleOn] = useState(false)
+  const [scheduleOn, setScheduleOn] = useState(() => isEditingScheduled)
   const [iconPickerOpen, setIconPickerOpen] = useState(false)
   const [authorIconPickerOpen, setAuthorIconPickerOpen] = useState(false)
   const [iconRecents, setIconRecents] = useState(() => getRecentIcons())
@@ -86,10 +101,20 @@ export default function AnnounceEditor({
   const authorUsesIconPicker = draft.authorMode === 'system' || draft.authorMode === 'custom'
 
   useEffect(() => {
-    if (!editingMessage?.announce) return
-    setDraft(normalizeAnnounce(editingMessage.announce))
-    setScheduleOn(false)
-  }, [editingId]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (editingMessage?.announce) {
+      setDraft(normalizeAnnounce(editingMessage.announce))
+      setScheduleOn(false)
+      return
+    }
+    if (editingScheduled?.announce) {
+      const at = Number(editingScheduled.publishAt || editingScheduled.announce?.scheduledFor || 0) || null
+      setDraft(normalizeAnnounce({
+        ...editingScheduled.announce,
+        scheduledFor: at,
+      }))
+      setScheduleOn(true)
+    }
+  }, [editingId, scheduledId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const patch = (partial) => {
     setDraft((prev) => normalizeAnnounce({ ...prev, ...partial }))
@@ -121,18 +146,31 @@ export default function AnnounceEditor({
 
   const handlePublish = async () => {
     if (!canPublish || saving) return
+    const wantsSchedule = (isEditingScheduled || (!isEditingPublished && scheduleOn))
+      && draft.scheduledFor
     const payload = normalizeAnnounce({
       ...draft,
       body: draft.body || htmlToPlainText(draft.bodyHtml),
-      scheduledFor: !isEditing && scheduleOn && draft.scheduledFor ? draft.scheduledFor : null,
+      scheduledFor: wantsSchedule ? draft.scheduledFor : null,
     })
-    if (!isEditing && scheduleOn && (!payload.scheduledFor || payload.scheduledFor <= Date.now() + 30_000)) {
+    if (wantsSchedule && (!payload.scheduledFor || payload.scheduledFor <= Date.now() + 30_000)) {
       flashToast('Agende pelo menos 30s no futuro')
       return
     }
     setSaving(true)
     try {
-      if (isEditing) {
+      if (isEditingScheduled) {
+        if (!scheduleOn || !payload.scheduledFor) {
+          // Turned scheduling off while editing → publish now and drop queue item.
+          await signaling.publishScheduledAnnouncementNow(room?.id, scheduledId)
+          flashToast('Anúncio publicado')
+          onUpdated?.()
+        } else {
+          await signaling.updateScheduledAnnouncement(room?.id, scheduledId, payload)
+          flashToast('Agendamento atualizado')
+          onUpdated?.()
+        }
+      } else if (isEditingPublished) {
         await signaling.updateChatAnnouncement(room?.id, editingId, payload)
         flashToast('Anúncio atualizado')
         onUpdated?.()
@@ -276,11 +314,11 @@ export default function AnnounceEditor({
 
           <label className="flex-1 min-w-0 block space-y-1">
             <span className="text-[10.5px] text-muted">Título</span>
-            <input
+            <EmojiTextInput
               value={draft.title}
-              onChange={(e) => patch({ title: e.target.value })}
+              onChange={(title) => patch({ title })}
               placeholder="Título do anúncio"
-              className="w-full h-12 rounded-xl bg-[#1a1e28] border border-line px-3 text-[13px] text-ink outline-none focus:border-white/25"
+              inputClassName="flex-1 min-w-0 h-12 rounded-xl bg-[#1a1e28] border border-line px-3 text-[13px] text-ink outline-none focus:border-white/25"
             />
           </label>
         </div>
@@ -610,12 +648,12 @@ export default function AnnounceEditor({
       </Section>
 
       <Section title="Publicação">
-        {!isEditing && (
+        {(!isEditingPublished || isEditingScheduled) && (
           <>
             <label className="flex items-center justify-between gap-3">
               <span className="inline-flex items-center gap-1.5 text-[12px] text-ink">
                 <CalendarClock size={13} className="text-muted" />
-                Agendar
+                {isEditingScheduled ? 'Manter agendado' : 'Agendar'}
               </span>
               <Toggle
                 checked={scheduleOn}
@@ -639,6 +677,11 @@ export default function AnnounceEditor({
                 className="w-full h-9 rounded-lg bg-[#1a1e28] border border-line px-3 text-[12px] text-ink outline-none"
               />
             )}
+            {isEditingScheduled && !scheduleOn && (
+              <p className="text-[11px] text-muted leading-snug">
+                Desligar o agendamento publica o anúncio agora no canal.
+              </p>
+            )}
           </>
         )}
         <button
@@ -652,11 +695,13 @@ export default function AnnounceEditor({
           }}
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-          {isEditing
-            ? 'Salvar alterações'
-            : scheduleOn
-              ? 'Agendar anúncio'
-              : 'Publicar agora'}
+          {isEditingScheduled
+            ? (scheduleOn ? 'Salvar agendamento' : 'Publicar agora')
+            : isEditingPublished
+              ? 'Salvar alterações'
+              : scheduleOn
+                ? 'Agendar anúncio'
+                : 'Publicar agora'}
         </button>
       </Section>
 
