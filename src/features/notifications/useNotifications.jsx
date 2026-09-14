@@ -45,6 +45,11 @@ export function NotificationsProvider({
     setTick((t) => t + 1)
   }, [userId])
 
+  const spaceIdsKey = useMemo(
+    () => spaces.map((s) => s.id).filter(Boolean).join('|'),
+    [spaces],
+  )
+
   // Listen to rooms for every joined Space (lastMessage* denormalized on send).
   useEffect(() => {
     hydratedRef.current = false
@@ -52,7 +57,7 @@ export function NotificationsProvider({
       setRoomsBySpace({})
       return undefined
     }
-    const ids = spaces.map((s) => s.id).filter(Boolean)
+    const ids = spaceIdsKey ? spaceIdsKey.split('|') : []
     if (ids.length === 0) {
       setRoomsBySpace({})
       return undefined
@@ -60,7 +65,11 @@ export function NotificationsProvider({
     let pending = ids.length
     const offs = ids.map((spaceId) =>
       sig.listenSpaceRooms(spaceId, (rooms) => {
-        setRoomsBySpace((prev) => ({ ...prev, [spaceId]: rooms }))
+        setRoomsBySpace((prev) => {
+          const prevRooms = prev[spaceId]
+          if (prevRooms === rooms) return prev
+          return { ...prev, [spaceId]: rooms }
+        })
         pending -= 1
         if (pending <= 0) {
           // Allow toasts only after first full wave of snapshots.
@@ -71,12 +80,13 @@ export function NotificationsProvider({
     return () => offs.forEach((off) => {
       try { off() } catch { /* ignore */ }
     })
-  }, [sig, userId, spaces.map((s) => s.id).join('|')])
+  }, [sig, userId, spaceIdsKey])
 
   // Turn room activity into inbox entries + toast (respect mute).
   useEffect(() => {
     if (!userId) return
     const spaceNameById = Object.fromEntries(spaces.map((s) => [s.id, s.name]))
+    let addedAny = false
     Object.entries(roomsBySpace).forEach(([spaceId, rooms]) => {
       ;(rooms || []).forEach((room) => {
         if (!isRoomUnread(userId, spaceId, room, userId)) return
@@ -95,14 +105,15 @@ export function NotificationsProvider({
           ts: room.lastMessageAt || Date.now(),
         })
         if (added) {
-          refreshInbox()
+          addedAny = true
           if (hydratedRef.current && isSpaceNotifyOn(spaceId)) {
             flashToast(`${added.authorName}: ${added.preview}`)
           }
         }
       })
     })
-  }, [roomsBySpace, userId, spaces, currentSpaceId, currentRoomId, refreshInbox])
+    if (addedAny) refreshInbox()
+  }, [roomsBySpace, userId, spaceIdsKey, spaces, currentSpaceId, currentRoomId, refreshInbox])
 
   // Auto-mark when viewing a room
   useEffect(() => {
@@ -114,7 +125,9 @@ export function NotificationsProvider({
       id: room?.lastMessageId || null,
     })
     refreshInbox()
-  }, [userId, currentSpaceId, currentRoomId, roomsBySpace, refreshInbox])
+    // Intentionally omit roomsBySpace — only re-mark when the viewed room changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, currentSpaceId, currentRoomId, refreshInbox])
 
   const unreadByRoom = useMemo(() => {
     void tick

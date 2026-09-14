@@ -69,6 +69,7 @@ export function useProfilePopover() {
 
   const setData = useCallback((data) => {
     const prev = _state.data
+    if (prev == null && data == null) return
     if (
       prev
       && data
@@ -82,7 +83,6 @@ export function useProfilePopover() {
     ) {
       return
     }
-    if (prev == null && data == null) return
     _state = { ..._state, data }
     emit()
   }, [])

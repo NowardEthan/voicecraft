@@ -33,7 +33,7 @@ export default function TitleBar() {
 
   return (
     <header
-      className="vc-titlebar relative z-[100] h-9 shrink-0 flex items-stretch select-none border-b border-white/[0.06]"
+      className="vc-titlebar relative z-[200] h-9 shrink-0 flex items-stretch select-none border-b border-white/[0.06]"
       style={{
         background: 'linear-gradient(180deg, #14161c 0%, #101218 100%)',
         WebkitAppRegion: 'drag',

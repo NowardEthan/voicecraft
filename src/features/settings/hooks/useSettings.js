@@ -14,11 +14,51 @@ export const SETTINGS_DEFAULTS = {
   // GPU acceleration — applied by Electron on next launch. Takes effect
   // when the user restarts the app (must be set before app.whenReady).
   gpuAcceleration: true,
+  // Performance profile — auto scales budgets to this machine.
+  // Chromium switches that depend on tier need an app restart.
+  perfMode: 'auto', // auto | performance | balanced | economy
+  // Dev overlay: FPS + RSS + tier (Aplicativo → avançado)
+  perfHud: false,
+  // Cached Auto tier for next-launch Chromium switches (zero-copy)
+  lastPerfTier: null,
   // Use the C++ audio-service child process for mic capture instead of the
   // browser's getUserMedia. Requires the binary to be built
   // (`cmake --build build` in audio-service/).
   useAudioService: false,
   startMinimized: false,
+}
+
+/** Shared store so every useSettings() sees the same patch (perfMode, etc.). */
+let sharedSettings = { ...SETTINGS_DEFAULTS }
+const listeners = new Set()
+let loadPromise = null
+
+function emitSettings(next) {
+  sharedSettings = next
+  if (typeof window !== 'undefined') {
+    window.__vcPerfMode = next.perfMode || 'auto'
+  }
+  for (const fn of listeners) {
+    try { fn(next) } catch { /* ignore */ }
+  }
+}
+
+function ensureLoaded(isElectron) {
+  if (loadPromise) return loadPromise
+  loadPromise = (async () => {
+    let initial = SETTINGS_DEFAULTS
+    if (isElectron) {
+      try { initial = await window.electronAPI.getSettings() } catch { /* ignore */ }
+    } else if (typeof localStorage !== 'undefined') {
+      try {
+        const raw = localStorage.getItem('voicecraft:settings')
+        if (raw) initial = { ...SETTINGS_DEFAULTS, ...JSON.parse(raw) }
+      } catch { /* ignore */ }
+    }
+    emitSettings({ ...SETTINGS_DEFAULTS, ...initial })
+    return sharedSettings
+  })()
+  return loadPromise
 }
 
 /**
@@ -30,38 +70,33 @@ export const SETTINGS_DEFAULTS = {
 export function useSettings() {
   const isElectron = typeof window !== 'undefined' && !!window.electronAPI
 
-  const [settings, setSettings] = useState(SETTINGS_DEFAULTS)
-  const [loaded, setLoaded] = useState(false)
+  const [settings, setSettings] = useState(() => sharedSettings)
+  const [loaded, setLoaded] = useState(() => loadPromise != null)
 
   useEffect(() => {
+    listeners.add(setSettings)
     let cancelled = false
-    ;(async () => {
-      let initial = SETTINGS_DEFAULTS
-      if (isElectron) {
-        try { initial = await window.electronAPI.getSettings() } catch {}
-      } else if (typeof localStorage !== 'undefined') {
-        try {
-          const raw = localStorage.getItem('voicecraft:settings')
-          if (raw) initial = { ...SETTINGS_DEFAULTS, ...JSON.parse(raw) }
-        } catch {}
-      }
+    ensureLoaded(isElectron).then(() => {
       if (!cancelled) {
-        setSettings({ ...SETTINGS_DEFAULTS, ...initial })
+        setSettings(sharedSettings)
         setLoaded(true)
       }
-    })()
-    return () => { cancelled = true }
+    })
+    return () => {
+      cancelled = true
+      listeners.delete(setSettings)
+    }
   }, [isElectron])
 
   const update = useCallback(async (patch) => {
-    setSettings(prev => ({ ...prev, ...patch }))
+    const next = { ...sharedSettings, ...patch }
+    emitSettings(next)
     if (isElectron) {
-      try { await window.electronAPI.setSettings(patch) } catch {}
+      try { await window.electronAPI.setSettings(patch) } catch { /* ignore */ }
     } else if (typeof localStorage !== 'undefined') {
       try {
-        const current = JSON.parse(localStorage.getItem('voicecraft:settings') || '{}')
-        localStorage.setItem('voicecraft:settings', JSON.stringify({ ...SETTINGS_DEFAULTS, ...current, ...patch }))
-      } catch {}
+        localStorage.setItem('voicecraft:settings', JSON.stringify(next))
+      } catch { /* ignore */ }
     }
   }, [isElectron])
 

@@ -63,6 +63,9 @@ export function fullPerms() {
   return Object.fromEntries(SPACE_PERMISSION_KEYS.map((k) => [k, true]))
 }
 
+/** Stable full-perms object — safe to use as React dependency. */
+export const FULL_PERMS = Object.freeze(fullPerms())
+
 export function normalizePerms(raw) {
   const base = emptyPerms()
   if (!raw || typeof raw !== 'object') return base

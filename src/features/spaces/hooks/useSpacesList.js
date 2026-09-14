@@ -20,13 +20,19 @@ function toSummary(s) {
     coverFit: s.coverFit || null,
     memberCount: s.members?.length ?? s.memberCount ?? 0,
     roomCount: s.rooms?.length ?? s.roomCount ?? 0,
+    events: Array.isArray(s.events) ? s.events : [],
     joined: s.joined === true,
   }
 }
 
 export function useSpacesList({ onSpaceDeleted } = {}) {
   const sig = getSharedSignaling()
-  const [spaces, setSpaces] = useState([])
+  const [spaces, setSpaces] = useState(() => {
+    const cached = Array.isArray(sig._spacesList) ? sig._spacesList : []
+    return cached
+      .filter(s => s.joined === true || (s.joined == null && !hasLeftSpace(s.id)))
+      .map(s => toSummary({ ...s, joined: true }))
+  })
 
   useEffect(() => {
     const off = sig.onSpaceChanged((info) => {

@@ -32,4 +32,5 @@ export const VC = {
   spaces: 'vc_spaces',
   userTags: 'vc_user_tags',
   config: 'vc_config',
+  friendRequests: 'vc_friend_requests',
 }

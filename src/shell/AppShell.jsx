@@ -9,16 +9,22 @@ import { motion, AnimatePresence } from 'framer-motion'
 import ErrorBoundary from '../components/ErrorBoundary'
 import SpacesRail from '../components/SpacesRail'
 import SpaceContextPanel from '../components/layout/SpaceContextPanel'
+import HomeNavPanel from '../components/layout/HomeNavPanel'
+import HomeAside from '../components/layout/HomeAside'
+import { useFriends } from '../features/people/hooks/useFriends'
 import SpaceHome from '../components/views/SpaceHome'
 import VoiceActiveBar from '../features/rooms/views/voice/components/VoiceActiveBar'
+import { nextEventAcrossSpaces, aggregateUpcomingEvents } from '../components/views/home/homeData'
 
 import { useCurrentSpace, useSpacesList, isSpaceInRail, spaceTokens, ensureFullSpaceIcons } from '../features/spaces'
 import { useSpaceFonts } from '../features/spaces/hooks/useSpaceFonts'
+import { useAllEventRsvps } from '../features/spaces/hooks/useAllEventRsvps'
 import { parseSpaceInvite } from '../features/spaces/model/spaceInvite'
 import { useRoomActions } from '../features/rooms'
 import { useProfilePopover, useMemberTags } from '../features/people'
 import { usePrincipal } from '../features/people/hooks/usePrincipal'
 import { useSettings } from '../features/settings'
+import { usePerfProfile } from '../shared/perf/usePerfProfile'
 import { useAccountProfile } from '../features/account'
 import { NotificationsProvider } from '../features/notifications'
 import NotificationBell from '../features/notifications/NotificationBell'
@@ -27,7 +33,10 @@ import { flashToast } from '../shared/utils/toast'
 import { getLocalIP, getHostname } from '../shared/utils/network'
 import { useViewport } from '../shared/hooks/useViewport'
 import { signOutAccount } from '../features/auth'
-import { BrandLoader } from '../shared/ui/BrandMark'
+import { useAppWarmup, warmLikelyNext } from '../shared/media/useAppWarmup'
+import { warmImage } from '../shared/media/imageWarm'
+import { resolveSpaceCover } from '../features/spaces/model/spaceCover'
+import { warmLiveKitClient, prefetchLiveKitToken } from '../features/rooms/views/voice/livekitPrefetch'
 import {
   findRulesRoom,
   spaceRequiresRulesAccept,
@@ -49,12 +58,9 @@ const SpaceEventsView = lazy(() => import('../features/spaces/views/SpaceEventsV
 
 const PANEL_COLLAPSED_KEY = 'voicecraft:panelCollapsed'
 
+/** Silent shell while a pre-warmed chunk resolves — no spinner flash. */
 function ViewLoader() {
-  return (
-    <div className="flex-1 flex items-center justify-center bg-canvas animate-fade-in">
-      <BrandLoader size={56} label="carregando…" />
-    </div>
-  )
+  return <div className="flex-1 bg-canvas" aria-hidden />
 }
 
 export default function AppShell({ account }) {
@@ -94,7 +100,7 @@ export default function AppShell({ account }) {
   const { isPrincipal, canClaim, claim } = usePrincipal(currentUserId, accountProfile.profile)
   // Rooms
   const {
-    selectedRoom, currentRoom, transitioning,
+    selectedRoom, currentRoom,
     selectRoom, closeTextRoom, leaveCall, focusVoiceRoom, createRoom, updateRoom, deleteRoom,
     creatingRoom, setSelectedRoom,
   } = useRoomActions()
@@ -117,6 +123,8 @@ export default function AppShell({ account }) {
   const [roomEditor, setRoomEditor] = useState(null)
   const [showSpaceCreator, setShowSpaceCreator] = useState(false)
   const [showSpaceHub, setShowSpaceHub] = useState(false)
+  const [homeTab, setHomeTab] = useState('para-voce')
+  const pendingHomeEventsRef = useRef(null)
   const [inviteRoom, setInviteRoom] = useState(null)
   const { compactRail, overlayNav, overlayPeople } = useViewport()
   const [panelCollapsed, setPanelCollapsed] = useState(() => {
@@ -142,17 +150,21 @@ export default function AppShell({ account }) {
     }
     if (!currentSpace?.id) return
     setCallSpace((prev) => {
-      if (!prev) return currentSpace
-      if (prev.id === currentSpace.id) return currentSpace
-      return prev
+      if (prev?.id === currentSpace.id) return prev
+      return currentSpace
     })
   }, [currentRoom, currentSpace])
 
   // Reset contextual view when Space changes. activeView drives whether
   // overview/events beat the live call in the main pane (see browsingSpacePage).
   useEffect(() => {
-    setActiveView('overview')
     setSelectedRoom(null)
+    if (pendingHomeEventsRef.current && pendingHomeEventsRef.current === currentSpace?.id) {
+      pendingHomeEventsRef.current = null
+      setActiveView('events')
+      return
+    }
+    setActiveView('overview')
   }, [currentSpace?.id, setSelectedRoom])
 
   // Network info
@@ -181,21 +193,34 @@ export default function AppShell({ account }) {
     if (overlayPeople) setPeoplePanelCollapsed(true)
   }, [overlayPeople])
 
-  // Profile popover data feed — keep deps primitive so we don't re-fire every render
+  // Profile popover data feed — keep deps stable (no fresh objects per render).
+  const canAssignRoles = canPerm('assign_roles')
+  const canKick = canPerm('kick')
   useEffect(() => {
     const member = profile.userId
       ? membersWithTags.find((m) => m.userId === profile.userId) || null
       : null
+    const selfMember = membersWithTags.find((m) => m.userId === currentUserId) || null
     profile.setData({
       member,
       space: currentSpace,
       isCreator,
-      canAssignRoles: canPerm('assign_roles'),
-      canKick: canPerm('kick'),
+      canAssignRoles,
+      canKick,
       selfPerms,
-      selfMember: membersWithTags.find((m) => m.userId === currentUserId) || null,
+      selfMember,
     })
-  }, [profile.userId, profile.setData, membersWithTags, currentSpace, isCreator, canPerm, selfPerms, currentUserId])
+  }, [
+    profile.userId,
+    profile.setData,
+    membersWithTags,
+    currentSpace,
+    isCreator,
+    canAssignRoles,
+    canKick,
+    selfPerms,
+    currentUserId,
+  ])
 
   const handleKickMember = useCallback(async (userId) => {
     try {
@@ -226,6 +251,7 @@ export default function AppShell({ account }) {
     // which Space is selected in the shell).
     if (!spaceId) {
       setActiveView('overview')
+      setHomeTab('para-voce')
       await selectSpace(null)
       return
     }
@@ -235,9 +261,13 @@ export default function AppShell({ account }) {
       return
     }
 
+    // Prefetch wallpaper before panel mounts (kills black banner).
+    const preview = spaces.find((s) => s.id === spaceId) || null
+    const cover = resolveSpaceCover(preview)
+    if (cover) warmImage(cover)
+
     // Switch Spaces freely — call stays until leave or join another voice room.
     setActiveView('overview')
-    const preview = spaces.find((s) => s.id === spaceId) || null
     await selectSpace(spaceId, {
       preview: preview || undefined,
       keepVoice: !!currentRoom,
@@ -247,6 +277,12 @@ export default function AppShell({ account }) {
   const handleHubJoined = useCallback(async (spaceId, { alreadyMember } = {}) => {
     await handleSelectSpace(spaceId)
     if (!alreadyMember) flashToast('Você entrou no Space')
+  }, [handleSelectSpace])
+
+  const handleOpenSpaceEvents = useCallback(async (spaceId) => {
+    if (!spaceId) return
+    pendingHomeEventsRef.current = spaceId
+    await handleSelectSpace(spaceId)
   }, [handleSelectSpace])
 
   // Deep link: /invite/:space(/:room) or /?space=ID (&room= optional) after login
@@ -284,6 +320,59 @@ export default function AppShell({ account }) {
     () => spaces.filter(s => isSpaceInRail(s, currentSpace?.id)),
     [spaces, currentSpace?.id],
   )
+
+  const { counts: homeRsvpCounts, attendeesByEvent: homeRsvpAttendees } =
+    useAllEventRsvps(visibleSpaces.map((s) => s.id))
+
+  // Real friends (Firestore-backed) — drives the HomeAside sidebar.
+  const { friends: realFriends, onlineFriends: realOnlineFriends, incoming: realIncoming } = useFriends()
+
+  useAppWarmup({
+    enabled: true,
+    connected: connStatus === 'connected',
+    homeTab,
+    currentSpaceId: currentSpace?.id || null,
+    spaces: visibleSpaces,
+    friends: realFriends,
+    members: membersWithTags || [],
+  })
+
+  // Keep current Space wallpaper hot (sidebar banner).
+  useEffect(() => {
+    const cover = resolveSpaceCover(currentSpace)
+    if (cover) warmImage(cover)
+  }, [currentSpace?.id, currentSpace?.cover, currentSpace?.coverFit])
+
+  // Nudge room chunks + LiveKit when user is already in a Space.
+  useEffect(() => {
+    if (!currentSpace?.id) return undefined
+    warmLikelyNext('voice')
+    warmLikelyNext('text')
+    warmLikelyNext('people')
+    warmLiveKitClient()
+    return undefined
+  }, [currentSpace?.id])
+
+  // Prefetch join token for the first voice room (hover will refresh).
+  useEffect(() => {
+    if (!currentSpace?.id || !currentUserId) return undefined
+    const voice = (currentSpace.rooms || []).find((r) => r.type === 'voice' || r.purpose === 'voice')
+    if (!voice?.id) return undefined
+    prefetchLiveKitToken({
+      spaceId: currentSpace.id,
+      roomId: voice.id,
+      identity: currentUserId,
+      displayName: currentUserName || 'você',
+    }).catch(() => {})
+    return undefined
+  }, [currentSpace?.id, currentSpace?.rooms, currentUserId, currentUserName])
+
+  const homeNextEvent = useMemo(
+    () => nextEventAcrossSpaces(visibleSpaces),
+    [visibleSpaces],
+  )
+
+  const showHomeChrome = !currentSpace && !showAccount
 
   const handleLeaveSpace = useCallback(() => {
     leaveCall()
@@ -327,6 +416,27 @@ export default function AppShell({ account }) {
   const showSpacePage = !showVoiceFullscreen && !showTextRoom
   // When Início has no Space panel, still offer return-to-call controls.
   const showHomeVoiceBar = !!(currentRoom && showSpacePage && !panelVisible)
+
+  const [keptTextRooms, setKeptTextRooms] = useState([])
+  const perfProfile = usePerfProfile()
+  const textKeepAlive = Math.max(1, Number(perfProfile?.budgets?.textKeepAlive) || 1)
+
+  // Keep last N text rooms mounted (voice keep-alive pattern) so covers don't remount black.
+  useEffect(() => {
+    if (selectedRoom && selectedRoom.type !== 'voice') {
+      setKeptTextRooms((prev) => {
+        const next = [selectedRoom, ...prev.filter((r) => r?.id && r.id !== selectedRoom.id)]
+        return next.slice(0, textKeepAlive)
+      })
+    }
+  }, [selectedRoom, textKeepAlive])
+
+  useEffect(() => {
+    setKeptTextRooms([])
+  }, [currentSpace?.id])
+
+  const textRoomAlive = keptTextRooms.length > 0 && !!currentSpace
+  const activeTextId = showTextRoom ? selectedRoom?.id : null
 
   const openSpaceView = useCallback((view) => {
     setActiveView(view)
@@ -404,6 +514,20 @@ export default function AppShell({ account }) {
     }
   }, [currentSpace, handleSelectSpace, openRoomFocus])
 
+  const handleOpenContinueRoom = useCallback(async (spaceId, room) => {
+    if (!spaceId || !room?.id) {
+      if (spaceId) await handleSelectSpace(spaceId)
+      return
+    }
+    setPendingNotifRoom({ spaceId, roomId: room.id })
+    if (currentSpace?.id !== spaceId) {
+      await handleSelectSpace(spaceId)
+    } else {
+      openRoomFocus(room)
+      setPendingNotifRoom(null)
+    }
+  }, [currentSpace?.id, handleSelectSpace, openRoomFocus])
+
   useEffect(() => {
     if (!pendingNotifRoom || currentSpace?.id !== pendingNotifRoom.spaceId) return
     const found = (currentSpace.rooms || []).find((r) => r.id === pendingNotifRoom.roomId)
@@ -455,8 +579,8 @@ export default function AppShell({ account }) {
         <div
           className={
             overlayNav
-              ? 'absolute left-0 top-0 z-50 h-full w-[min(280px,88vw)] shadow-2xl animate-fade-in-left'
-              : 'w-[min(280px,32vw)] min-w-[220px] max-w-[280px] shrink-0 h-full animate-fade-in-left'
+              ? 'absolute left-0 top-0 z-50 h-full w-[min(280px,88vw)] shadow-2xl animate-fade-in-left vc-side-shell'
+              : 'vc-side-shell w-[min(280px,32vw)] min-w-[220px] max-w-[280px] shrink-0 h-full animate-fade-in-left'
           }
         >
           <SpaceContextPanel
@@ -488,9 +612,27 @@ export default function AppShell({ account }) {
             onInvite={handleOpenInvite}
             onOpenSettings={() => setShowSettingsModal(true)}
             optimisticFirstRoom={optimisticFirstRoom}
-            voiceRoom={currentRoom}
-            onFocusVoice={returnToVoice}
-            onLeaveCall={leaveCall}
+          />
+        </div>
+      )}
+
+      {showHomeChrome && !showAccount && (
+        <div className="w-[min(260px,36vw)] min-w-[200px] max-w-[280px] shrink-0 h-full animate-fade-in-left">
+          <HomeNavPanel
+            activeTab={homeTab}
+            onChangeTab={setHomeTab}
+            spaces={visibleSpaces}
+            accountName={accountProfile.profile.displayName}
+            accountPhoto={accountProfile.profile.photoURL}
+            currentUserId={currentUserId}
+            connected={connStatus === 'connected'}
+            onSelectSpace={handleSelectSpace}
+            onOpenAccount={() => {
+              setShowAccount(true)
+              setAccountPage('profile')
+            }}
+            onOpenHub={() => setShowSpaceHub(true)}
+            onOpenSettings={() => setShowSettingsModal(true)}
           />
         </div>
       )}
@@ -503,8 +645,7 @@ export default function AppShell({ account }) {
       {/* Panel 3: Main area */}
       <main
         className={[
-          'relative flex-1 min-w-0 min-h-0 flex flex-col bg-canvas overflow-hidden transition-opacity duration-200',
-          transitioning ? 'opacity-60' : 'opacity-100',
+          'relative flex-1 min-w-0 min-h-0 flex flex-col bg-canvas overflow-hidden',
           !showAccount && !panelVisible && currentSpace ? 'vc-main-pad-nav-toggle' : '',
           !showAccount && peoplePanelCollapsed && currentSpace ? 'vc-main-pad-people-toggle' : '',
         ].filter(Boolean).join(' ')}
@@ -560,10 +701,10 @@ export default function AppShell({ account }) {
           {currentRoom && (
             <motion.div
               key={`voice-${currentRoom.id}`}
-              initial={{ opacity: 0, scale: 0.98 }}
+              initial={{ opacity: 1, scale: 0.995 }}
               animate={{ opacity: showVoiceFullscreen ? 1 : 0, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.99 }}
-              transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+              exit={{ opacity: 1, scale: 0.995 }}
+              transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
               className={showVoiceFullscreen ? 'absolute inset-0' : 'absolute inset-0 invisible pointer-events-none'}
               aria-hidden={!showVoiceFullscreen}
             >
@@ -587,43 +728,58 @@ export default function AppShell({ account }) {
             </motion.div>
           )}
 
-          {showTextRoom && (
-            <motion.div
-              key={`conversation-${selectedRoom.id}`}
-              initial={{ opacity: 0, x: 18 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -10 }}
-              transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
-              className="absolute inset-0 flex flex-col min-h-0 z-[1] overflow-hidden"
-            >
-              <ErrorBoundary key={selectedRoom.id} className="h-full min-h-0 flex flex-col">
-                <Suspense fallback={<ViewLoader />}>
-                  <ConversationRoom
-                    room={selectedRoom}
-                    space={currentSpace}
-                    signaling={signalingClient}
-                    currentUserId={currentUserId}
-                    currentUserName={currentUserName}
-                    members={membersWithTags}
-                    onClose={leaveTextToOverview}
-                    onInvite={handleOpenInvite}
-                    voiceActive={!!currentRoom}
-                    canModerateChat={canPerm('mod_chat')}
-                    canKick={canPerm('kick')}
-                  />
-                </Suspense>
-              </ErrorBoundary>
-            </motion.div>
-          )}
+          {textRoomAlive && keptTextRooms.map((kept) => {
+            if (!kept?.id || kept.type === 'voice') return null
+            const visible = activeTextId === kept.id
+            return (
+              <motion.div
+                key={`conversation-${kept.id}`}
+                initial={false}
+                animate={{ opacity: visible ? 1 : 0 }}
+                transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+                className={
+                  visible
+                    ? 'absolute inset-0 flex flex-col min-h-0 z-[1] overflow-hidden'
+                    : 'absolute inset-0 flex flex-col min-h-0 z-[1] overflow-hidden invisible pointer-events-none'
+                }
+                aria-hidden={!visible}
+              >
+                <ErrorBoundary key={kept.id} className="h-full min-h-0 flex flex-col">
+                  <Suspense fallback={<ViewLoader />}>
+                    <ConversationRoom
+                      room={kept}
+                      space={currentSpace}
+                      signaling={signalingClient}
+                      currentUserId={currentUserId}
+                      currentUserName={currentUserName}
+                      members={membersWithTags}
+                      onClose={leaveTextToOverview}
+                      onInvite={handleOpenInvite}
+                      voiceActive={!!currentRoom}
+                      canModerateChat={canPerm('mod_chat')}
+                      canKick={canPerm('kick')}
+                    />
+                  </Suspense>
+                </ErrorBoundary>
+              </motion.div>
+            )
+          })}
 
-          {showSpacePage && (
+          {(currentSpace || !currentRoom) && (
             <motion.div
-              key={`${activeView}-${currentSpace?.id || 'none'}`}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-              className="absolute inset-0 min-h-0 flex flex-col overflow-hidden z-[1]"
+              key={`space-page-${currentSpace?.id || 'home'}`}
+              initial={false}
+              animate={{
+                opacity: showSpacePage ? 1 : 0,
+                y: showSpacePage ? 0 : 4,
+              }}
+              transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+              className={
+                showSpacePage
+                  ? 'absolute inset-0 min-h-0 flex flex-col overflow-hidden z-[1]'
+                  : 'absolute inset-0 min-h-0 flex flex-col overflow-hidden z-[1] invisible pointer-events-none'
+              }
+              aria-hidden={!showSpacePage}
             >
               {showHomeVoiceBar && (
                 <div className="shrink-0 border-b border-line">
@@ -641,6 +797,10 @@ export default function AppShell({ account }) {
                     onEditSpace={editSpace}
                     isCreator={isCreator}
                     canManageEvents={canPerm('manage_events')}
+                    currentUserProfile={{
+                      displayName: currentUserName,
+                      photoURL: accountProfile.profile.photoURL,
+                    }}
                   />
                 </Suspense>
               ) : (
@@ -652,11 +812,15 @@ export default function AppShell({ account }) {
                   accountPhoto={accountProfile.profile.photoURL}
                   currentUserId={currentUserId}
                   currentUserName={currentUserName}
+                  homeTab={homeTab}
                   onSelectRoom={openRoomFocus}
                   onSelectSpace={handleSelectSpace}
                   onCreateRoom={(groupId) => setRoomEditor({ mode: 'create', groupId: groupId || null })}
                   onCreateSpace={() => setShowSpaceCreator(true)}
                   onOpenHub={() => setShowSpaceHub(true)}
+                  onJoinPublic={handleHubJoined}
+                  onOpenContinueRoom={handleOpenContinueRoom}
+                  onOpenSpaceEvents={handleOpenSpaceEvents}
                   onOpenAccount={() => {
                     setShowAccount(true)
                     setAccountPage('profile')
@@ -689,11 +853,11 @@ export default function AppShell({ account }) {
       )}
       {currentSpace && !peoplePanelCollapsed && (
         <div
-          key="people-panel"
+          key={`people-panel-${currentSpace.id}`}
           className={
             overlayPeople
-              ? 'absolute right-0 top-0 z-50 h-full w-[min(280px,88vw)] shadow-2xl animate-fade-in-right'
-              : 'w-[min(260px,28vw)] min-w-[220px] max-w-[280px] shrink-0 h-full animate-fade-in-right'
+              ? 'absolute right-0 top-0 z-50 h-full w-[min(280px,88vw)] shadow-2xl animate-fade-in-right vc-people-shell'
+              : 'vc-people-shell w-[min(260px,28vw)] min-w-[220px] max-w-[280px] shrink-0 h-full animate-fade-in-right'
           }
         >
           <Suspense fallback={null}>
@@ -704,8 +868,40 @@ export default function AppShell({ account }) {
               onInvite={handleOpenInvite}
               onOpenProfile={(member) => profile.openProfile(member.userId)}
               onClose={() => setPeoplePanelCollapsed(true)}
+              voiceRoom={currentRoom}
+              onFocusVoice={returnToVoice}
+              onLeaveCall={leaveCall}
+              voicePeers={
+                currentRoom
+                  ? membersWithTags.filter((m) => m?.location?.roomId === currentRoom.id)
+                  : []
+              }
+              voicePeerCount={
+                currentRoom
+                  ? membersWithTags.filter((m) => m?.location?.roomId === currentRoom.id).length
+                  : 0
+              }
             />
           </Suspense>
+        </div>
+      )}
+
+      {showHomeChrome && !showAccount && !overlayPeople && (
+        <div
+          key="home-aside"
+          className="w-[min(280px,28vw)] min-w-[220px] max-w-[300px] shrink-0 h-full animate-fade-in-right"
+        >
+          <HomeAside
+            mode={homeTab === 'amigos' ? 'friends' : 'home'}
+            friends={realOnlineFriends}
+            friendCount={realOnlineFriends.length}
+            pendingCount={realIncoming.length}
+            nextEvent={homeNextEvent}
+            events={aggregateUpcomingEvents(visibleSpaces)}
+            rsvpCounts={homeRsvpCounts}
+            rsvpAttendees={homeRsvpAttendees}
+            onOpenEvent={(ev) => handleOpenSpaceEvents(ev?.spaceId)}
+          />
         </div>
       )}
 

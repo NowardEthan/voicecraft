@@ -27,6 +27,7 @@ public:
   void stop();
   bool is_running() const;
   const std::string& last_error() const;
+  const std::string& last_mode() const;
 
 private:
   class Impl;

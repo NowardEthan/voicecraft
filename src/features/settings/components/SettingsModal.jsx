@@ -6,6 +6,7 @@ import { enumerateMics, enumerateSpeakers, watchDeviceChanges } from '../../../u
 import { ModalShell } from '../../../shared/motion/ModalShell.jsx'
 import { BrandAppIcon } from '../../../shared/ui/BrandMark'
 import { SETTINGS_DEFAULTS } from '../hooks/useSettings'
+import { flashToast } from '../../../shared/utils/toast'
 import AudioTab from './settingsTabs/AudioTab'
 import VideoTab from './settingsTabs/VideoTab'
 import AppTab from './settingsTabs/AppTab'
@@ -80,6 +81,18 @@ export default function SettingsModal({
   const handleApply = () => {
     const patch = diffSettings(cloneSettings(settings), draft)
     if (Object.keys(patch).length) onChange?.(patch)
+    const needsRestart = (
+      ('gpuAcceleration' in patch && patch.gpuAcceleration !== settings?.gpuAcceleration)
+      || ('perfMode' in patch && (
+        patch.perfMode === 'performance'
+        || settings?.perfMode === 'performance'
+        || patch.perfMode === 'economy'
+        || settings?.perfMode === 'economy'
+      ))
+    )
+    if (needsRestart) {
+      flashToast('Reinicie o app para aplicar switches de GPU/Chromium', { duration: 3200 })
+    }
     onClose?.()
   }
 

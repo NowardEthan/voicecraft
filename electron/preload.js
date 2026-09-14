@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
   getGpuInfo: () => ipcRenderer.invoke('system:get-gpu-info'),
+  getPerfSnapshot: () => ipcRenderer.invoke('system:perf-snapshot'),
 
   // File logging
   log: (level, msg) => ipcRenderer.invoke('app:log', level, msg),

@@ -13,6 +13,16 @@ export {
   FadeScale, Fade, SlideUp, SlideRight, SlideLeft, Pop,
   MotionButton, MotionCard, AnimatePresence, motion,
 } from './motion/Motion'
+export {
+  Appear,
+  AppearGroup,
+  AppearList,
+  AppearItem,
+  appearItem,
+  appearContainer,
+  APPEAR_EASE,
+} from './motion/Appear'
+
 
 export { default as EmptyState } from './ui/EmptyState'
 

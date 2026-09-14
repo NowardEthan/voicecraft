@@ -17,6 +17,7 @@ export {
   uiAccentHex,
   bannerGradient,
   bannerOverlay,
+  ctaStyle,
 } from './model/spaceTokens'
 
 export {

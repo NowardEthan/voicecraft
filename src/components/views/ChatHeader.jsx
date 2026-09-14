@@ -16,7 +16,6 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { Search, X, Lock } from 'lucide-react'
-import { RoomIconMark } from '../../features/rooms/components/RoomIconMark'
 import { purposeOf } from '../../features/rooms'
 import ParticipantStack from './ParticipantStack'
 import ChatHeaderActions from './ChatHeaderActions'
@@ -62,26 +61,16 @@ export default function ChatHeader({
   const pinCount = pinnedMessages.length
 
   return (
-    <header className="@container vc-channel-header relative shrink-0 z-30 px-3 sm:px-6 py-3 sm:py-3.5">
+    <header className="@container vc-channel-header relative shrink-0 z-30 px-3 sm:px-5 py-2.5 sm:py-3">
       <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-        <div className="min-w-0 flex-1 flex items-center gap-2.5 sm:gap-3">
-          <div
-            className="w-10 h-10 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center shrink-0"
-            style={{
-              backgroundColor: accent,
-              color: 'var(--vc-on-accent, #fff)',
-            }}
-          >
-            <RoomIconMark room={room} size={20} />
-          </div>
+        <div className="min-w-0 flex-1 flex items-center gap-1.5 sm:gap-2">
+          <span className="vc-channel-hash shrink-0 text-[17px] sm:text-[18px] font-semibold leading-none" aria-hidden>
+            #
+          </span>
 
           <div className={`min-w-0 ${searchOpen ? 'hidden @[480px]:block flex-1' : 'flex-1'}`}>
-            <h1 className="vc-channel-title text-[16px] sm:text-[20px] font-semibold tracking-tight truncate flex items-center gap-1.5">
-              <span className="vc-channel-hash shrink-0" aria-hidden>#</span>
-              <span
-                className="vc-channel-name truncate"
-                style={{ ...nameStyle, ...(accent ? { color: accent } : null) }}
-              >
+            <h1 className="vc-channel-title text-[15px] sm:text-[16.5px] font-semibold tracking-tight truncate flex items-center gap-1.5">
+              <span className="vc-channel-name truncate" style={nameStyle || undefined}>
                 {room.name}
               </span>
               {chatLocked && (

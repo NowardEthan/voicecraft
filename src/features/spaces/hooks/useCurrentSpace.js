@@ -18,7 +18,7 @@ import { flashToast } from '../../../shared/utils/toast'
 import { serializeSpaceIcon } from '../model/spaceIcons'
 import { markSpaceJoined, markSpaceLeft, markSpaceVisited } from '../model/spacePreferences'
 import { clearSpaceCover, setSpaceCover } from '../model/spaceCover'
-import { canSpacePermission, fullPerms, normalizePerms, attachRolesToMembers } from '../model/spaceRoles'
+import { canSpacePermission, FULL_PERMS, normalizePerms, attachRolesToMembers } from '../model/spaceRoles'
 import { subscribeSpaceRoles } from '../model/spaceRolesStore'
 
 // Map a UI purpose key to the backend's binary 'voice' | 'text' discriminator.
@@ -450,9 +450,10 @@ export function useCurrentSpace(selfProfile = null) {
   )
 
   const selfPerms = useMemo(() => {
+    if (currentSpace?.createdBy === sig.userId) return FULL_PERMS
     const self = enrichedMembers.find((m) => m.userId === sig.userId)
     return normalizePerms(self?.perms)
-  }, [enrichedMembers, sig.userId])
+  }, [enrichedMembers, sig.userId, currentSpace?.createdBy])
 
   const can = useCallback((permission) => (
     canSpacePermission(
@@ -476,7 +477,7 @@ export function useCurrentSpace(selfProfile = null) {
     createSpace,
     isCreator: currentSpace?.createdBy === sig.userId,
     can,
-    selfPerms: currentSpace?.createdBy === sig.userId ? fullPerms() : selfPerms,
+    selfPerms,
     currentUserId: sig.userId,
     currentUserName: selfProfile?.displayName || sig.displayName,
   }

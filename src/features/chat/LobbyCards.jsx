@@ -216,7 +216,7 @@ export function LobbyJoinCard({
               height: LOBBY_BANNER_HEIGHT,
               borderColor: `color-mix(in srgb, ${accent} 24%, #2a303a)`,
               background: banner
-                ? '#0a0c10'
+                ? `linear-gradient(145deg, color-mix(in srgb, ${accent} 22%, #12151c), #0d0f14 72%)`
                 : `linear-gradient(145deg, color-mix(in srgb, ${accent} 18%, #12151c), #0d0f14 72%)`,
             }}
           >

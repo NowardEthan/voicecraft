@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Room,
   RoomEvent,
+  ParticipantEvent,
   Track,
   LocalVideoTrack,
   LocalAudioTrack,
@@ -13,6 +14,7 @@ import {
   ConnectionState,
 } from 'livekit-client'
 import { useSettings } from '../../../settings'
+import { resolvePerfProfile } from '../../../../shared/perf/perfProfile'
 import { enumerateMics, watchDeviceChanges } from '../../../../utils/devices'
 import { flashToast } from '../../../../shared/utils/toast'
 import { playCallSound, unlockCallSounds, configureCallSounds } from '../../../../shared/audio/callSounds'
@@ -33,15 +35,10 @@ import {
   peerVolumeMultiplier,
   PEER_VOLUME_DEFAULT,
 } from './peerVolumes'
+import { getLiveKitToken } from './livekitPrefetch'
 
 async function fetchLiveKitToken(payload) {
-  const api = typeof window !== 'undefined' ? window.electronAPI?.livekit : null
-  if (!api?.getToken) {
-    throw new Error('LiveKit só está disponível no app Electron.')
-  }
-  const res = await api.getToken(payload)
-  if (!res?.ok) throw new Error(res?.error || 'Falha ao obter token LiveKit')
-  return res
+  return getLiveKitToken(payload)
 }
 
 /** Wait until LiveKit room is fully connected (not just reconnecting). */
@@ -72,9 +69,9 @@ function waitForRoomConnected(lkRoom, timeoutMs = 20000) {
 function screenSharePreset(quality, framerate) {
   // Conservative bitrates — encode competes with the game on CPU even when the UI uses GPU.
   const table = {
-    '540p': { maxBitrate: 700_000, maxFramerate: 24 },
+    '540p': { maxBitrate: 700_000, maxFramerate: 15 },
     '720p': { maxBitrate: 1_100_000, maxFramerate: 24 },
-    '1080p': { maxBitrate: 1_800_000, maxFramerate: 20 },
+    '1080p': { maxBitrate: 2_200_000, maxFramerate: 30 },
     '1440p': { maxBitrate: 2_500_000, maxFramerate: 15 },
     '4k': { maxBitrate: 3_500_000, maxFramerate: 15 },
   }
@@ -88,6 +85,21 @@ function screenSharePreset(quality, framerate) {
       maxFramerate: fr,
     },
   }
+}
+
+function resolveShareDefaults(settings) {
+  const profile = resolvePerfProfile(settings?.perfMode || 'auto')
+  const budgets = profile.budgets
+  const mode = settings?.perfMode || 'auto'
+  // Auto: hardware tier owns share quality. Manual modes: Video tab, then budgets.
+  const quality = mode === 'auto'
+    ? (budgets.shareQuality || '720p')
+    : (settings?.screenQuality || budgets.shareQuality || '720p')
+  const framerate = mode === 'auto'
+    ? (budgets.shareFps || 15)
+    : (settings?.screenFramerate || budgets.shareFps || 15)
+  const videoCodec = budgets.videoCodec === 'h264' ? 'h264' : 'vp8'
+  return { quality, framerate, videoCodec, profile }
 }
 
 async function waitForVideoDimensions(mediaTrack, timeoutMs = 2000) {
@@ -110,6 +122,8 @@ export function useLiveKitRoom({
 }) {
   const sig = getSharedSignaling()
   const [settings] = useSettings()
+  const shareDefaultsRef = useRef(resolveShareDefaults(settings))
+  shareDefaultsRef.current = resolveShareDefaults(settings)
   const screenShare = useScreenShare()
   const preferredMicId = settings?.microphoneId || settings?.inputDeviceId || null
   const soundsEnabled = settings?.callSounds !== false
@@ -329,6 +343,7 @@ export function useLiveKitRoom({
       setPeerInRoom(false)
     }
 
+    const share = resolveShareDefaults(settings)
     const lkRoom = session.room || new Room({
       adaptiveStream: true,
       dynacast: true,
@@ -343,8 +358,9 @@ export function useLiveKitRoom({
       publishDefaults: {
         backupCodec: false,
         simulcast: false,
-        videoCodec: 'vp8',
-        screenShareEncoding: screenSharePreset('720p', 15).encoding,
+        // H.264 when tier allows (HW encode on Windows); VP8 on low.
+        videoCodec: share.videoCodec,
+        screenShareEncoding: screenSharePreset(share.quality, share.framerate).encoding,
       },
       audioCaptureDefaults: {
         deviceId: preferredMicId || undefined,
@@ -355,6 +371,21 @@ export function useLiveKitRoom({
     })
     session.room = lkRoom
     roomRef.current = lkRoom
+
+    const onCpuConstrained = (track) => {
+      try {
+        console.warn('[livekit] LocalTrackCpuConstrained — lowering encode')
+        if (track && typeof track.prioritizePerformance === 'function') {
+          track.prioritizePerformance()
+        }
+        flashToast('CPU limitada — qualidade da tela reduzida', { duration: 2200 })
+      } catch (err) {
+        console.warn('[livekit] cpu constrain handler', err?.message || err)
+      }
+    }
+    try {
+      lkRoom.localParticipant?.on?.(ParticipantEvent.LocalTrackCpuConstrained, onCpuConstrained)
+    } catch { /* older SDK */ }
 
     const onConnection = () => {
       const s = lkRoom.state
@@ -530,24 +561,30 @@ export function useLiveKitRoom({
 
         if (!session.connectPromise) {
           session.connectPromise = (async () => {
-            setJoinPhase('token')
-            const { token, url } = await fetchLiveKitToken({
+            setJoinPhase('connecting')
+            // Token mint + mic open in parallel — biggest join win.
+            const tokenPromise = fetchLiveKitToken({
               spaceId: space?.id || null,
               roomId: room.id,
               identity: currentUserId,
               displayName: currentUserName || 'você',
             })
 
-            setJoinPhase('mic')
             let audioTrack = session.audioTrack
-            if (!audioTrack) {
-              const audioTracks = await createLocalTracks({
+            const micPromise = audioTrack
+              ? Promise.resolve(audioTrack)
+              : createLocalTracks({
                 audio: preferredMicId ? { deviceId: preferredMicId } : true,
                 video: false,
+              }).then((tracks) => {
+                const t = tracks.find((x) => x.kind === Track.Kind.Audio) || null
+                session.audioTrack = t
+                return t
               })
-              audioTrack = audioTracks.find((t) => t.kind === Track.Kind.Audio) || null
-              session.audioTrack = audioTrack
-            }
+
+            setJoinPhase('token')
+            const [{ token, url }, track] = await Promise.all([tokenPromise, micPromise])
+            audioTrack = track
 
             setJoinPhase('connecting')
             if (lkRoom.state !== ConnectionState.Connected) {
@@ -596,6 +633,9 @@ export function useLiveKitRoom({
 
     return () => {
       initCancelledRef.current = true
+      try {
+        lkRoom.localParticipant?.off?.(ParticipantEvent.LocalTrackCpuConstrained, onCpuConstrained)
+      } catch {}
       try {
         lkRoom
           .off(RoomEvent.ConnectionStateChanged, onConnection)
@@ -793,8 +833,10 @@ export function useLiveKitRoom({
 
       // Electron supplies the MediaStreamTrack; userProvided=true so LK won't reacquire.
       const localTrack = new LocalVideoTrack(mediaTrack, undefined, true)
-      const q = settings?.screenQuality || '720p'
-      const fr = settings?.screenFramerate || 15
+      const share = resolveShareDefaults(settings)
+      const q = share.quality
+      const fr = share.framerate
+      const codec = share.videoCodec
       const preset = screenSharePreset(q, fr)
 
       mediaTrack.addEventListener('ended', () => {
@@ -806,7 +848,7 @@ export function useLiveKitRoom({
         name: 'screen',
         simulcast: false,
         backupCodec: false,
-        videoCodec: 'vp8',
+        videoCodec: codec,
         screenShareEncoding: {
           maxBitrate: preset.encoding.maxBitrate,
           maxFramerate: preset.encoding.maxFramerate,
@@ -833,8 +875,11 @@ export function useLiveKitRoom({
             red: true,
           })
           localScreenAudioTrackRef.current = audioPub?.track || localAudio
-          setScreenAudioCaptureActive(true, { headphones: true })
-          flashToast('Áudio do aplicativo capturado — você continua ouvindo a call')
+          const systemFallback = loop.mode === 'system'
+          setScreenAudioCaptureActive(true, { headphones: !systemFallback })
+          flashToast(systemFallback
+            ? 'Áudio capturado (fallback do sistema) — call fica muda no PC pra evitar eco'
+            : 'Áudio do aplicativo capturado — você continua ouvindo a call')
           await ensureLocalMicHealthy()
         } catch (audioErr) {
           console.warn('[screenShare] app loopback failed', audioErr?.message || audioErr)
@@ -916,8 +961,9 @@ export function useLiveKitRoom({
         flashToast('Aguarde a call conectar antes de compartilhar')
         return
       }
-      const q = settings?.screenQuality || '720p'
-      const fr = settings?.screenFramerate || 15
+      const share = resolveShareDefaults(settings)
+      const q = share.quality
+      const fr = share.framerate
       // Electron: opens picker (returns null). Browser: getDisplayMedia stream.
       const started = await screenShare.start(q, fr, { withAudio: false })
       if (started) await publishScreenStream(started)
@@ -940,8 +986,9 @@ export function useLiveKitRoom({
       if (source && !source.isScreen && looksLikeBrowserWindow(source.name)) {
         flashToast('Janela de navegador pode ficar cinza ao focar o VoiceCraft. Prefira a tela inteira.')
       }
-      const q = settings?.screenQuality || '720p'
-      const fr = settings?.screenFramerate || 15
+      const share = resolveShareDefaults(settings)
+      const q = share.quality
+      const fr = share.framerate
       const audioMode = opts.audioMode || (opts.withAudio ? 'system' : 'off')
       // Only full-system share uses desktop loopback (re-captures call → needs duck/headphones).
       const withDesktopAudio = audioMode === 'system' && opts.withAudio === true

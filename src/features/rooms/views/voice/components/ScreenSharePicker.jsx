@@ -137,7 +137,8 @@ export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
               {audioMode === 'app' && (
                 <div className="pl-6 space-y-2 pt-1">
                   <p className="text-[11.5px] text-muted leading-snug">
-                    1) Clique no app que está tocando som · 2) Depois escolha a tela/janela abaixo para começar.
+                    1) Deixe o YouTube/jogo <span className="text-strong">tocando</span> ·
+                    2) Clique no app na lista · 3) Escolha a tela/janela abaixo.
                   </p>
                   <div className="relative max-w-md">
                     <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />

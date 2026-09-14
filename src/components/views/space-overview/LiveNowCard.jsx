@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import { ArrowRight, Headphones, Mic, Radio, Signal } from 'lucide-react'
 import { PersonAvatar } from '../../../features/people/components/PersonAvatar'
+import VcGradientButton from '../../../shared/ui/VcGradientButton'
 import { isVoiceRoom, memberDisplayName, membersInRoom, roomPurposeMeta } from './overviewHelpers'
 
 const LiveNowCard = memo(function LiveNowCard({
@@ -8,6 +9,7 @@ const LiveNowCard = memo(function LiveNowCard({
   members = [],
   onSelectRoom,
   onBrowseRooms,
+  accent = null,
 }) {
   const voiceRooms = rooms.filter(isVoiceRoom)
   let liveRoom = null
@@ -58,23 +60,25 @@ const LiveNowCard = memo(function LiveNowCard({
               Quando alguém entrar numa sala de voz, ela aparece aqui.
             </p>
             {voiceRooms[0] && (
-              <button
-                type="button"
+              <VcGradientButton
+                size="sm"
+                accent={accent}
+                className="mt-3.5"
                 onClick={() => onSelectRoom?.(voiceRooms[0])}
-                className="mt-3.5 h-9 px-3.5 rounded-full text-[12.5px] font-semibold text-accent border border-accent/40 bg-accent/[0.1] hover:bg-accent/15 inline-flex items-center gap-1.5"
               >
                 <Headphones size={13} />
                 Abrir {voiceRooms[0].name || 'sala de voz'}
-              </button>
+              </VcGradientButton>
             )}
             {!voiceRooms[0] && onBrowseRooms && (
-              <button
-                type="button"
+              <VcGradientButton
+                size="sm"
+                accent={accent}
+                className="mt-3.5"
                 onClick={onBrowseRooms}
-                className="mt-3.5 h-9 px-3.5 rounded-full text-[12.5px] font-semibold text-ink border border-white/[0.1] hover:bg-white/[0.05]"
               >
                 Criar sala de voz
-              </button>
+              </VcGradientButton>
             )}
           </div>
         </div>
@@ -133,15 +137,16 @@ const LiveNowCard = memo(function LiveNowCard({
             })}
           </ul>
 
-          <button
-            type="button"
+          <VcGradientButton
+            size="lg"
+            block
+            accent={accent}
             onClick={() => onSelectRoom?.(liveRoom)}
-            className="w-full h-11 rounded-full bg-accent text-on-accent text-[13.5px] font-semibold inline-flex items-center justify-center gap-2 shadow-[0_10px_28px_-10px_var(--space-accent-glow-40)] hover:brightness-110 active:scale-[0.99] transition"
           >
             <Headphones size={15} />
             Entrar na sala
             <ArrowRight size={14} strokeWidth={2.4} />
-          </button>
+          </VcGradientButton>
         </div>
       )}
     </section>

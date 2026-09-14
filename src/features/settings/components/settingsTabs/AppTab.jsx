@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
-import { Cpu, Mic, RefreshCw, Download, Sliders, Volume2 } from 'lucide-react'
+import { Cpu, Gauge, Mic, RefreshCw, Download, Sliders, Volume2 } from 'lucide-react'
 import { detectGpu } from '../../../../utils/gpu'
 import { flashToast } from '../../../../shared/utils/toast'
+import { PERF_MODES, resolvePerfProfile } from '../../../../shared/perf/perfProfile'
+import { probeHardware } from '../../../../shared/perf/hardwareProbe'
 
 const HAS_ELECTRON_AUDIO = typeof window !== 'undefined' && !!window.electronAPI?.audioService
 const HAS_UPDATER = typeof window !== 'undefined' && !!window.electronAPI?.updater
@@ -55,17 +57,30 @@ function formatGpuLabel(gpuInfo) {
 }
 
 export default function AppTab({ draft, setDraft }) {
-  const [gpuInfo, setGpuInfo] = useState({ supported: null, info: null })
+  const [gpuInfo, setGpuInfo] = useState(() => ({ supported: null, info: null }))
+  const [machine, setMachine] = useState(null)
   const [appVersion, setAppVersion] = useState(null)
   const [updateStatus, setUpdateStatus] = useState({ status: 'idle', percent: 0, version: null, message: null })
   const [checking, setChecking] = useState(false)
 
+  const perfMode = draft.perfMode || 'auto'
+  const preview = resolvePerfProfile(perfMode)
+
   useEffect(() => {
     let cancelled = false
-    detectGpu().then((res) => {
-      if (!cancelled) setGpuInfo(res)
+    // Defer one frame so the tab paints toggles before GPU probe.
+    const id = requestAnimationFrame(() => {
+      detectGpu().then((res) => {
+        if (!cancelled) setGpuInfo(res)
+      })
+      probeHardware().then((probe) => {
+        if (!cancelled) setMachine(probe)
+      })
     })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(id)
+    }
   }, [])
 
   useEffect(() => {
@@ -125,8 +140,48 @@ export default function AppTab({ draft, setDraft }) {
   const updateHint = statusLabel(updateStatus.status, updateStatus.percent, updateStatus.version)
     || (updateStatus.message || null)
 
+  const tierLabel = { high: 'Alto', mid: 'Médio', low: 'Leve' }[preview.tier] || preview.tier
+  const cores = machine?.cores ?? preview.cores
+  const ramGb = machine?.ramGb ?? preview.ramGb
+
   return (
     <div className="max-w-xl space-y-5">
+      <div className="rounded-2xl border border-white/[0.07] bg-[#12141a]/70 px-4 py-3.5 space-y-3">
+        <div className="flex items-center gap-2">
+          <Gauge size={14} className="text-accent" strokeWidth={1.75} />
+          <p className="text-[13px] font-semibold text-strong">Modo de desempenho</p>
+        </div>
+        <p className="text-[11.5px] text-muted leading-snug">
+          Auto usa mais cache/GPU em PCs fortes e reduz carga em fracos. Mudanças que
+          afetam o Chromium (ex. Desempenho → zero-copy) pedem reinício.
+        </p>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {PERF_MODES.map((m) => {
+            const on = perfMode === m.id
+            return (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => setDraft((d) => ({ ...d, perfMode: m.id }))}
+                className={`rounded-xl border px-2.5 py-2 text-left transition-colors ${
+                  on
+                    ? 'border-accent/50 bg-accent/15 text-strong'
+                    : 'border-white/[0.08] bg-white/[0.03] text-ink hover:bg-white/[0.06]'
+                }`}
+              >
+                <p className="text-[12px] font-semibold">{m.label}</p>
+                <p className="text-[10px] text-muted mt-0.5 leading-snug">{m.hint}</p>
+              </button>
+            )
+          })}
+        </div>
+        <p className="text-[11px] text-muted">
+          Perfil ativo: <span className="text-strong font-medium">{tierLabel}</span>
+          {' · '}cache {preview.budgets.imageWarmMax}
+          {' · '}share {preview.budgets.shareQuality}/{preview.budgets.shareFps}fps
+        </p>
+      </div>
+
       <label className="flex items-start justify-between gap-4 cursor-pointer rounded-2xl border border-white/[0.07] bg-[#12141a]/70 px-4 py-3.5">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -152,6 +207,7 @@ export default function AppTab({ draft, setDraft }) {
             </div>
             <p className="text-[11.5px] text-muted mt-1.5 leading-snug">
               Captura de áudio via processo nativo. Requer compilar <code className="text-ink bg-white/[0.06] px-1 rounded">audio-service/</code>.
+              {preview.budgets.preferAudioService ? ' Recomendado no seu perfil de desempenho.' : ''}
             </p>
           </div>
           <Toggle
@@ -188,18 +244,45 @@ export default function AppTab({ draft, setDraft }) {
         />
       </label>
 
-      <div className="rounded-2xl border border-white/[0.07] bg-[#0d0e12] px-4 py-3">
-        {gpuInfo.supported === null ? (
-          <p className="text-[12px] text-muted">Detectando GPU…</p>
+      <div className="rounded-2xl border border-white/[0.07] bg-[#0d0e12] px-4 py-3 space-y-2.5">
+        <p className="text-[11px] font-semibold text-muted uppercase tracking-wide">Sua máquina</p>
+        {gpuInfo.supported === null && !machine ? (
+          <p className="text-[12px] text-muted">Detectando hardware…</p>
         ) : (
-          <div>
-            <p className="text-[11px] text-muted mb-0.5">GPU</p>
-            <p className="text-[12.5px] text-strong font-medium break-words">
-              {formatGpuLabel(gpuInfo)}
-            </p>
-          </div>
+          <>
+            <div>
+              <p className="text-[11px] text-muted mb-0.5">GPU</p>
+              <p className="text-[12.5px] text-strong font-medium break-words">
+                {formatGpuLabel(gpuInfo.supported != null ? gpuInfo : { info: { device: machine?.gpu?.info?.device } })}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-ink">
+              <span><span className="text-muted">CPU</span> {cores} cores</span>
+              <span>
+                <span className="text-muted">RAM</span>{' '}
+                {ramGb != null ? `~${ramGb} GB` : '—'}
+              </span>
+              <span>
+                <span className="text-muted">Auto</span>{' '}
+                {(machine?.autoTier || preview.autoTier || 'mid')}
+              </span>
+            </div>
+          </>
         )}
       </div>
+
+      <label className="flex items-start justify-between gap-4 cursor-pointer rounded-2xl border border-white/[0.07] bg-[#12141a]/70 px-4 py-3.5">
+        <div className="min-w-0">
+          <p className="text-[13px] font-semibold text-strong">Overlay de desempenho</p>
+          <p className="text-[11.5px] text-muted mt-1.5 leading-snug">
+            Mostra FPS, memória e tier no canto da janela (útil para afinar o perfil).
+          </p>
+        </div>
+        <Toggle
+          on={!!draft.perfHud}
+          onChange={(v) => setDraft((d) => ({ ...d, perfHud: v }))}
+        />
+      </label>
 
       {HAS_UPDATER && (
         <div className="rounded-2xl border border-white/[0.07] bg-[#12141a]/70 px-4 py-4 space-y-3">

@@ -13,6 +13,7 @@
 #include <audiopolicy.h>
 #include <psapi.h>
 #include <propidl.h>
+#include <mmreg.h>
 
 #include <atomic>
 #include <chrono>
@@ -181,6 +182,7 @@ public:
 
   bool is_running() const { return is_running_; }
   const std::string& last_error() const { return last_error_; }
+  const std::string& last_mode() const { return capture_mode_; }
 
 private:
   void signal_start(bool ok) {
@@ -258,33 +260,78 @@ private:
 
   void run_capture_loop() {
     IAudioClient* raw_client = nullptr;
-    if (!activate_process_loopback(&raw_client)) {
-      signal_start(false);
-      return;
+    bool used_process = activate_process_loopback(&raw_client);
+    if (!used_process) {
+      // Browsers (Opera/Chrome) often play via a utility PID outside the window
+      // tree — fall back to endpoint loopback so share still has audio.
+      if (!activate_endpoint_loopback(&raw_client)) {
+        signal_start(false);
+        return;
+      }
+      capture_mode_ = "system";
+      last_error_.clear();
+    } else {
+      capture_mode_ = "process";
     }
     ComPtr<IAudioClient> audio_client(raw_client);
     raw_client->Release();
 
-    // GetMixFormat is often E_NOTIMPL for process loopback — hardcode a common format.
     WAVEFORMATEX format = {};
-    format.wFormatTag = WAVE_FORMAT_PCM;
-    format.nChannels = 2;
-    format.nSamplesPerSec = target_sr_ >= 44100 ? target_sr_ : 48000;
-    format.wBitsPerSample = 16;
-    format.nBlockAlign = static_cast<WORD>(format.nChannels * format.wBitsPerSample / 8);
-    format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
-    format.cbSize = 0;
+    WAVEFORMATEX* mix = nullptr;
+    if (capture_mode_ == "system") {
+      HRESULT ghr = audio_client->GetMixFormat(&mix);
+      if (SUCCEEDED(ghr) && mix) {
+        format = *mix;
+        // We'll downmix from mix channels below; keep mix for free later.
+      }
+    }
+    if (!mix) {
+      format = {};
+      format.wFormatTag = WAVE_FORMAT_PCM;
+      format.nChannels = 2;
+      format.nSamplesPerSec = target_sr_ >= 44100 ? target_sr_ : 48000;
+      format.wBitsPerSample = 16;
+      format.nBlockAlign = static_cast<WORD>(format.nChannels * format.wBitsPerSample / 8);
+      format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
+      format.cbSize = 0;
+    }
 
     REFERENCE_TIME hnsBufferDuration = 1000000; // 100ms
+    DWORD streamFlags = AUDCLNT_STREAMFLAGS_LOOPBACK;
+    if (capture_mode_ == "process") {
+      streamFlags |= AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM;
+    }
+
     HRESULT hr = audio_client->Initialize(
       AUDCLNT_SHAREMODE_SHARED,
-      AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
+      streamFlags,
       hnsBufferDuration,
       0,
-      &format,
+      mix ? mix : &format,
       nullptr);
 
+    if (FAILED(hr) && mix) {
+      // Retry with hardcoded PCM if mix format init failed.
+      CoTaskMemFree(mix);
+      mix = nullptr;
+      format = {};
+      format.wFormatTag = WAVE_FORMAT_PCM;
+      format.nChannels = 2;
+      format.nSamplesPerSec = 48000;
+      format.wBitsPerSample = 16;
+      format.nBlockAlign = 4;
+      format.nAvgBytesPerSec = 192000;
+      hr = audio_client->Initialize(
+        AUDCLNT_SHAREMODE_SHARED,
+        AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
+        hnsBufferDuration,
+        0,
+        &format,
+        nullptr);
+    }
+
     if (FAILED(hr)) {
+      if (mix) CoTaskMemFree(mix);
       char buf[64];
       std::snprintf(buf, sizeof(buf), "wasapi-init-0x%08lX", static_cast<unsigned long>(hr));
       last_error_ = buf;
@@ -295,6 +342,7 @@ private:
     ComPtr<IAudioCaptureClient> capture_client;
     hr = audio_client->GetService(__uuidof(IAudioCaptureClient), capture_client.put_void());
     if (FAILED(hr)) {
+      if (mix) CoTaskMemFree(mix);
       last_error_ = "wasapi-capture-service";
       signal_start(false);
       return;
@@ -302,12 +350,18 @@ private:
 
     hr = audio_client->Start();
     if (FAILED(hr)) {
+      if (mix) CoTaskMemFree(mix);
       last_error_ = "wasapi-start-failed";
       signal_start(false);
       return;
     }
 
     signal_start(true);
+
+    const WORD channels = mix ? mix->nChannels : format.nChannels;
+    const bool is_float = mix && (
+      mix->wFormatTag == WAVE_FORMAT_IEEE_FLOAT
+      || (mix->wFormatTag == WAVE_FORMAT_EXTENSIBLE && mix->wBitsPerSample == 32));
 
     std::vector<float> pcm_buffer;
     pcm_buffer.reserve(4096);
@@ -332,14 +386,22 @@ private:
       if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
         std::fill(pcm_buffer.begin(), pcm_buffer.end(), 0.0f);
       } else if (data) {
-        const int16_t* src16 = reinterpret_cast<const int16_t*>(data);
-        const WORD channels = format.nChannels;
-        for (UINT32 i = 0; i < num_frames; ++i) {
-          float sum = 0.0f;
-          for (WORD c = 0; c < channels; ++c) {
-            sum += static_cast<float>(src16[i * channels + c]) / 32768.0f;
+        if (is_float) {
+          const float* src = reinterpret_cast<const float*>(data);
+          for (UINT32 i = 0; i < num_frames; ++i) {
+            float sum = 0.0f;
+            for (WORD c = 0; c < channels; ++c) sum += src[i * channels + c];
+            pcm_buffer[i] = sum / static_cast<float>(channels > 0 ? channels : 1);
           }
-          pcm_buffer[i] = sum / static_cast<float>(channels > 0 ? channels : 1);
+        } else {
+          const int16_t* src16 = reinterpret_cast<const int16_t*>(data);
+          for (UINT32 i = 0; i < num_frames; ++i) {
+            float sum = 0.0f;
+            for (WORD c = 0; c < channels; ++c) {
+              sum += static_cast<float>(src16[i * channels + c]) / 32768.0f;
+            }
+            pcm_buffer[i] = sum / static_cast<float>(channels > 0 ? channels : 1);
+          }
         }
       } else {
         std::fill(pcm_buffer.begin(), pcm_buffer.end(), 0.0f);
@@ -352,6 +414,32 @@ private:
     }
 
     audio_client->Stop();
+    if (mix) CoTaskMemFree(mix);
+  }
+
+  bool activate_endpoint_loopback(IAudioClient** out_client) {
+    *out_client = nullptr;
+    ComPtr<IMMDeviceEnumerator> enumerator;
+    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+      __uuidof(IMMDeviceEnumerator), enumerator.put_void());
+    if (FAILED(hr)) {
+      last_error_ = "endpoint-enumerator";
+      return false;
+    }
+    ComPtr<IMMDevice> device;
+    hr = enumerator->GetDefaultAudioEndpoint(eRender, eMultimedia, device.GetAddressOf());
+    if (FAILED(hr)) {
+      last_error_ = "endpoint-device";
+      return false;
+    }
+    IAudioClient* client = nullptr;
+    hr = device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(&client));
+    if (FAILED(hr) || !client) {
+      last_error_ = "endpoint-activate";
+      return false;
+    }
+    *out_client = client;
+    return true;
   }
 
   std::atomic<bool> is_running_{false};
@@ -363,6 +451,7 @@ private:
   uint16_t target_ch_{1};
   uint32_t target_pid_{0};
   std::string last_error_;
+  std::string capture_mode_{"process"};
 };
 
 LoopbackSession::LoopbackSession() : impl_(std::make_unique<Impl>()) {}
@@ -382,6 +471,10 @@ bool LoopbackSession::is_running() const {
 
 const std::string& LoopbackSession::last_error() const {
   return impl_->last_error();
+}
+
+const std::string& LoopbackSession::last_mode() const {
+  return impl_->last_mode();
 }
 
 std::vector<AudioProcessInfo> LoopbackSession::list_audio_processes() {
@@ -450,8 +543,10 @@ public:
   void stop() {}
   bool is_running() const { return false; }
   const std::string& last_error() const { return err_; }
+  const std::string& last_mode() const { return mode_; }
 private:
   std::string err_{"Loopback only supported on Windows"};
+  std::string mode_{"none"};
 };
 
 LoopbackSession::LoopbackSession() : impl_(std::make_unique<Impl>()) {}
@@ -462,6 +557,7 @@ bool LoopbackSession::start(uint32_t p, uint32_t sr, uint16_t c, AudioCallback c
 void LoopbackSession::stop() { impl_->stop(); }
 bool LoopbackSession::is_running() const { return impl_->is_running(); }
 const std::string& LoopbackSession::last_error() const { return impl_->last_error(); }
+const std::string& LoopbackSession::last_mode() const { return impl_->last_mode(); }
 std::vector<AudioProcessInfo> LoopbackSession::list_audio_processes() { return {}; }
 
 } // namespace voicecraft::audio

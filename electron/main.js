@@ -336,6 +336,11 @@ const DEFAULT_SETTINGS = {
   callSounds: true,
   // GPU acceleration (must be applied BEFORE app.whenReady — see below)
   gpuAcceleration: true,
+  // Performance profile — Auto scales; Chromium zero-copy needs restart
+  perfMode: 'auto', // auto | performance | balanced | economy
+  perfHud: false,
+  // Last Auto tier from renderer probe — enables zero-copy on next launch when high
+  lastPerfTier: null, // high | mid | low | null
   // UI
   startMinimized: false,
 }
@@ -362,7 +367,16 @@ if (!earlySettings.gpuAcceleration) {
 // at hundreds of FPS, fights screen-capture for the GPU, and the app
 // stutters. Capture FPS is set by getUserMedia constraints, not vsync.
 app.commandLine.appendSwitch('enable-gpu-rasterization')
-// Avoid enable-zero-copy by default — it can raise GPU/RAM pressure on weak PCs.
+// Zero-copy only on high tier (explicit Desempenho, or Auto that last probed high).
+const earlyPerf = String(earlySettings.perfMode || 'auto')
+const earlyTier = String(earlySettings.lastPerfTier || '')
+const wantZeroCopy =
+  earlyPerf === 'performance'
+  || (earlyPerf === 'auto' && earlyTier === 'high')
+if (wantZeroCopy && earlySettings.gpuAcceleration !== false) {
+  app.commandLine.appendSwitch('enable-zero-copy')
+  console.log('[app] enable-zero-copy', { perfMode: earlyPerf, lastPerfTier: earlyTier || null })
+}
 
 function loadSettings() {
   try {
@@ -431,9 +445,15 @@ ipcMain.handle('settings:get', () => loadSettings())
 ipcMain.handle('settings:set', (_e, patch) => saveSettings(patch || {}))
 
 ipcMain.handle('system:get-gpu-info', async () => {
+  // 'complete' can block the main process for seconds (window drag/minimize die).
+  // Prefer basic; optionally enrich with a short complete timeout.
   try {
-    const info = await app.getGPUInfo('complete')
-    return { ok: true, info }
+    const basic = await app.getGPUInfo('basic')
+    const complete = await Promise.race([
+      app.getGPUInfo('complete').catch(() => null),
+      new Promise((resolve) => setTimeout(() => resolve(null), 900)),
+    ])
+    return { ok: true, info: complete || basic }
   } catch (err) {
     try {
       const info = await app.getGPUInfo('basic')
@@ -441,6 +461,31 @@ ipcMain.handle('system:get-gpu-info', async () => {
     } catch (err2) {
       return { ok: false, error: err2?.message || err?.message || 'gpu info failed' }
     }
+  }
+})
+
+/** Light snapshot for perf HUD / hardware probe — never blocks on complete GPU info. */
+ipcMain.handle('system:perf-snapshot', async () => {
+  try {
+    const memory = await process.getProcessMemoryInfo()
+    let gpuFeatureStatus = null
+    try {
+      gpuFeatureStatus = app.getGPUFeatureStatus?.() || null
+    } catch { /* ignore */ }
+    let heap = null
+    try {
+      heap = process.getHeapStatistics?.() || null
+    } catch { /* ignore */ }
+    return {
+      ok: true,
+      memory,
+      heap,
+      gpuFeatureStatus,
+      pid: process.pid,
+      at: Date.now(),
+    }
+  } catch (err) {
+    return { ok: false, error: err?.message || 'perf snapshot failed' }
   }
 })
 
@@ -548,13 +593,14 @@ function startAudioService() {
       if (!line.trim()) continue
       try {
         const msg = JSON.parse(line)
-        if (msg?.type === 'error' && activeLoopbackSessions.size > 0) {
-          // C++ failed after we registered a session — drop so frames aren't mis-tagged.
+        if (msg?.type === 'error' && activeLoopbackSessions.size > 0 && pendingLoopbackWaiters.size === 0) {
+          // Only clear sessions on late errors after start finished waiting.
           activeLoopbackSessions.clear()
         }
         if (msg?.type === 'loopback-stopped') {
           activeLoopbackSessions.clear()
         }
+        notifyLoopbackWaiters(msg)
         if (mainWindow && !mainWindow.isDestroyed()) {
           const wc = mainWindow.webContents
           if (wc && !wc.isDestroyed()) {
@@ -606,6 +652,24 @@ ipcMain.handle('audio-service:send', (_e, obj) => { sendAudioCommand(obj); retur
 
 // Active loopback sessions: Map<sessionId, { processId, startedAt }>
 const activeLoopbackSessions = new Map()
+/** @type {Map<string, (msg: any) => void>} */
+const pendingLoopbackWaiters = new Map()
+
+function notifyLoopbackWaiters(msg) {
+  if (!msg) return
+  if (msg.type === 'loopback-started' && msg.sessionId && pendingLoopbackWaiters.has(msg.sessionId)) {
+    const fn = pendingLoopbackWaiters.get(msg.sessionId)
+    pendingLoopbackWaiters.delete(msg.sessionId)
+    try { fn?.(msg) } catch {}
+    return
+  }
+  if (msg.type === 'error' || msg.type === 'loopback-started') {
+    for (const [id, fn] of pendingLoopbackWaiters.entries()) {
+      pendingLoopbackWaiters.delete(id)
+      try { fn?.(msg) } catch {}
+    }
+  }
+}
 
 /** Low-level / shell processes users never want for app audio capture. */
 const PROCESS_DENY = new Set([
@@ -727,7 +791,7 @@ ipcMain.handle('audio-service:list-processes', async () => {
   return processes
 })
 
-ipcMain.handle('audio-service:start-loopback', (_e, payload) => {
+ipcMain.handle('audio-service:start-loopback', async (_e, payload) => {
   const processId = payload?.processId
   if (typeof processId !== 'number' || processId <= 0) {
     return { ok: false, error: 'pid-not-found' }
@@ -738,15 +802,44 @@ ipcMain.handle('audio-service:start-loopback', (_e, payload) => {
   }
   for (const [id, sess] of activeLoopbackSessions.entries()) {
     if (sess.processId === processId) {
-      return { ok: true, sessionId: id }
+      return { ok: true, sessionId: id, alreadyRunning: true }
     }
   }
   const crypto = require('crypto')
-  const sessionId = crypto.randomUUID ? crypto.randomUUID() : ('sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9))
-  activeLoopbackSessions.set(sessionId, { processId, startedAt: Date.now() })
-  sendAudioCommand({ type: 'start-loopback', processId, sessionId })
-  return { ok: true, sessionId }
+  const sessionId = crypto.randomUUID
+    ? crypto.randomUUID()
+    : ('sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9))
+
+  const waitResult = await new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pendingLoopbackWaiters.delete(sessionId)
+      resolve({ ok: false, error: 'timeout-waiting-loopback' })
+    }, 8000)
+
+    pendingLoopbackWaiters.set(sessionId, (msg) => {
+      clearTimeout(timer)
+      pendingLoopbackWaiters.delete(sessionId)
+      if (msg?.type === 'loopback-started') {
+        resolve({ ok: true, mode: msg.mode || 'process' })
+      } else {
+        resolve({ ok: false, error: msg?.message || 'wasapi-error' })
+      }
+    })
+
+    activeLoopbackSessions.set(sessionId, { processId, startedAt: Date.now() })
+    sendAudioCommand({ type: 'start-loopback', processId, sessionId })
+  })
+
+  if (!waitResult?.ok) {
+    activeLoopbackSessions.delete(sessionId)
+    try { sendAudioCommand({ type: 'stop-loopback', sessionId }) } catch {}
+    return { ok: false, error: waitResult?.error || 'loopback-failed' }
+  }
+
+  return { ok: true, sessionId, mode: waitResult.mode || 'process' }
 })
+
+// (pendingLoopbackWaiters declared above with activeLoopbackSessions)
 
 ipcMain.handle('audio-service:stop-loopback', (_e, payload) => {
   const sessionId = payload?.sessionId

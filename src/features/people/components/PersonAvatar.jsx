@@ -1,4 +1,6 @@
+import { useEffect } from 'react'
 import { colorFromId, initialsOf } from '../../spaces'
+import { warmImage } from '../../../shared/media/imageWarm'
 
 export function PersonAvatar({
   src,
@@ -11,6 +13,11 @@ export function PersonAvatar({
   const photo = typeof src === 'string' && (src.startsWith('http') || src.startsWith('data:image/'))
     ? src
     : ''
+
+  useEffect(() => {
+    if (photo) warmImage(photo).catch(() => {})
+  }, [photo])
+
   return (
     <span
       className={`relative shrink-0 overflow-hidden rounded-full flex items-center justify-center font-semibold ${textClassName} ${className}`}

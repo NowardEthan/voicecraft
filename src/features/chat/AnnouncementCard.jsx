@@ -64,7 +64,10 @@ export default function AnnouncementCard({
         {a.cover ? (
           <div
             className="relative w-full overflow-hidden"
-            style={{ height: ANNOUNCE_COVER_HEIGHT }}
+            style={{
+              height: ANNOUNCE_COVER_HEIGHT,
+              background: `linear-gradient(145deg, color-mix(in srgb, ${accent} 20%, #151820), #12151c)`,
+            }}
           >
             <SpaceCoverLayer src={a.cover} fit={a.coverFit} />
             <div

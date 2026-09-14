@@ -193,6 +193,47 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Friend requests — top-level (NOT nested under vc_spaces).
+    // Only sender + receiver can see / mutate.
+    // Status flow: pending → accepted | ignored (or deleted entirely).
+    // IMPORTANT: clients must query with where(fromUserId|toUserId == auth.uid).
+    // An unfiltered collection listen will fail with permission-denied.
+    match /vc_friend_requests/{requestId} {
+      // Allow get of missing docs (idempotent create checks) + own docs.
+      allow get: if signedIn() && (
+        !exists(/databases/$(database)/documents/vc_friend_requests/$(requestId))
+        || resource.data.fromUserId == request.auth.uid
+        || resource.data.toUserId == request.auth.uid
+      );
+      allow list: if signedIn() && (
+        resource.data.fromUserId == request.auth.uid
+        || resource.data.toUserId == request.auth.uid
+      );
+      // Only the sender can create a pending request addressed to someone else.
+      allow create: if signedIn()
+        && request.resource.data.fromUserId == request.auth.uid
+        && request.resource.data.toUserId != request.auth.uid
+        && request.resource.data.status == 'pending';
+      // Receiver can accept/ignore. Sender can re-send if previously ignored.
+      allow update: if signedIn() && (
+        (resource.data.toUserId == request.auth.uid
+          && resource.data.status == 'pending'
+          && request.resource.data.status in ['accepted', 'ignored']
+          && request.resource.data.fromUserId == resource.data.fromUserId
+          && request.resource.data.toUserId == resource.data.toUserId)
+        || (resource.data.fromUserId == request.auth.uid
+          && resource.data.status == 'ignored'
+          && request.resource.data.status == 'pending'
+          && request.resource.data.fromUserId == request.auth.uid
+          && request.resource.data.toUserId == resource.data.toUserId)
+      );
+      // Both parties can delete (cancel / unfriend).
+      allow delete: if signedIn() && (
+        resource.data.fromUserId == request.auth.uid
+        || resource.data.toUserId == request.auth.uid
+      );
+    }
+
     match /vc_spaces/{spaceId} {
       allow read: if signedIn();
       allow create: if signedIn()
@@ -230,6 +271,22 @@ service cloud.firestore {
               .hasAny(['roleIds', 'perms'])
           )
         );
+      }
+
+      // Event RSVPs: any signed-in member can read, write own row only.
+      // rsvpId convention: `${eventId}_${userId}` — the userId in the
+      // document must match the auth uid, and the doc ID must end with
+      // that uid. Creator can delete any row for moderation.
+      match /event_rsvps/{rsvpId} {
+        allow read: if signedIn();
+        allow create, update: if signedIn()
+          && request.auth.uid == request.resource.data.userId
+          && (request.resource.data.status == 'going'
+              || request.resource.data.status == 'not_going')
+          && rsvpId.matches('.*_' + request.auth.uid + '$');
+        allow delete: if signedIn()
+          && (rsvpId.matches('.*_' + request.auth.uid + '$')
+              || isSpaceCreator(spaceId));
       }
 
       match /rooms/{roomId} {

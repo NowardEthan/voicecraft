@@ -1,12 +1,12 @@
 /**
  * PeoplePanel — right-side member list matching the Pessoas mockup:
- * sections (Na sala / Online / Offline), invite CTA, footer count.
+ * Convidar CTA, tabs Pessoas/Detalhes, live call widget, online/offline.
  */
 import { useMemo, useRef, useState } from 'react'
 import {
-  UserPlus, Users, X, Search, Crown, Headphones,
+  UserPlus, Users, X, Search, Crown, Headphones, MoreHorizontal,
   Laptop, Clock, Gamepad2, MessageCircle, BookOpen, Music, Radio,
-  ChevronLeft, MoreHorizontal,
+  ChevronLeft, Phone, PhoneOff,
 } from 'lucide-react'
 import { PersonAvatar } from '../../features/people'
 import { UserTagChips } from '../../features/people/components/UserTagChips'
@@ -17,6 +17,8 @@ import {
 import { PURPOSE_BY_KEY } from '../../features/rooms'
 import { resolveCardTheme } from '../../features/account/model/profileCardThemes'
 import { CardThemeFx } from '../../features/account/components/CardThemeFx'
+import { Appear, AppearList, AppearItem } from '../../shared/motion/Appear'
+import { onColorHex } from '../../features/spaces'
 
 const PURPOSE_ICON = {
   voice: Radio,
@@ -136,12 +138,21 @@ export default function PeoplePanel({
   onClose,
   onInvite,
   onOpenProfile,
+  voiceRoom = null,
+  onFocusVoice = null,
+  onLeaveCall = null,
+  voicePeerCount = 0,
+  voicePeers = [],
 }) {
   const [collapsed, setCollapsed] = useState(false)
   const [query, setQuery] = useState('')
+  const [tab, setTab] = useState('people') // people | details
   const searchRef = useRef(null)
 
   const accent = space?.color || 'var(--space-accent)'
+  const onAccent = typeof accent === 'string' && accent.startsWith('#')
+    ? onColorHex(accent)
+    : 'var(--space-on-accent, #fff)'
   const memberCount = members.length
 
   const filtered = useMemo(() => {
@@ -201,34 +212,21 @@ export default function PeoplePanel({
       className="vc-people-panel w-full h-full bg-[#0B0E11] border-l border-white/[0.06] flex flex-col overflow-hidden"
       aria-label="Pessoas"
     >
-      {/* Header */}
-      <div className="shrink-0 px-4 pt-4 pb-2 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <h2 className="text-[15px] font-semibold text-strong tracking-tight">Pessoas</h2>
-          {memberCount > 0 && (
-            <span className="px-1.5 h-5 min-w-[1.25rem] rounded-full bg-white/[0.06] text-[11px] font-semibold text-muted tabular-nums inline-flex items-center justify-center">
-              {memberCount}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-0.5 shrink-0">
-          <button
-            type="button"
-            onClick={() => searchRef.current?.focus()}
-            title="Buscar pessoas"
-            aria-label="Buscar pessoas"
-            className="w-8 h-8 rounded-md flex items-center justify-center text-muted hover:text-strong hover:bg-white/[0.06] transition-colors"
-          >
-            <Search size={14} strokeWidth={1.8} />
-          </button>
+      {/* Top invite — solid Space accent (no gradient) */}
+      <Appear key={`people-invite-${space?.id || 'x'}`} delay={0.02} y={6} className="shrink-0 px-3 pt-3 pb-2">
+        <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={onInvite}
-            title="Convidar pessoas"
-            aria-label="Convidar pessoas"
-            className="w-8 h-8 rounded-md flex items-center justify-center text-muted hover:text-strong hover:bg-white/[0.06] transition-colors"
+            className="vc-people-invite-cta flex-1 h-10 rounded-full inline-flex items-center justify-center gap-2 text-[13px] font-semibold transition-[filter,transform,box-shadow] duration-150 hover:brightness-110 active:scale-[0.98]"
+            style={{
+              background: accent,
+              color: onAccent,
+              boxShadow: `0 8px 22px -10px color-mix(in srgb, ${typeof accent === 'string' ? accent : 'var(--space-accent)'} 55%, transparent)`,
+            }}
           >
-            <UserPlus size={14} strokeWidth={1.8} />
+            <UserPlus size={15} strokeWidth={2.2} />
+            Convidar
           </button>
           {onClose && (
             <button
@@ -236,95 +234,202 @@ export default function PeoplePanel({
               onClick={onClose}
               title="Fechar painel"
               aria-label="Fechar painel de pessoas"
-              className="w-8 h-8 rounded-md flex items-center justify-center text-muted hover:text-strong hover:bg-white/[0.06] transition-colors"
+              className="w-9 h-9 rounded-full flex items-center justify-center text-muted hover:text-strong hover:bg-white/[0.06] transition-colors shrink-0"
             >
-              <X size={13} />
+              <X size={14} />
             </button>
           )}
         </div>
-      </div>
+      </Appear>
 
-      {/* Search */}
-      <div className="shrink-0 px-3 pb-3">
-        <div className="relative">
-          <Search
-            size={13}
-            className="absolute left-3 top-1/2 -translate-y-1/2 text-muted pointer-events-none"
-          />
-          <input
-            ref={searchRef}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Buscar pessoas..."
-            className="w-full h-9 pl-9 pr-3 rounded-xl bg-white/[0.04] border border-white/[0.06] text-[12.5px] text-strong placeholder:text-muted focus:outline-none focus:border-accent/40"
-          />
-        </div>
-      </div>
-
-      {/* List */}
-      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 pb-2">
-        {memberCount === 0 ? (
-          <p className="text-[12px] text-muted text-center px-4 py-6">
-            Ninguém no Space ainda.
-          </p>
-        ) : filtered.length === 0 ? (
-          <p className="text-[12px] text-muted text-center px-4 py-6">
-            Ninguém com esse nome.
-          </p>
-        ) : (
-          sections.map((section) => (
-            <section key={section.key} className="mb-3">
-              <div className="flex items-center gap-1.5 px-2.5 pt-1 pb-1.5">
+      {/* Tabs */}
+      <div className="shrink-0 px-3.5 flex items-center gap-5 border-b border-white/[0.06]">
+        {[
+          { id: 'people', label: 'Pessoas' },
+          { id: 'details', label: 'Detalhes' },
+        ].map((t) => {
+          const active = tab === t.id
+          return (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setTab(t.id)}
+              className={
+                'relative h-10 text-[13px] font-semibold transition-colors ' +
+                (active ? 'text-strong' : 'text-muted hover:text-ink')
+              }
+            >
+              {t.label}
+              {active && (
                 <span
-                  className="w-1.5 h-1.5 rounded-full shrink-0"
-                  style={{ backgroundColor: section.dot }}
+                  className="absolute left-0 right-0 -bottom-px h-[2px] rounded-full"
+                  style={{ background: 'var(--space-accent)' }}
                   aria-hidden
                 />
-                <h3 className="text-[10px] font-bold uppercase tracking-[0.12em] text-muted">
-                  {section.label}
-                  <span className="font-semibold tracking-normal"> — {section.items.length}</span>
-                </h3>
-              </div>
-              <ul className="space-y-0.5">
-                {section.items.map((m) => (
-                  <PersonRow
-                    key={m.userId}
-                    member={m}
-                    space={space}
-                    isSelf={m.userId === currentUserId}
-                    isCreator={space?.createdBy === m.userId}
-                    accent={accent}
-                    onOpenProfile={onOpenProfile}
-                  />
-                ))}
-              </ul>
-            </section>
-          ))
-        )}
+              )}
+            </button>
+          )
+        })}
       </div>
 
-      {/* Invite CTA */}
-      <div className="shrink-0 px-3 pt-3 pb-2 border-t border-white/[0.06]">
-        <div className="flex items-start gap-3 mb-3">
-          <InviteIllustration accent={accent} />
-          <div className="min-w-0 pt-0.5">
-            <p className="text-[13px] font-semibold text-strong leading-tight">
-              Chame mais alguém
-            </p>
-            <p className="text-[11px] text-muted leading-snug mt-0.5">
-              Boas conversas ficam melhores com companhia.
-            </p>
-          </div>
+      {tab === 'details' ? (
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-4 space-y-3">
+          <p className="text-[13px] font-semibold text-strong">{space?.name || 'Space'}</p>
+          {space?.description ? (
+            <p className="text-[12px] text-muted leading-relaxed">{space.description}</p>
+          ) : (
+            <p className="text-[12px] text-muted italic">Sem descrição ainda.</p>
+          )}
+          <p className="text-[11px] text-muted">
+            {memberCount} {memberCount === 1 ? 'membro' : 'membros'}
+          </p>
         </div>
-        <button
-          type="button"
-          onClick={onInvite}
-          className="vc-people-invite-cta w-full h-10 rounded-xl inline-flex items-center justify-center gap-2 text-[13px] font-semibold text-strong transition-colors"
-        >
-          <UserPlus size={15} strokeWidth={1.9} style={{ color: accent }} />
-          Convidar pessoas
-        </button>
-      </div>
+      ) : (
+        <>
+          {/* Live call widget */}
+          {voiceRoom && (
+            <Appear delay={0.04} y={6} className="shrink-0 px-3 pt-3">
+              <div className="vc-live-call-card rounded-2xl border border-white/[0.08] bg-white/[0.035] p-3 space-y-2.5">
+                <div className="flex items-start gap-2.5 min-w-0">
+                  <span
+                    className="shrink-0 flex items-center justify-center mt-0.5"
+                    style={{ color: 'var(--space-accent)' }}
+                    aria-hidden
+                  >
+                    <Phone size={16} strokeWidth={2} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.1em] text-positive flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-positive animate-pulse" />
+                      Bate-papo ao vivo
+                    </p>
+                    <p className="text-[13px] font-semibold text-strong truncate mt-0.5">
+                      {voiceRoom.name}
+                    </p>
+                    {voicePeerCount > 0 && (
+                      <p className="text-[11px] text-muted mt-0.5">
+                        {voicePeerCount} {voicePeerCount === 1 ? 'pessoa' : 'pessoas'} na call
+                      </p>
+                    )}
+                  </div>
+                </div>
+                {voicePeers.length > 0 && (
+                  <div className="flex items-center -space-x-1.5 pl-0.5">
+                    {voicePeers.slice(0, 5).map((m) => (
+                      <PersonAvatar
+                        key={m.userId}
+                        src={m.photoURL}
+                        name={m.displayName || '?'}
+                        userId={m.userId}
+                        size={22}
+                        className="ring-2 ring-[#0B0E11]"
+                      />
+                    ))}
+                    {voicePeers.length > 5 && (
+                      <span className="ml-2 text-[10px] font-semibold text-muted tabular-nums">
+                        +{voicePeers.length - 5}
+                      </span>
+                    )}
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={onFocusVoice}
+                    className="flex-1 h-8 rounded-lg text-[12px] font-semibold transition-colors hover:brightness-110"
+                    style={{
+                      color: 'var(--space-accent)',
+                      boxShadow: 'inset 0 0 0 1.5px var(--space-accent)',
+                      background: 'color-mix(in srgb, var(--space-accent) 10%, transparent)',
+                    }}
+                  >
+                    Entrar
+                  </button>
+                  {onLeaveCall && (
+                    <button
+                      type="button"
+                      onClick={onLeaveCall}
+                      title="Sair da call"
+                      aria-label="Sair da call"
+                      className="h-8 px-2.5 rounded-lg text-danger hover:bg-danger/10 inline-flex items-center gap-1 text-[11px] font-semibold"
+                    >
+                      <PhoneOff size={12} strokeWidth={2.2} />
+                      Sair
+                    </button>
+                  )}
+                </div>
+              </div>
+            </Appear>
+          )}
+
+          {/* Search */}
+          <Appear key={`people-s-${space?.id || 'x'}`} delay={0.05} y={6} className="shrink-0 px-3 py-3">
+            <div className="relative">
+              <Search
+                size={13}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-muted pointer-events-none"
+              />
+              <input
+                ref={searchRef}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Buscar pessoas..."
+                className="w-full h-9 pl-9 pr-3 rounded-xl bg-white/[0.04] border border-white/[0.06] text-[12.5px] text-strong placeholder:text-muted focus:outline-none focus:border-[color-mix(in_srgb,var(--space-accent)_40%,transparent)]"
+              />
+            </div>
+          </Appear>
+
+          {/* List */}
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 pb-2">
+            {memberCount === 0 ? (
+              <Appear key={`empty-${space?.id}`} delay={0.08} y={6}>
+                <p className="text-[12px] text-muted text-center px-4 py-6">
+                  Ninguém no Space ainda.
+                </p>
+              </Appear>
+            ) : filtered.length === 0 ? (
+              <Appear key={`none-${space?.id}`} delay={0.08} y={6}>
+                <p className="text-[12px] text-muted text-center px-4 py-6">
+                  Ninguém com esse nome.
+                </p>
+              </Appear>
+            ) : (
+              <div key={`list-${space?.id || 'people'}`}>
+                {sections.map((section, sectionIdx) => (
+                  <section key={section.key} className="mb-3">
+                    <Appear delay={0.05 + sectionIdx * 0.025} y={4}>
+                      <div className="flex items-center gap-1.5 px-2.5 pt-1 pb-1.5">
+                        <span
+                          className="w-1.5 h-1.5 rounded-full shrink-0"
+                          style={{ backgroundColor: section.dot }}
+                          aria-hidden
+                        />
+                        <h3 className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted">
+                          {section.label}
+                          <span className="font-semibold tracking-normal text-strong/70"> — {section.items.length}</span>
+                        </h3>
+                      </div>
+                    </Appear>
+                    <AppearList className="space-y-0.5" stagger={0.032} delayChildren={0.06 + sectionIdx * 0.03}>
+                      {section.items.map((m) => (
+                        <PersonRow
+                          key={m.userId}
+                          member={m}
+                          space={space}
+                          isSelf={m.userId === currentUserId}
+                          isCreator={space?.createdBy === m.userId}
+                          accent={accent}
+                          onOpenProfile={onOpenProfile}
+                        />
+                      ))}
+                    </AppearList>
+                  </section>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
 
       {/* Footer */}
       <div className="shrink-0 px-3 py-2.5 border-t border-white/[0.06] flex items-center justify-between gap-2">
@@ -362,7 +467,7 @@ function PersonRow({ member, space, isSelf, isCreator, accent, onOpenProfile }) 
   const StatusIcon = listening ? Headphones : status.Icon
 
   return (
-    <li>
+    <AppearItem>
       <button
         type="button"
         onClick={() => onOpenProfile?.(member)}
@@ -450,53 +555,7 @@ function PersonRow({ member, space, isSelf, isCreator, accent, onOpenProfile }) 
           />
         </span>
       </button>
-    </li>
+    </AppearItem>
   )
 }
 
-function InviteIllustration({ accent }) {
-  return (
-    <svg
-      width="44"
-      height="40"
-      viewBox="0 0 44 40"
-      fill="none"
-      aria-hidden
-      className="shrink-0"
-    >
-      <defs>
-        <linearGradient id="vcInviteGrad" x1="0" y1="0" x2="44" y2="40">
-          <stop stopColor={accent} />
-          <stop offset="1" stopColor="#A855F7" />
-        </linearGradient>
-      </defs>
-      <circle cx="34" cy="8" r="1.2" fill="url(#vcInviteGrad)" opacity="0.9" />
-      <circle cx="40" cy="14" r="0.9" fill="url(#vcInviteGrad)" opacity="0.7" />
-      <circle cx="28" cy="4" r="0.8" fill="url(#vcInviteGrad)" opacity="0.6" />
-      <path
-        d="M36 6.5c2.2-1.8 5.2-.4 5.4 2.2.1 1.4-.7 2.5-1.8 3.1"
-        stroke="url(#vcInviteGrad)"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-        fill="none"
-      />
-      <circle cx="14" cy="12" r="5" stroke="url(#vcInviteGrad)" strokeWidth="1.6" fill="none" />
-      <path
-        d="M5 30c1.5-5.5 5-8.5 9-8.5s7.5 3 9 8.5"
-        stroke="url(#vcInviteGrad)"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        fill="none"
-      />
-      <circle cx="26" cy="14" r="4.2" stroke="url(#vcInviteGrad)" strokeWidth="1.5" fill="none" opacity="0.85" />
-      <path
-        d="M19.5 30c1.2-4.2 3.8-6.5 6.5-6.5 2 0 3.8 1.1 5.2 3"
-        stroke="url(#vcInviteGrad)"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        fill="none"
-        opacity="0.85"
-      />
-    </svg>
-  )
-}

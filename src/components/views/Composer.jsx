@@ -17,9 +17,10 @@ import { createPortal } from 'react-dom'
 import {
   Smile, Plus, Send, X, CornerUpLeft, FileText, Image as ImageIcon,
 } from 'lucide-react'
-import { MAX_FILE_BYTES, MAX_IMAGE_BYTES, readFileAsDataUrl } from '../../hooks/useChat'
+import { MAX_FILE_BYTES, MAX_IMAGE_BYTES, MAX_ATTACHMENTS } from '../../hooks/useChat'
 import EmojiPicker from '../ui/EmojiPicker'
-import { flashToast } from '../../shared/utils/toast'
+import AttachPreviewModal from './AttachPreviewModal'
+import GifPicker from '../../features/chat/GifPicker'
 import MentionSuggestions, {
   computeMentionSuggestions,
   detectMentionTrigger,
@@ -29,6 +30,7 @@ import MentionSuggestions, {
 const FILE_ACCEPT = 'image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar,.json'
 const IMAGE_ACCEPT = 'image/*'
 const TEXTAREA_MAX_PX = 160
+const ATTACH_CAP = 10
 
 export default function Composer({
   disabled = false,
@@ -46,15 +48,42 @@ export default function Composer({
   channelName = null,
 }) {
   const [text, setText] = useState('')
-  const [attachment, setAttachment] = useState(null)
+  const [attachments, setAttachments] = useState([])
+  const [attachIndex, setAttachIndex] = useState(0)
   const [emojiOpen, setEmojiOpen] = useState(false)
   const [emojiPos, setEmojiPos] = useState(null)
+  const [gifOpen, setGifOpen] = useState(false)
+  const [gifPos, setGifPos] = useState(null)
   const [sizeError, setSizeError] = useState(null)
   const [sending, setSending] = useState(false)
 
   /* Mention / room suggestion popover state (CONTRATO_FASE2) */
   const [mention, setMention] = useState(null) // null | { kind, query, queryStart, queryEnd, items, selectedId, anchor }
   const [dragOver, setDragOver] = useState(false)
+  const attachmentsRef = useRef([])
+
+  const revokeAtt = (att) => {
+    const u = att?.previewUrl
+    if (u && String(u).startsWith('blob:')) {
+      try { URL.revokeObjectURL(u) } catch {}
+    }
+  }
+
+  const clearAttachments = useCallback(() => {
+    setAttachments((prev) => {
+      prev.forEach(revokeAtt)
+      return []
+    })
+    setAttachIndex(0)
+  }, [])
+
+  useEffect(() => {
+    attachmentsRef.current = attachments
+  }, [attachments])
+
+  useEffect(() => () => {
+    attachmentsRef.current.forEach(revokeAtt)
+  }, [])
 
   /* Derive members / rooms passed to the popover.
    * For members we build a stable id from userId (no duplicates). For
@@ -72,21 +101,34 @@ export default function Composer({
   const imageInputRef = useRef(null)
   const emojiRef = useRef(null)
   const emojiBtnRef = useRef(null)
+  const gifRef = useRef(null)
+  const gifBtnRef = useRef(null)
   const composerShellRef = useRef(null)
 
   useEffect(() => {
-    if (!emojiOpen) return
+    if (!emojiOpen && !gifOpen) return
     const handler = (e) => {
-      if (
-        emojiRef.current && !emojiRef.current.contains(e.target) &&
-        emojiBtnRef.current && !emojiBtnRef.current.contains(e.target)
-      ) {
-        setEmojiOpen(false)
+      const t = e.target
+      if (emojiOpen) {
+        if (
+          emojiRef.current && !emojiRef.current.contains(t) &&
+          emojiBtnRef.current && !emojiBtnRef.current.contains(t)
+        ) {
+          setEmojiOpen(false)
+        }
+      }
+      if (gifOpen) {
+        if (
+          gifRef.current && !gifRef.current.contains(t) &&
+          gifBtnRef.current && !gifBtnRef.current.contains(t)
+        ) {
+          setGifOpen(false)
+        }
       }
     }
     window.addEventListener('mousedown', handler)
     return () => window.removeEventListener('mousedown', handler)
-  }, [emojiOpen])
+  }, [emojiOpen, gifOpen])
 
   useEffect(() => {
     const ta = taRef.current
@@ -133,11 +175,24 @@ export default function Composer({
     const shellRect = shell.getBoundingClientRect()
     const PICKER_W = 392
     const PICKER_H = 420
-    // Horizontal: center on composer shell, clamp to viewport.
     let left = shellRect.left + (shellRect.width - PICKER_W) / 2
     left = Math.max(12, Math.min(left, window.innerWidth - PICKER_W - 12))
-    // Vertical: above the composer with 8px gap; fallback below the
-    // smile button only if there really isn't room above.
+    let top = shellRect.top - PICKER_H - 8
+    if (top < 12) top = btnRect.bottom + 8
+    top = Math.max(12, Math.min(top, window.innerHeight - PICKER_H - 12))
+    return { top, left }
+  }, [])
+
+  const computeGifPos = useCallback(() => {
+    const btn = gifBtnRef.current
+    const shell = composerShellRef.current
+    if (!btn || !shell) return null
+    const btnRect = btn.getBoundingClientRect()
+    const shellRect = shell.getBoundingClientRect()
+    const PICKER_W = 360
+    const PICKER_H = 440
+    let left = shellRect.left + (shellRect.width - PICKER_W) / 2
+    left = Math.max(12, Math.min(left, window.innerWidth - PICKER_W - 12))
     let top = shellRect.top - PICKER_H - 8
     if (top < 12) top = btnRect.bottom + 8
     top = Math.max(12, Math.min(top, window.innerHeight - PICKER_H - 12))
@@ -150,14 +205,22 @@ export default function Composer({
       setEmojiPos(null)
       return
     }
+    setGifOpen(false)
+    setGifPos(null)
     setEmojiOpen(true)
   }, [emojiOpen])
 
-  /* Calculate emojiPos AFTER the CSS transition on the spacer has begun.
-   * Two rAFs guarantee the layout flush (first frame after class change)
-   * AND the start of the transition (second frame). Without this, the
-   * picker appears overlapping the chat feed because getBoundingClientRect
-   * returns the pre-transition position. */
+  const toggleGif = useCallback(() => {
+    if (gifOpen) {
+      setGifOpen(false)
+      setGifPos(null)
+      return
+    }
+    setEmojiOpen(false)
+    setEmojiPos(null)
+    setGifOpen(true)
+  }, [gifOpen])
+
   useEffect(() => {
     if (!emojiOpen) {
       setEmojiPos(null)
@@ -175,8 +238,23 @@ export default function Composer({
     }
   }, [emojiOpen, computeEmojiPos])
 
-  /* Reposition the picker portal on scroll/resize so it stays glued to
-   * the composer even when the chat scrolls or the window resizes. */
+  useEffect(() => {
+    if (!gifOpen) {
+      setGifPos(null)
+      return undefined
+    }
+    let raf2
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        setGifPos(computeGifPos())
+      })
+    })
+    return () => {
+      cancelAnimationFrame(raf1)
+      if (raf2) cancelAnimationFrame(raf2)
+    }
+  }, [gifOpen, computeGifPos])
+
   useEffect(() => {
     if (!emojiOpen) return undefined
     const handler = () => setEmojiPos(computeEmojiPos())
@@ -187,6 +265,17 @@ export default function Composer({
       window.removeEventListener('scroll', handler, true)
     }
   }, [emojiOpen, computeEmojiPos])
+
+  useEffect(() => {
+    if (!gifOpen) return undefined
+    const handler = () => setGifPos(computeGifPos())
+    window.addEventListener('resize', handler)
+    window.addEventListener('scroll', handler, true)
+    return () => {
+      window.removeEventListener('resize', handler)
+      window.removeEventListener('scroll', handler, true)
+    }
+  }, [gifOpen, computeGifPos])
 
   /* Compute the popover anchor from the textarea caret position. We
    * use a simple bounding rect approach: the caret's column is the X
@@ -308,22 +397,24 @@ export default function Composer({
   const submit = useCallback(async () => {
     if (disabled || sending) return
     const trimmed = text.trim()
-    if (!trimmed && !attachment) return
+    if (!trimmed && attachments.length === 0) return
 
     const payload = {
       text: trimmed,
-      attachment,
-      replyToId: replyTo?.id || null,
+      attachments,
+      attachment: attachments[0] || null,
+      replyToId: replyTo?.id || replyTo?.firestoreId || null,
     }
     const prevText = text
-    const prevAttachment = attachment
+    const prevAttachments = attachments
 
-    // Clear immediately — don't wait for network round-trip.
+    // Clear composer immediately — don't wait for network round-trip.
+    // Keep reply chip until send succeeds so a failed send can restore it.
     setText('')
-    setAttachment(null)
+    setAttachments([])
+    setAttachIndex(0)
     setSizeError(null)
     setMention(null)
-    onCancelReply?.()
     requestAnimationFrame(() => {
       if (taRef.current) {
         taRef.current.style.height = 'auto'
@@ -336,15 +427,18 @@ export default function Composer({
       const ok = await onSubmit?.(payload)
       if (ok === false) {
         setText(prevText)
-        setAttachment(prevAttachment)
+        setAttachments(prevAttachments)
+      } else {
+        prevAttachments.forEach(revokeAtt)
+        onCancelReply?.()
       }
     } catch {
       setText(prevText)
-      setAttachment(prevAttachment)
+      setAttachments(prevAttachments)
     } finally {
       setSending(false)
     }
-  }, [text, attachment, disabled, sending, onSubmit, replyTo, onCancelReply])
+  }, [text, attachments, disabled, sending, onSubmit, replyTo, onCancelReply])
 
   const handleKey = (e) => {
     // Popover open? Then ↑/↓/Enter/Escape are owned by it.
@@ -387,12 +481,29 @@ export default function Composer({
       submit()
       return
     }
+    if (e.key === 'Escape' && gifOpen) {
+      e.preventDefault()
+      setGifOpen(false)
+      setGifPos(null)
+      return
+    }
+    if (e.key === 'Escape' && emojiOpen) {
+      e.preventDefault()
+      setEmojiOpen(false)
+      setEmojiPos(null)
+      return
+    }
+    if (e.key === 'Escape' && attachments.length) {
+      e.preventDefault()
+      clearAttachments()
+      return
+    }
     if (e.key === 'Escape' && replyTo) {
       e.preventDefault()
       onCancelReply?.()
       return
     }
-    if (e.key === 'ArrowUp' && text.length === 0 && !sending && !attachment) {
+    if (e.key === 'ArrowUp' && text.length === 0 && !sending && attachments.length === 0) {
       e.preventDefault()
       if (onArrowUpEditLast) onArrowUpEditLast()
     }
@@ -408,61 +519,139 @@ export default function Composer({
     imageInputRef.current?.click()
   }
 
-  const ingestFile = useCallback(async (file) => {
-    if (!file) return
+  const ingestFiles = useCallback((fileList) => {
+    const files = Array.from(fileList || []).filter(Boolean)
+    if (!files.length) return
     setSizeError(null)
-    const isImage = file.type.startsWith('image/')
-    const limit = isImage ? MAX_IMAGE_BYTES : MAX_FILE_BYTES
-    if (file.size > limit) {
-      const mb = (limit / 1024 / 1024).toFixed(0)
-      setSizeError(`${isImage ? 'imagem' : 'arquivo'} maior que ${mb}MB`)
-      return
-    }
-    try {
-      const dataUrl = isImage ? await readFileAsDataUrl(file) : null
-      setAttachment({
+
+    const limitMax = Number(MAX_ATTACHMENTS) > 0 ? Number(MAX_ATTACHMENTS) : ATTACH_CAP
+    const built = []
+    for (const file of files) {
+      const isImage = (file.type && String(file.type).startsWith('image/'))
+        || /\.(jpe?g|png|gif|webp|bmp|svg)$/i.test(file.name || '')
+      const limit = isImage ? MAX_IMAGE_BYTES : MAX_FILE_BYTES
+      if (file.size > limit) {
+        const mb = (limit / 1024 / 1024).toFixed(0)
+        setSizeError(`${isImage ? 'imagem' : 'arquivo'} maior que ${mb}MB`)
+        continue
+      }
+      let previewUrl = null
+      if (isImage) {
+        try { previewUrl = URL.createObjectURL(file) } catch {
+          setSizeError('falha ao ler a imagem')
+          continue
+        }
+      }
+      built.push({
         file,
-        dataUrl,
-        type: file.type || 'application/octet-stream',
+        previewUrl,
+        dataUrl: null,
+        type: file.type || (isImage ? 'image/jpeg' : 'application/octet-stream'),
         name: file.name || 'anexo',
         size: file.size,
         kind: isImage ? 'image' : 'file',
       })
-    } catch {
-      setSizeError('falha ao ler o arquivo')
     }
+    if (!built.length) return
+
+    setAttachments((prev) => {
+      const room = Math.max(0, limitMax - prev.length)
+      if (room <= 0) {
+        built.forEach(revokeAtt)
+        setSizeError(`máximo de ${limitMax} anexos`)
+        return prev
+      }
+      const take = built.slice(0, room)
+      built.slice(room).forEach(revokeAtt)
+      if (built.length > room) setSizeError(`máximo de ${limitMax} anexos`)
+      const start = prev.length
+      queueMicrotask(() => setAttachIndex(start))
+      return [...prev, ...take]
+    })
   }, [])
 
-  const handleFile = async (e) => {
-    const file = e.target.files?.[0]
-    e.target.value = ''
+  const pickGiphyGif = useCallback((gif) => {
+    if (!gif?.url) return
+    const limitMax = Number(MAX_ATTACHMENTS) > 0 ? Number(MAX_ATTACHMENTS) : ATTACH_CAP
+    const isSticker = gif.variant === 'sticker'
+    const lower = String(gif.url).toLowerCase()
+    const type = lower.includes('.webp')
+      ? 'image/webp'
+      : (lower.includes('.png') ? 'image/png' : 'image/gif')
+    const label = isSticker ? 'sticker' : 'gif'
+    const next = {
+      file: null,
+      url: gif.url,
+      previewUrl: gif.preview || gif.url,
+      dataUrl: null,
+      type,
+      name: `${String(gif.title || label).slice(0, 64)}.${type === 'image/webp' ? 'webp' : (type === 'image/png' ? 'png' : 'gif')}`,
+      size: 0,
+      kind: 'image',
+      sticker: isSticker,
+    }
+    setSizeError(null)
+    setAttachments((prev) => {
+      if (prev.length >= limitMax) {
+        setSizeError(`máximo de ${limitMax} anexos`)
+        return prev
+      }
+      const start = prev.length
+      queueMicrotask(() => setAttachIndex(start))
+      return [...prev, next]
+    })
+    setGifOpen(false)
+    setGifPos(null)
+  }, [])
+
+  const pickGifFile = useCallback((file) => {
     if (!file) return
-    await ingestFile(file)
+    ingestFiles([file])
+    setGifOpen(false)
+    setGifPos(null)
+  }, [ingestFiles])
+
+  const handleFile = (e) => {
+    // Copy FileList BEFORE clearing the input — Chromium/Electron may
+    // empty the live FileList when value is reset.
+    const files = Array.from(e.target.files || [])
+    e.target.value = ''
+    if (!files.length) return
+    ingestFiles(files)
   }
 
-  /* Ctrl+V of images */
+  const removeAttachmentAt = useCallback((idx) => {
+    setAttachments((prev) => {
+      const target = prev[idx]
+      revokeAtt(target)
+      const next = prev.filter((_, i) => i !== idx)
+      setAttachIndex((cur) => {
+        if (!next.length) return 0
+        if (cur > idx) return cur - 1
+        if (cur >= next.length) return next.length - 1
+        return cur
+      })
+      return next
+    })
+  }, [])
+
   const handlePaste = useCallback(async (e) => {
     if (disabled) return
     const items = e.clipboardData?.items
     if (!items || items.length === 0) return
+    const files = []
     for (let i = 0; i < items.length; i++) {
       const it = items[i]
       if (it.kind === 'file' && it.type?.startsWith('image/')) {
         const file = it.getAsFile?.()
-        if (file) {
-          e.preventDefault()
-          await ingestFile(file)
-          // Keep the pasted text (if any) flowing into the textarea normally
-          // by NOT calling preventDefault for non-image kinds — but our loop
-          // only stops at the first image. If there's also text, the default
-          // behavior continues and the textarea receives it. We DO call
-          // preventDefault to avoid the browser inserting a "filename" for
-          // the image (Discord-style behavior).
-          break
-        }
+        if (file) files.push(file)
       }
     }
-  }, [disabled, ingestFile])
+    if (files.length) {
+      e.preventDefault()
+      await ingestFiles(files)
+    }
+  }, [disabled, ingestFiles])
 
   /* Drag-and-drop overlay (CONTRATO_FASE2) — visual hint while the user
    * drags a file over the composer. We do not capture the actual drop
@@ -478,42 +667,66 @@ export default function Composer({
   const handleDragLeave = useCallback(() => setDragOver(false), [])
   const handleDrop = useCallback((e) => {
     if (disabled) return
-    const file = e.dataTransfer?.files?.[0]
-    if (!file) { setDragOver(false); return }
+    const list = e.dataTransfer?.files
+    if (!list?.length) { setDragOver(false); return }
     e.preventDefault()
     setDragOver(false)
-    ingestFile(file)
-  }, [disabled, ingestFile])
+    ingestFiles(list)
+  }, [disabled, ingestFiles])
 
-  const canSend = !disabled && !sending && (text.trim().length > 0 || attachment)
+  const canSend = !disabled && !sending && (text.trim().length > 0 || attachments.length > 0)
+  const imageAttachments = attachments.filter((a) => a.kind === 'image' || String(a.type || '').startsWith('image/'))
+  const fileAttachments = attachments.filter((a) => !(a.kind === 'image' || String(a.type || '').startsWith('image/')))
+  const showAttachDock = !!replyTo || fileAttachments.length > 0 || !!sizeError
 
   return (
     <div
       className={`relative z-20 shrink-0 vc-composer-shell ${className} ${
-        emojiOpen ? 'vc-composer-shell--picker-open' : ''
+        emojiOpen || gifOpen ? 'vc-composer-shell--picker-open' : ''
       }`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {/* Reserved space for the emoji picker — always rendered so the chat
-          smoothly grows/shrinks as the picker opens/closes. The picker
-          itself is rendered via portal above the composer (absolute position
-          via getBoundingClientRect of the row below), so this spacer is what
-          physically pushes the chat feed upward when emojiOpen = true. */}
       <div
         aria-hidden
         className="vc-composer-picker-spacer"
       />
 
-      <div
-        ref={composerShellRef}
-        className="flex items-end gap-3 px-4 sm:px-6 pt-2 pb-4"
-      >
-        <div className="flex-1 min-w-0">
+      {imageAttachments.length > 0 && (
+        <AttachPreviewModal
+          attachments={imageAttachments}
+          index={Math.min(attachIndex, imageAttachments.length - 1)}
+          onIndexChange={setAttachIndex}
+          accent={accent}
+          sending={sending}
+          maxCount={ATTACH_CAP}
+          onCancel={clearAttachments}
+          onSend={submit}
+          onAddMore={pickImage}
+          onRemoveAt={(idxInImages) => {
+            // Map image-only index back to full attachments list
+            const target = imageAttachments[idxInImages]
+            const fullIdx = attachments.findIndex((a) => a === target)
+            if (fullIdx >= 0) removeAttachmentAt(fullIdx)
+            else removeAttachmentAt(idxInImages)
+          }}
+        />
+      )}
+
+      {/* Reply / non-image file chip above the input pill. Images use the modal. */}
+      {showAttachDock && (
+        <div className="vc-composer-attach-dock" data-vc-attach-dock="above">
           {replyTo && (
-            <div className="mb-2 flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-surface1 border border-line">
+            <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-surface1 border border-line">
               <CornerUpLeft size={12} className="text-accent shrink-0" strokeWidth={2} />
+              {!replyTo.deleted && isImageAttachment(replyTo.attachment) && (replyTo.attachment.url || replyTo.attachment.dataUrl) ? (
+                <img
+                  src={replyTo.attachment.url || replyTo.attachment.dataUrl}
+                  alt=""
+                  className="h-8 w-8 rounded-lg object-cover bg-black/30 border border-line shrink-0"
+                />
+              ) : null}
               <div className="flex-1 min-w-0">
                 <p className="text-[10.5px] text-accent font-semibold">
                   respondendo a {replyTo.authorHandle ? `@${replyTo.authorHandle}` : (replyTo.author || 'peer')}
@@ -521,7 +734,9 @@ export default function Composer({
                 <p className="text-[11px] text-muted truncate">
                   {replyTo.deleted
                     ? 'mensagem apagada'
-                    : (replyTo.text || (isImageAttachment(replyTo.attachment) ? '' : replyTo.attachment?.name) || '')}
+                    : (replyTo.text
+                      || (isImageAttachment(replyTo.attachment) ? 'imagem' : replyTo.attachment?.name)
+                      || '')}
                 </p>
               </div>
               <button
@@ -536,77 +751,84 @@ export default function Composer({
             </div>
           )}
 
-          {attachment && (
-            <div className="mb-2 flex items-center gap-2">
-              {attachment.kind === 'image' && attachment.dataUrl ? (
-                <div className="relative">
-                  <img
-                    src={attachment.dataUrl}
-                    alt=""
-                    className="h-16 w-16 rounded-xl object-cover bg-black/30 border border-line"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setAttachment(null)}
-                    aria-label="Remover imagem"
-                    className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-surface1 border border-line flex items-center justify-center text-muted hover:text-danger hover:bg-danger/15"
-                    title="Remover"
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-surface1 border border-line flex-1 min-w-0">
-                  <span className="h-11 w-11 rounded-lg bg-accent/15 text-accent flex items-center justify-center shrink-0">
-                    <FileText size={16} strokeWidth={1.8} />
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[12px] font-medium text-strong truncate">{attachment.name}</p>
-                    <p className="text-[10px] text-muted">{formatBytes(attachment.size)}</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setAttachment(null)}
-                    aria-label="Remover anexo"
-                    className="w-7 h-7 rounded-md flex items-center justify-center text-muted hover:text-danger hover:bg-danger/15 transition-colors shrink-0"
-                    title="Remover"
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
-              )}
+          {fileAttachments.map((fileAttachment, i) => (
+            <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-surface1 border border-line max-w-md">
+              <span className="h-11 w-11 rounded-lg bg-accent/15 text-accent flex items-center justify-center shrink-0">
+                <FileText size={16} strokeWidth={1.8} />
+              </span>
+              <div className="flex-1 min-w-0">
+                <p className="text-[12px] font-medium text-strong truncate">{fileAttachment.name}</p>
+                <p className="text-[10px] text-muted">{formatBytes(fileAttachment.size)}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const fullIdx = attachments.findIndex((a) => a === fileAttachment)
+                  removeAttachmentAt(fullIdx >= 0 ? fullIdx : i)
+                }}
+                aria-label="Remover anexo"
+                className="w-7 h-7 rounded-md flex items-center justify-center text-muted hover:text-danger hover:bg-danger/15 transition-colors shrink-0"
+                title="Remover"
+              >
+                <X size={14} />
+              </button>
             </div>
-          )}
+          ))}
 
           {sizeError && (
-            <p className="mb-1.5 px-1 text-[11px] text-danger">{sizeError}</p>
+            <p className="px-1 text-[11px] text-danger">{sizeError}</p>
           )}
+        </div>
+      )}
 
-          {emojiOpen && emojiPos && typeof document !== 'undefined' && createPortal(
-            <div
-              ref={emojiRef}
-              className="fixed z-[80] vc-emoji-panel-portal"
-              style={{ top: emojiPos.top, left: emojiPos.left }}
-              role="dialog"
-              aria-label="Seletor de emoji"
-              data-vc-emoji="v4-portal"
-              onWheel={(e) => e.stopPropagation()}
-            >
-              <EmojiPicker
-                onPick={(em) => {
-                  insertEmoji(em)
-                  setEmojiOpen(false)
-                  setEmojiPos(null)
-                }}
-              />
-            </div>,
-            document.body
-          )}
-
+      <div
+        ref={composerShellRef}
+        className="px-4 sm:px-6 pt-2 pb-4"
+      >
+        {emojiOpen && emojiPos && typeof document !== 'undefined' && createPortal(
           <div
-            className="vc-composer-pill flex items-center gap-1 pl-2.5 pr-2 py-2 rounded-full min-h-[52px] relative"
-            style={accent ? { '--composer-accent': accent } : undefined}
+            ref={emojiRef}
+            className="fixed z-[80] vc-emoji-panel-portal"
+            style={{ top: emojiPos.top, left: emojiPos.left }}
+            role="dialog"
+            aria-label="Seletor de emoji"
+            data-vc-emoji="v4-portal"
+            onWheel={(e) => e.stopPropagation()}
           >
+            <EmojiPicker
+              onPick={(em) => {
+                insertEmoji(em)
+                setEmojiOpen(false)
+                setEmojiPos(null)
+              }}
+            />
+          </div>,
+          document.body
+        )}
+
+        {gifOpen && gifPos && typeof document !== 'undefined' && createPortal(
+          <div
+            ref={gifRef}
+            className="fixed z-[80] vc-emoji-panel-portal"
+            style={{ top: gifPos.top, left: gifPos.left }}
+            role="dialog"
+            aria-label="Seletor de GIF"
+            data-vc-gif="portal"
+            onWheel={(e) => e.stopPropagation()}
+          >
+            <GifPicker
+              accent={accent}
+              onPick={pickGiphyGif}
+              onPickFile={pickGifFile}
+            />
+          </div>,
+          document.body
+        )}
+
+        <div
+          className="vc-composer-pill flex items-center gap-1 pl-2.5 pr-2 py-2 rounded-full min-h-[52px] relative"
+          style={accent ? { '--composer-accent': accent } : undefined}
+        >
             {/* Left: + only (anexar) */}
             <button
               type="button"
@@ -622,6 +844,7 @@ export default function Composer({
               ref={fileInputRef}
               type="file"
               accept={FILE_ACCEPT}
+              multiple
               className="hidden"
               onChange={handleFile}
             />
@@ -629,6 +852,7 @@ export default function Composer({
               ref={imageInputRef}
               type="file"
               accept={IMAGE_ACCEPT}
+              multiple
               className="hidden"
               onChange={handleFile}
             />
@@ -656,7 +880,7 @@ export default function Composer({
                 className="w-full resize-none bg-transparent text-[14px] text-strong focus:outline-none leading-[1.45] px-2 py-2 overflow-y-auto"
                 style={{ maxHeight: TEXTAREA_MAX_PX }}
               />
-              {!text && !attachment && (
+              {!text && attachments.length === 0 && (
                 <div className="pointer-events-none absolute inset-0 flex items-center px-2 py-2 text-[14px] leading-[1.45] truncate vc-composer-placeholder">
                   {channelName ? (
                     <span>Conversar em #{channelName.toLowerCase().replace(/\s+/g, '-')}…</span>
@@ -670,12 +894,17 @@ export default function Composer({
             {/* Right utilities: GIF · image · emoji */}
             <div className="flex items-center gap-0.5 shrink-0 self-center">
               <button
+                ref={gifBtnRef}
                 type="button"
-                onClick={() => flashToast('GIFs em breve')}
+                onClick={toggleGif}
                 disabled={disabled}
-                className="vc-composer-icon vc-composer-gif h-8 px-1.5 rounded-md flex items-center justify-center shrink-0 disabled:opacity-40"
+                className={
+                  'vc-composer-icon vc-composer-gif h-8 px-1.5 rounded-md flex items-center justify-center shrink-0 disabled:opacity-40 ' +
+                  (gifOpen ? 'is-active' : '')
+                }
                 title="GIF"
                 aria-label="Inserir GIF"
+                aria-expanded={gifOpen}
               >
                 <span className="vc-composer-gif-label">GIF</span>
               </button>
@@ -715,7 +944,6 @@ export default function Composer({
             >
               <Send size={16} strokeWidth={2.4} className="vc-composer-send-icon" />
             </button>
-          </div>
         </div>
       </div>
 

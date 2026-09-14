@@ -15,6 +15,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  getDocFromServer,
   limit,
   onSnapshot,
   orderBy,
@@ -84,6 +85,14 @@ function membersCol(spaceId) {
 
 function roomsCol(spaceId) {
   return collection(db, VC.spaces, spaceId, 'rooms')
+}
+
+function eventRsvpsCol(spaceId) {
+  return collection(db, VC.spaces, spaceId, 'event_rsvps')
+}
+
+function eventRsvpRef(spaceId, eventId, userId) {
+  return doc(db, VC.spaces, spaceId, 'event_rsvps', `${eventId}_${userId}`)
 }
 
 function roomRef(spaceId, roomId) {
@@ -211,6 +220,7 @@ function toSpaceSummary(id, data = {}, joined = true) {
     fonts: Array.isArray(data.fonts) ? data.fonts : [],
     memberCount: Array.isArray(data.memberIds) ? data.memberIds.length : 0,
     roomCount: Number(data.roomCount) || 0,
+    events: Array.isArray(data.events) ? data.events : [],
     joined,
     createdBy: data.createdBy || null,
     chatAutomation: data.chatAutomation && typeof data.chatAutomation === 'object'
@@ -249,6 +259,8 @@ export class SignalingClient {
     this._spaceCache = null
     /** Cache of every recently visited Space, keyed by id. */
     this._spaceCacheById = new Map()
+    /** Last joined-spaces summary from Firestore (for late subscribers). */
+    this._spacesList = null
 
     this.peerJoinedCallback = null
     this.peerLeftCallback = null
@@ -317,7 +329,23 @@ export class SignalingClient {
     this._spaceCache = null
   }
 
-  onSpaceChanged(fn)      { return this._subscribe('spaceChanged', fn) }
+  onSpaceChanged(fn) {
+    if (typeof fn !== 'function') return () => {}
+    const off = this._subscribe('spaceChanged', fn)
+    // Replay last list so subscribers that mount after boot/connect
+    // don't miss the first Firestore snapshot.
+    if (Array.isArray(this._spacesList)) {
+      try {
+        fn({
+          spaces: this._spacesList,
+          currentSpace: this._spaceCache || null,
+        })
+      } catch (e) {
+        console.error('[spaceChanged replay]', e)
+      }
+    }
+    return off
+  }
   onMemberJoined(fn)      { return this._subscribe('memberJoined', fn) }
   onMemberLeft(fn)        { return this._subscribe('memberLeft', fn) }
   onRoomChanged(fn)       { return this._subscribe('roomChanged', fn) }
@@ -492,6 +520,7 @@ export class SignalingClient {
     const q = query(collection(db, VC.spaces), where('memberIds', 'array-contains', this.userId))
     const off = onSnapshot(q, (snap) => {
       const spaces = snap.docs.map((d) => toSpaceSummary(d.id, d.data(), true))
+      this._spacesList = spaces
       this._emit('spaceChanged', {
         spaces,
         currentSpace: this._spaceCache,
@@ -897,18 +926,23 @@ export class SignalingClient {
 
   async listPublicSpaces({ query: search = '', limit: max = 48 } = {}) {
     if (!this.userId) throw new Error('não autenticado')
+    // Fetch ALL spaces and filter by visibility on the client so we don't
+    // miss older spaces that never had the `visibility` field written.
+    // Firestore `where('visibility', '==', 'public')` would skip those
+    // because Firestore doesn't apply the JS default ('public').
     const q = query(
       collection(db, VC.spaces),
-      where('visibility', '==', 'public'),
       limit(Math.min(Math.max(Number(max) || 48, 1), 100)),
     )
     const snap = await getDocs(q)
     const needle = String(search || '').trim().toLowerCase()
-    const spaces = snap.docs.map((d) => {
-      const data = d.data() || {}
-      const memberIds = Array.isArray(data.memberIds) ? data.memberIds : []
-      return toSpaceSummary(d.id, data, memberIds.includes(this.userId))
-    })
+    const spaces = snap.docs
+      .map((d) => {
+        const data = d.data() || {}
+        const memberIds = Array.isArray(data.memberIds) ? data.memberIds : []
+        return toSpaceSummary(d.id, data, memberIds.includes(this.userId))
+      })
+      .filter((s) => s.visibility === 'public')
     if (!needle) return spaces
     return spaces.filter((s) => {
       const hay = `${s.name} ${s.description}`.toLowerCase()
@@ -1250,6 +1284,367 @@ export class SignalingClient {
     return next
   }
 
+  // RSVP for a Space event. Each user has at most one RSVP per event,
+  // stored as a single doc at event_rsvps/{eventId}_{userId}.
+  async setEventRsvp(spaceId, eventId, status, profile = null) {
+    if (!spaceId || !eventId) throw new Error('spaceId e eventId são obrigatórios')
+    if (!this.userId) throw new Error('não autenticado')
+    const allowed = ['going', 'not_going']
+    if (!allowed.includes(status)) throw new Error('status inválido')
+    const ref = eventRsvpRef(spaceId, eventId, this.userId)
+    const displayName = profile?.displayName || this.displayName || ''
+    const photoURL = profile?.photoURL || ''
+    await setDoc(ref, {
+      eventId,
+      userId: this.userId,
+      status,
+      displayName,
+      photoURL,
+      at: Date.now(),
+    }, { merge: true })
+  }
+
+  async clearEventRsvp(spaceId, eventId) {
+    if (!spaceId || !eventId || !this.userId) return
+    const ref = eventRsvpRef(spaceId, eventId, this.userId)
+    await deleteDoc(ref).catch(() => {})
+  }
+
+  // Subscribe to RSVP changes for a Space. Returns an unsubscribe fn.
+  // cb receives a normalized list of RSVPs.
+  listenEventRsvps(spaceId, cb) {
+    if (!spaceId || typeof cb !== 'function') return () => {}
+    const q = query(eventRsvpsCol(spaceId))
+    const off = onSnapshot(q, (snap) => {
+      const list = snap.docs.map((d) => {
+        const data = d.data() || {}
+        return {
+          id: d.id,
+          eventId: data.eventId || '',
+          userId: data.userId || '',
+          status: data.status === 'not_going' ? 'not_going' : 'going',
+          displayName: data.displayName || '',
+          photoURL: data.photoURL || '',
+          at: data.at || 0,
+        }
+      })
+      cb(list)
+    }, () => {
+      // Silent: surface errors only via callback if caller cares.
+      cb([])
+    })
+    return off
+  }
+
+  // ---------- Friend requests ----------
+  //
+  // Stored in vc_friend_requests/{autoId}. Documents are normalized:
+  //   { fromUserId, toUserId, status, createdAt, respondedAt }
+  // status: 'pending' | 'accepted' | 'ignored'
+  // Rules (firestore.rules) ensure only sender/receiver can read/write.
+
+  /** Returns deterministic id from two uids so the same pair only has one request. */
+  _friendReqId(fromUid, toUid) {
+    return [fromUid, toUid].sort().join('__')
+  }
+
+  async _findExistingFriendRequest(fromUid, toUid) {
+    const id = this._friendReqId(fromUid, toUid)
+    try {
+      const ref = doc(db, VC.friendRequests, id)
+      const snap = await getDoc(ref)
+      return snap.exists() ? { id, ...snap.data() } : null
+    } catch {
+      return null
+    }
+  }
+
+  /** Send a friend request from current user to toUserId. Idempotent. */
+  async sendFriendRequest(toUserId, profile = null) {
+    if (!this.userId) throw new Error('não autenticado')
+    if (!toUserId || toUserId === this.userId) throw new Error('destinatário inválido')
+    const id = this._friendReqId(this.userId, toUserId)
+    // eslint-disable-next-line no-console
+    console.debug('[FriendRequest] send', { from: this.userId, to: toUserId, id })
+    const existing = await this._findExistingFriendRequest(this.userId, toUserId)
+    const data = {
+      fromUserId: this.userId,
+      toUserId,
+      status: 'pending',
+      createdAt: Date.now(),
+      fromDisplayName: profile?.displayName || this.displayName || '',
+      fromPhotoURL: profile?.photoURL || '',
+    }
+    if (existing) {
+      // Resurrect if previously ignored — sender can re-request.
+      if (existing.status === 'ignored') {
+        await updateDoc(doc(db, VC.friendRequests, id), {
+          ...data,
+          status: 'pending',
+          respondedAt: null,
+        })
+      }
+      return { id, ...data }
+    }
+    await setDoc(doc(db, VC.friendRequests, id), data)
+    // eslint-disable-next-line no-console
+    console.debug('[FriendRequest] created doc', id)
+    return { id, ...data }
+  }
+
+  /** Receiver accepts an incoming request. */
+  async acceptFriendRequest(requestId) {
+    if (!this.userId || !requestId) throw new Error('argumentos inválidos')
+    await updateDoc(doc(db, VC.friendRequests, requestId), {
+      status: 'accepted',
+      respondedAt: Date.now(),
+    })
+  }
+
+  /** Receiver ignores an incoming request. */
+  async ignoreFriendRequest(requestId) {
+    if (!this.userId || !requestId) throw new Error('argumentos inválidos')
+    await updateDoc(doc(db, VC.friendRequests, requestId), {
+      status: 'ignored',
+      respondedAt: Date.now(),
+    })
+  }
+
+  /** Either party removes the friendship / cancels the request. */
+  async removeFriend(requestId) {
+    if (!requestId) return
+    await deleteDoc(doc(db, VC.friendRequests, requestId)).catch(() => {})
+  }
+
+  /**
+   * Subscribe to friend requests involving the current user.
+   * Uses two filtered queries (fromUserId / toUserId) — an unfiltered
+   * collection listen is rejected by Firestore security rules.
+   */
+  listenFriendRequests(cb) {
+    if (typeof cb !== 'function') return () => {}
+    if (!this.userId) {
+      cb({ incoming: [], outgoing: [], friends: [] })
+      return () => {}
+    }
+    const me = this.userId
+    const col = collection(db, VC.friendRequests)
+    const qFrom = query(col, where('fromUserId', '==', me), limit(100))
+    const qTo = query(col, where('toUserId', '==', me), limit(100))
+
+    const byId = new Map()
+    let fromReady = false
+    let toReady = false
+    let fromIds = new Set()
+    let toIds = new Set()
+
+    const emit = () => {
+      if (!fromReady || !toReady) return
+      const incoming = []
+      const outgoing = []
+      const friends = []
+      for (const [id, data] of byId) {
+        const fromUid = data.fromUserId
+        const toUid = data.toUserId
+        if (!fromUid || !toUid) continue
+        if (fromUid !== me && toUid !== me) continue
+        const status = data.status === 'accepted' || data.status === 'ignored'
+          ? data.status
+          : 'pending'
+        const otherUserId = fromUid === me ? toUid : fromUid
+        const normalized = {
+          id,
+          status,
+          fromUserId: fromUid,
+          toUserId: toUid,
+          otherUserId,
+          createdAt: data.createdAt || 0,
+          respondedAt: data.respondedAt || 0,
+          fromDisplayName: data.fromDisplayName || '',
+          toDisplayName: data.toDisplayName || '',
+          fromPhotoURL: data.fromPhotoURL || '',
+        }
+        if (status === 'accepted') friends.push(normalized)
+        else if (status === 'ignored') continue
+        else if (toUid === me) incoming.push(normalized)
+        else outgoing.push(normalized)
+      }
+      incoming.sort((a, b) => b.createdAt - a.createdAt)
+      outgoing.sort((a, b) => b.createdAt - a.createdAt)
+      friends.sort((a, b) => (b.respondedAt || b.createdAt) - (a.respondedAt || a.createdAt))
+      cb({ incoming, outgoing, friends })
+    }
+
+    const offFrom = onSnapshot(qFrom, (snap) => {
+      const next = new Set()
+      for (const d of snap.docs) {
+        next.add(d.id)
+        byId.set(d.id, d.data() || {})
+      }
+      for (const id of fromIds) {
+        if (!next.has(id) && !toIds.has(id)) byId.delete(id)
+      }
+      fromIds = next
+      fromReady = true
+      emit()
+    }, (err) => {
+      console.warn('[FriendRequest] from listener error', err?.message || err)
+      fromReady = true
+      emit()
+    })
+
+    const offTo = onSnapshot(qTo, (snap) => {
+      const next = new Set()
+      for (const d of snap.docs) {
+        next.add(d.id)
+        byId.set(d.id, d.data() || {})
+      }
+      for (const id of toIds) {
+        if (!next.has(id) && !fromIds.has(id)) byId.delete(id)
+      }
+      toIds = next
+      toReady = true
+      emit()
+    }, (err) => {
+      console.warn('[FriendRequest] to listener error', err?.message || err)
+      toReady = true
+      emit()
+    })
+
+    return () => {
+      try { offFrom() } catch {}
+      try { offTo() } catch {}
+    }
+  }
+
+  /**
+   * Fetch a public user profile by uid.
+   * Prefer server when `fresh` so cosmetic updates (cover/photo) aren't
+   * briefly overwritten by a stale Firestore persistence cache.
+   */
+  async getUserProfile(uid, { fresh = false } = {}) {
+    if (!uid) return null
+    try {
+      const ref = doc(db, VC.users, uid)
+      let snap
+      if (fresh) {
+        try {
+          snap = await getDocFromServer(ref)
+        } catch {
+          snap = await getDoc(ref)
+        }
+      } else {
+        snap = await getDoc(ref)
+      }
+      if (!snap.exists()) return null
+      const data = snap.data() || {}
+      return {
+        uid,
+        displayName: data.displayName || '',
+        photoURL: data.photoURL || '',
+        handle: data.handle || '',
+        cardThemeId: data.cardThemeId || 'default',
+        bio: data.bio || '',
+        bannerHue: data.bannerHue || 340,
+        cover: data.cover || '',
+        coverFit: data.coverFit || null,
+      }
+    } catch {
+      return null
+    }
+  }
+
+  /** Live public profile cosmetics (cover / photo / theme). */
+  listenUserProfile(uid, cb) {
+    if (!uid || typeof cb !== 'function') return () => {}
+    const ref = doc(db, VC.users, uid)
+    return onSnapshot(ref, (snap) => {
+      if (!snap.exists()) {
+        cb(null)
+        return
+      }
+      const data = snap.data() || {}
+      cb({
+        uid,
+        displayName: data.displayName || '',
+        photoURL: data.photoURL || '',
+        handle: data.handle || '',
+        cardThemeId: data.cardThemeId || 'default',
+        bio: data.bio || '',
+        bannerHue: data.bannerHue || 340,
+        cover: data.cover || '',
+        coverFit: data.coverFit || null,
+      })
+    }, () => cb(null))
+  }
+
+  /**
+   * Search users by displayName prefix or @handle.
+   * Returns array of profile objects (limit 20).
+   */
+  async searchUsers(term, limitN = 20) {
+    const q = String(term || '').trim().toLowerCase()
+    if (!q) return []
+    try {
+      const lower = q.replace(/^@/, '')
+      const out = []
+      const seen = new Set()
+      // Prefix on displayName (case-sensitive in Firestore).
+      try {
+        const snap = await getDocs(query(
+          collection(db, VC.users),
+          where('displayName', '>=', lower),
+          where('displayName', '<', lower + '\uf8ff'),
+          limit(limitN),
+        ))
+        for (const d of snap.docs) {
+          if (d.id === this.userId) continue
+          if (seen.has(d.id)) continue
+          seen.add(d.id)
+          const data = d.data() || {}
+          out.push({
+            uid: d.id,
+            displayName: data.displayName || '',
+            photoURL: data.photoURL || '',
+            handle: data.handle || '',
+            cardThemeId: data.cardThemeId || 'default',
+            bio: data.bio || '',
+            cover: data.cover || '',
+            coverFit: data.coverFit || null,
+          })
+        }
+      } catch {}
+      // Match on handle (exact, case-insensitive client-side).
+      try {
+        const handleSnap = await getDocs(query(
+          collection(db, VC.users),
+          where('handle', '>=', lower),
+          where('handle', '<', lower + '\uf8ff'),
+          limit(limitN),
+        ))
+        for (const d of handleSnap.docs) {
+          if (d.id === this.userId) continue
+          if (seen.has(d.id)) continue
+          seen.add(d.id)
+          const data = d.data() || {}
+          out.push({
+            uid: d.id,
+            displayName: data.displayName || '',
+            photoURL: data.photoURL || '',
+            handle: data.handle || '',
+            cardThemeId: data.cardThemeId || 'default',
+            bio: data.bio || '',
+            cover: data.cover || '',
+            coverFit: data.coverFit || null,
+          })
+        }
+      } catch {}
+      return out.slice(0, limitN)
+    } catch {
+      return []
+    }
+  }
+
   async createRoom(name, type = 'voice', purpose, cosmetics = {}) {
     if (!this.spaceId) throw new Error('entre num space primeiro')
     this._assertCan('manage_rooms', 'só o criador ou quem tem permissão pode criar salas neste Space')
@@ -1394,26 +1789,37 @@ export class SignalingClient {
 
     this.voiceSpaceId = this.spaceId
     this.roomId = roomId
-    await setDoc(doc(peersCol(this.spaceId, roomId), this.userId), {
-      displayName: this.displayName,
-      photoURL: this._profile.photoURL || '',
-      joinedAt: Date.now(),
-    })
-    await setDoc(memberRef(this.spaceId, this.userId), {
-      location: { spaceId: this.spaceId, roomId },
-    }, { merge: true })
+    await Promise.all([
+      setDoc(doc(peersCol(this.spaceId, roomId), this.userId), {
+        displayName: this.displayName,
+        photoURL: this._profile.photoURL || '',
+        joinedAt: Date.now(),
+      }),
+      setDoc(memberRef(this.spaceId, this.userId), {
+        location: { spaceId: this.spaceId, roomId },
+      }, { merge: true }),
+    ])
     this._updateSpacePresenceRoom()
     this._attachRoomListeners(this.spaceId, roomId)
-    const peersSnap = await getDocs(peersCol(this.spaceId, roomId))
     const room = toRoomView(roomId, snap.data())
-    const peers = peersSnap.docs
-      .filter((d) => d.id !== this.userId)
-      .map((d) => ({
-        userId: d.id,
-        displayName: d.data().displayName || 'convidado',
-        photoURL: d.data().photoURL || '',
-      }))
-    this._emit('roomChanged', { kind: 'entered', room, peers })
+    // Emit early so UI/LiveKit don't wait on peers listing.
+    this._emit('roomChanged', { kind: 'entered', room, peers: [] })
+    let peers = []
+    try {
+      const peersSnap = await getDocs(peersCol(this.spaceId, roomId))
+      peers = peersSnap.docs
+        .filter((d) => d.id !== this.userId)
+        .map((d) => ({
+          userId: d.id,
+          displayName: d.data().displayName || 'convidado',
+          photoURL: d.data().photoURL || '',
+        }))
+      if (peers.length) {
+        this._emit('roomChanged', { kind: 'updated', room, peers })
+      }
+    } catch (err) {
+      console.warn('[enterRoom] peers', err)
+    }
     return { room, peers }
   }
 
@@ -1494,10 +1900,16 @@ export class SignalingClient {
       id,
       authorId: this.userId,
       ts: message.ts || Date.now(),
+      ...(message.replyToId ? { replyToId: String(message.replyToId) } : {}),
     }))
     // Doc id === client message id so edit/delete can target by id.
     await setDoc(doc(messagesCol(this.spaceId, rid), id), clean, { merge: true })
-    const preview = String(clean.text || clean.attachment?.name || 'Anexo').slice(0, 140)
+    const preview = String(
+      clean.text
+      || clean.attachment?.name
+      || (Array.isArray(clean.attachments) && clean.attachments[0]?.name)
+      || 'Anexo'
+    ).slice(0, 140)
     try {
       await updateDoc(roomRef(this.spaceId, rid), {
         lastMessageAt: clean.ts,
@@ -1520,19 +1932,33 @@ export class SignalingClient {
     const rid = roomId || this.roomId
     if (!this.spaceId || !rid || !messageId) return
     const col = messagesCol(this.spaceId, rid)
+    // Clear media fields with both null and deleteField so soft-delete
+    // never leaves orphan attachment payloads in the doc.
     const patch = {
       deleted: true,
       text: '',
+      attachment: null,
+      attachments: [],
       deletedAt: Date.now(),
       deletedBy: this.userId,
       pinned: false,
       pinnedAt: deleteField(),
       pinnedBy: deleteField(),
     }
+    const apply = async (ref) => {
+      await updateDoc(ref, patch)
+      // Best-effort strip of legacy fields (ignore if already gone).
+      try {
+        await updateDoc(ref, {
+          attachment: deleteField(),
+          attachments: deleteField(),
+        })
+      } catch { /* ok */ }
+    }
     const directRef = doc(col, messageId)
     const direct = await getDoc(directRef)
     if (direct.exists()) {
-      await updateDoc(directRef, patch)
+      await apply(directRef)
       return
     }
     const q = query(col, where('id', '==', messageId), limit(1))
@@ -1541,7 +1967,7 @@ export class SignalingClient {
       console.warn('[deleteChatMessage] message not found', messageId)
       return
     }
-    await updateDoc(found.docs[0].ref, patch)
+    await apply(found.docs[0].ref)
   }
 
   /**

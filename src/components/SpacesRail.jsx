@@ -9,10 +9,15 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { motion } from 'framer-motion'
 import { Home, Plus, Sparkles, LogIn } from 'lucide-react'
 import SpaceAvatar from './SpaceAvatar'
 import { AvatarCircle } from '../features/account/components/AccountSidebar'
 import { useNotifications, UnreadDot } from '../features/notifications'
+import { warmLikelyNext } from '../shared/media/useAppWarmup'
+import { warmImage } from '../shared/media/imageWarm'
+import { resolveSpaceCover } from '../features/spaces/model/spaceCover'
+import { Appear, AppearGroup, AppearItem } from '../shared/motion/Appear'
 
 export default function GlobalRail({
   spaces = [],
@@ -85,44 +90,51 @@ export default function GlobalRail({
       className={`${compact ? 'w-14' : 'w-[72px]'} shrink-0 h-full min-h-0 flex flex-col items-center py-2 sm:py-3 gap-1.5 sm:gap-2 bg-rail border-r border-line overflow-visible pb-[max(0.5rem,env(safe-area-inset-bottom))]`}
       aria-label="Spaces"
     >
-      <button
-        type="button"
-        onClick={() => onSelectSpace(null)}
-        title="Início"
-        aria-label="Início"
-        aria-pressed={!currentSpaceId && !accountOpen}
-        className={
-          `relative vc-rail-tile ${tile} rounded-2xl flex items-center justify-center shrink-0 ` +
-          'transition-[transform,background-color,border-radius,box-shadow] duration-200 ' +
-          'hover:scale-[1.08] active:scale-[0.94] ' +
-          (!currentSpaceId && !accountOpen
-            ? 'bg-accent text-white shadow-[0_0_0_2px_var(--space-accent-glow-24)]'
-            : 'bg-surface1 text-ink hover:bg-surface2')
-        }
-      >
-        <Home size={20} strokeWidth={1.75} />
-      </button>
+      <Appear delay={0.02} y={6}>
+        <button
+          type="button"
+          onClick={() => onSelectSpace(null)}
+          title="Início"
+          aria-label="Início"
+          aria-pressed={!currentSpaceId && !accountOpen}
+          className={
+            `relative vc-rail-tile ${tile} rounded-2xl flex items-center justify-center shrink-0 ` +
+            'transition-[transform,background-color,border-radius,box-shadow] duration-200 ' +
+            'hover:scale-[1.08] active:scale-[0.94] ' +
+            (!currentSpaceId && !accountOpen
+              ? 'bg-[#3b82f6] text-white shadow-[0_0_0_2px_rgba(59,130,246,0.35),0_8px_24px_-8px_rgba(59,130,246,0.55)]'
+              : 'bg-surface1 text-ink hover:bg-surface2')
+          }
+        >
+          <Home size={20} strokeWidth={1.75} />
+        </button>
+      </Appear>
 
       {notificationBell ? (
-        <div className="relative shrink-0 flex items-center justify-center w-full px-1 overflow-visible">
+        <Appear delay={0.05} y={6} className="relative shrink-0 flex items-center justify-center w-full px-1 overflow-visible">
           {typeof notificationBell === 'object' && notificationBell?.type
             ? notificationBell
             : notificationBell}
-        </div>
+        </Appear>
       ) : null}
 
       {spaces.length > 0 && (
-        <div className="w-8 h-px my-0.5 bg-line shrink-0" />
+        <Appear delay={0.06} y={0} className="w-8 h-px my-0.5 bg-line shrink-0" />
       )}
 
-      <div className="flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden overscroll-contain flex flex-col items-center gap-0.5 py-1.5">
+      <AppearGroup
+        className="flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden overscroll-contain flex flex-col items-center gap-0.5 py-1.5"
+        stagger={0.035}
+        delayChildren={0.06}
+      >
         {spaces.map((space) => {
           const active = currentSpaceId === space.id
           const isSwitching = switchingSpaceId === space.id
           const unread = unreadBySpace[space.id] || 0
           return (
-            <div
+            <AppearItem
               key={space.id}
+              as={motion.div}
               className="relative shrink-0 p-1"
               onMouseEnter={(e) => {
                 const rect = e.currentTarget.getBoundingClientRect()
@@ -131,6 +143,12 @@ export default function GlobalRail({
                   top: rect.top + rect.height / 2,
                   left: rect.right + 4,
                 })
+                // Silent prefetch — by click time, room shell is already warm.
+                warmLikelyNext('voice')
+                warmLikelyNext('text')
+                warmLikelyNext('people')
+                const cover = resolveSpaceCover(space)
+                if (cover) warmImage(cover)
               }}
               onMouseLeave={() => setHoveredId(null)}
             >
@@ -162,12 +180,12 @@ export default function GlobalRail({
                   </span>
                 )}
               </button>
-            </div>
+            </AppearItem>
           )
         })}
 
         {/* Always sits right under the last Space (Discord-style). */}
-        <div className="relative shrink-0 p-1 mt-0.5">
+        <AppearItem as={motion.div} className="relative shrink-0 p-1 mt-0.5">
           <button
             ref={addBtnRef}
             type="button"
@@ -187,8 +205,8 @@ export default function GlobalRail({
           >
             <Plus size={20} strokeWidth={1.75} />
           </button>
-        </div>
-      </div>
+        </AppearItem>
+      </AppearGroup>
 
       {menuOpen && createPortal(
         <div
@@ -250,7 +268,7 @@ export default function GlobalRail({
       )}
 
       {onOpenAccount && (
-        <div className="shrink-0 mt-auto pb-1 pt-2">
+        <Appear delay={0.12} y={8} className="shrink-0 mt-auto pb-1 pt-2">
           <button
             type="button"
             onClick={onOpenAccount}
@@ -266,7 +284,7 @@ export default function GlobalRail({
           >
             <AvatarCircle src={accountPhoto} name={accountName} size={avatar} className="ring-2 ring-rail" />
           </button>
-        </div>
+        </Appear>
       )}
     </aside>
   )

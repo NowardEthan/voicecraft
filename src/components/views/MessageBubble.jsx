@@ -26,6 +26,7 @@ import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Pin, PinOff, CornerUpLeft, Copy, Check, XCircle, Trash2, Star, SmilePlus,
+  FileText, RotateCcw,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { PersonAvatar } from '../../features/people'
@@ -245,7 +246,11 @@ function MessageActionBar({
       {canDelete && onDelete && (
         <button
           type="button"
-          onClick={() => onDelete(msg.id)}
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            onDelete(msg.id)
+          }}
           className="w-6 h-6 rounded-md flex items-center justify-center text-muted hover:text-danger hover:bg-white/[0.06] transition-colors"
           title="Excluir"
           aria-label="Excluir mensagem"
@@ -329,9 +334,10 @@ function Bubble({ shape, fill, ring, showHeader, children, interactive = false, 
         boxShadow: ring,
         padding: showHeader ? '8px 12px' : '6px 12px',
         color: 'var(--vc-text-strong)',
-        /* max-content prefers a single line; max-w-full caps at the column. */
+        /* Prefer content width, but allow gallery min-width to expand the bubble. */
         width: 'max-content',
         maxWidth: '100%',
+        minWidth: 0,
         overflowWrap: 'break-word',
         wordBreak: 'normal',
       }}
@@ -425,6 +431,23 @@ function ReactionPickerButton({ msg, onToggleReaction }) {
   )
 }
 
+function isImageAttachment(att) {
+  if (!att) return false
+  return att.kind === 'image' || String(att.type || '').startsWith('image/')
+}
+
+function attachmentSrc(att) {
+  if (!att) return null
+  return att.url || att.dataUrl || att.previewUrl || null
+}
+
+function formatBytes(n) {
+  if (!Number.isFinite(n)) return ''
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
 /** Render do texto — markdown ou placeholder de "apagada".          */
 function MessageText({ msg, resolveRoom }) {
   if (msg.deleted) {
@@ -432,6 +455,185 @@ function MessageText({ msg, resolveRoom }) {
   }
   if (!msg.text) return null
   return <Markdown text={msg.text} resolveRoom={resolveRoom} />
+}
+
+function AttachmentBlock({ attachment, attachments, onImageClick, hasText = false }) {
+  const list = Array.isArray(attachments) && attachments.length
+    ? attachments
+    : (attachment ? [attachment] : [])
+  if (!list.length) return null
+
+  const images = list.filter(isImageAttachment)
+  const files = list.filter((a) => !isImageAttachment(a))
+  const gap = hasText ? 'mt-1.5' : ''
+  const imageSrcs = images.map(attachmentSrc).filter(Boolean)
+
+  const openGallery = (startIdx) => {
+    if (!imageSrcs.length) return
+    // Prefer full list order (including any still-uploading slots that have src).
+    const srcs = images.map(attachmentSrc).filter(Boolean)
+    const mapped = Math.min(startIdx, Math.max(0, srcs.length - 1))
+    onImageClick?.(srcs.length ? srcs : imageSrcs, mapped)
+  }
+
+  return (
+    <div className={`${gap} flex flex-col gap-1.5`} style={{ minWidth: images.length > 1 ? 260 : undefined, width: images.length > 1 ? 'min(100%, 340px)' : undefined }}>
+      {images.length === 1 && (
+        attachmentSrc(images[0]) ? (
+          <button
+            type="button"
+            onClick={() => openGallery(0)}
+            className={
+              'block rounded-xl overflow-hidden max-w-[min(100%,560px)] focus:outline-none ' +
+              'focus-visible:ring-2 focus-visible:ring-accent/60 cursor-zoom-in ' +
+              (images[0].sticker ? 'bg-transparent' : '')
+            }
+            title={images[0].sticker ? 'Ampliar sticker' : 'Ampliar imagem'}
+            aria-label={images[0].sticker ? 'Ampliar sticker' : 'Ampliar imagem'}
+          >
+            <img
+              src={attachmentSrc(images[0])}
+              alt={images[0].name || (images[0].sticker ? 'sticker' : 'imagem')}
+              loading="eager"
+              decoding="async"
+              className={
+                images[0].sticker
+                  ? 'max-h-[min(50vh,280px)] w-auto max-w-[min(100%,280px)] object-contain bg-transparent block'
+                  : 'max-h-[min(70vh,520px)] w-auto max-w-full object-contain bg-black/25 block'
+              }
+            />
+          </button>
+        ) : (
+          <div className="text-[12px] text-muted italic">enviando imagem…</div>
+        )
+      )}
+
+      {images.length > 1 && (
+        <div
+          className="vc-msg-gallery grid gap-1 rounded-xl overflow-hidden bg-black/20"
+          style={{
+            width: '100%',
+            gridTemplateColumns: '1fr 1fr',
+            gridAutoRows: images.length === 2 ? '160px' : '120px',
+            ...(images.length === 3 ? { gridTemplateRows: '120px 120px' } : null),
+          }}
+        >
+          {images.slice(0, 4).map((img, i) => {
+            const src = attachmentSrc(img)
+            const extra = images.length > 4 && i === 3 ? images.length - 4 : 0
+            const isTall = images.length === 3 && i === 0
+            return (
+              <button
+                key={i}
+                type="button"
+                onClick={() => src && openGallery(i)}
+                className="relative overflow-hidden bg-black/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 cursor-zoom-in"
+                style={{
+                  gridRow: isTall ? 'span 2' : undefined,
+                  minHeight: isTall ? 248 : 120,
+                }}
+                aria-label={`Ampliar imagem ${i + 1}`}
+              >
+                {src ? (
+                  <img
+                    src={src}
+                    alt={img.name || `imagem ${i + 1}`}
+                    loading="eager"
+                    decoding="async"
+                    className="absolute inset-0 w-full h-full object-cover"
+                  />
+                ) : (
+                  <span className="absolute inset-0 flex items-center justify-center text-[11px] text-muted italic">
+                    …
+                  </span>
+                )}
+                {extra > 0 && (
+                  <span className="absolute inset-0 bg-black/55 flex items-center justify-center text-white text-[18px] font-semibold">
+                    +{extra}
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {files.map((file, i) => {
+        const src = attachmentSrc(file)
+        if (!src) {
+          return (
+            <div key={`f-${i}`} className="text-[12px] text-muted italic">enviando anexo…</div>
+          )
+        }
+        return (
+          <a
+            key={`f-${i}`}
+            href={src}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={
+              'flex items-center gap-2 rounded-lg px-2.5 py-2 ' +
+              'bg-black/20 border border-white/[0.08] hover:bg-black/30 transition-colors ' +
+              'max-w-[min(100%,280px)] no-underline'
+            }
+            title="Abrir anexo"
+          >
+            <FileText size={16} strokeWidth={1.8} className="text-accent shrink-0" />
+            <span className="min-w-0">
+              <span className="block text-[12px] font-medium text-strong truncate">
+                {file.name || 'arquivo'}
+              </span>
+              {file.size ? (
+                <span className="block text-[10px] text-muted">{formatBytes(file.size)}</span>
+              ) : null}
+            </span>
+          </a>
+        )
+      })}
+    </div>
+  )
+}
+
+function ReplyQuote({ replyTo, replyAuthor, onJumpToReply }) {
+  if (!replyTo) return null
+  const label = replyTo.missing
+    ? 'mensagem original'
+    : (replyAuthor?.displayName || replyTo.author || 'mensagem')
+  const src = attachmentSrc(replyTo.attachment)
+  const preview = replyTo.deleted
+    ? 'mensagem apagada'
+    : (replyTo.missing
+      ? 'mensagem original indisponível'
+      : (replyTo.text
+        || (isImageAttachment(replyTo.attachment) ? 'imagem' : replyTo.attachment?.name)
+        || 'mensagem'))
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        if (replyTo.missing || !replyTo.id) return
+        onJumpToReply?.(replyTo.id)
+      }}
+      className={
+        'mb-1.5 w-full text-left rounded-md border-l-2 border-accent/70 ' +
+        'bg-black/15 pl-2 pr-1.5 py-1 hover:bg-black/25 transition-colors ' +
+        (replyTo.missing ? 'opacity-70 cursor-default' : '')
+      }
+      title={replyTo.missing ? 'Original fora do histórico carregado' : 'Ir para mensagem'}
+    >
+      <div className="text-[10px] font-semibold text-accent truncate">{label}</div>
+      <div className="flex items-center gap-2 min-w-0">
+        {!replyTo.deleted && !replyTo.missing && isImageAttachment(replyTo.attachment) && src ? (
+          <img
+            src={src}
+            alt=""
+            className="h-7 w-7 rounded object-cover shrink-0 bg-black/30"
+          />
+        ) : null}
+        <span className="text-[11px] text-muted truncate">{preview}</span>
+      </div>
+    </button>
+  )
 }
 
 /** LikeButton — Star com fundo = cor da bolha, abaixo da bolha,
@@ -606,11 +808,32 @@ export default function MessageBubble({
   onToggleReaction = null,
   quickReactions = ['👍', '❤️', '🔥'],
   onDelete = null,
+  onImageClick = null,
+  onRetry = null,
+  replyTo = null,
+  replyAuthor = null,
+  onJumpToReply = null,
   currentUserId = null,
   density = 'confortavel',
+  highlighted = false,
+  highlightTick = 0,
 }) {
   const dens = resolveChatDensity(density)
   const [copyState, setCopyState] = useState('idle') // 'idle' | 'copied' | 'error'
+  const rootRef = useRef(null)
+
+  // Restart jump-highlight animation whenever we land on this message again.
+  useEffect(() => {
+    if (!highlighted || !rootRef.current) return undefined
+    const el = rootRef.current
+    el.classList.remove('vc-msg-highlight')
+    // Force reflow so the same class can re-trigger the keyframes.
+    void el.offsetWidth
+    el.classList.add('vc-msg-highlight')
+    return () => {
+      el.classList.remove('vc-msg-highlight')
+    }
+  }, [highlighted, highlightTick])
 
   // Rich announce card (new) + upgrade long legacy sys posts that were
   // published before kind:"announce" existed.
@@ -690,9 +913,14 @@ export default function MessageBubble({
   const compactTime = formatClock(msg.ts)
   const canDelete = !!onDelete && (isMine || canModerate)
   const showPinButton = canPin && !!onTogglePin
+  const hasText = !msg.deleted && !!String(msg.text || '').trim()
+  const hasAttachment = !msg.deleted && (!!msg.attachment || (Array.isArray(msg.attachments) && msg.attachments.length > 0))
 
   const handleCopy = async () => {
-    const text = msg.text || ''
+    const text = msg.text
+      || attachmentSrc(msg.attachment)
+      || (isImageAttachment(msg.attachment) ? 'imagem' : msg.attachment?.name)
+      || ''
     /* Tenta o caminho moderno (Clipboard API). Se falhar, cai pra
      * fallback via textarea + execCommand('copy') — funciona em
      * contextos sem permissão (ex: http, iframe).                    */
@@ -744,13 +972,15 @@ export default function MessageBubble({
 
   return (
     <div
+      ref={rootRef}
       data-msg-id={msg.id}
+      data-msg-fs={msg.firestoreId || ''}
       data-msg-author={authorId || ''}
       data-msg-mine={isMine ? '1' : '0'}
       data-msg-color={authorColor || ''}
       data-chat-density={dens.key}
       className={
-        'group relative flex w-full min-w-0 justify-start ' +
+        'group relative flex w-full min-w-0 justify-start rounded-xl ' +
         (showHeader ? dens.msgHeaderMt : dens.msgFollowMt) + ' ' +
         'px-2 sm:px-3'
       }
@@ -817,12 +1047,38 @@ export default function MessageBubble({
             }
           >
             <div className={`${dens.bubbleText} text-strong/90`}>
+              {!msg.deleted && (
+                <ReplyQuote
+                  replyTo={replyTo}
+                  replyAuthor={replyAuthor}
+                  onJumpToReply={onJumpToReply}
+                />
+              )}
               <MessageText msg={msg} resolveRoom={resolveRoom} />
+              {hasAttachment && (
+                <AttachmentBlock
+                  attachment={msg.attachment}
+                  attachments={msg.attachments}
+                  onImageClick={onImageClick}
+                  hasText={hasText}
+                />
+              )}
               {!msg.deleted && msg.edited && (
                 <span className="ml-1 text-[10px] text-muted italic">(editada)</span>
               )}
             </div>
           </Bubble>
+          {isMine && msg.status === 'failed' && onRetry && !msg.deleted && (
+            <button
+              type="button"
+              onClick={() => onRetry(msg.id)}
+              className="inline-flex items-center gap-1 text-[11px] text-danger hover:text-danger/90"
+              title="Tentar enviar de novo"
+            >
+              <RotateCcw size={11} strokeWidth={2} />
+              falhou — tentar de novo
+            </button>
+          )}
           {onToggleReaction && !msg.deleted && (
             <EmojiReactions
               reactions={msg.reactions || {}}

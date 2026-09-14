@@ -4,7 +4,8 @@ import {
   MoreHorizontal, Move, ArrowDown,
 } from 'lucide-react'
 import { createPortal } from 'react-dom'
-import { RoomIconMark, roomAccentColor, roomSoftColor } from '../components/RoomIconMark'
+import { motion } from 'framer-motion'
+import { RoomIconMark, roomAccentColor } from '../components/RoomIconMark'
 import { resolveLabeledNameStyle } from '../model/roomCosmetics'
 import { RoomUnreadPill } from '../../notifications'
 import {
@@ -21,6 +22,24 @@ import {
 import { RoomGroupModal } from '../components/RoomGroupModal'
 import { SpaceIcon } from '../../spaces/model/spaceIcons'
 import { flashToast } from '../../../shared/utils/toast'
+import { Appear, AppearGroup, AppearList, AppearItem } from '../../../shared/motion/Appear'
+import { prefetchLiveKitToken, warmLiveKitClient } from './voice/livekitPrefetch'
+import { getSharedSignaling } from '../../../shared/connection/useSignaling'
+
+function prefetchVoiceJoin(space, room) {
+  if (!space?.id || !room?.id) return
+  if (room.type !== 'voice' && room.purpose !== 'voice') return
+  warmLiveKitClient()
+  const sig = getSharedSignaling()
+  const identity = sig?.userId
+  if (!identity) return
+  prefetchLiveKitToken({
+    spaceId: space.id,
+    roomId: room.id,
+    identity,
+    displayName: sig.displayName || 'você',
+  }).catch(() => {})
+}
 
 /**
  * Sidebar rooms list with groups, reorder, and group customization.
@@ -28,6 +47,7 @@ import { flashToast } from '../../../shared/utils/toast'
 export function SpaceRoomsNav({
   space,
   rooms = [],
+  filterQuery = '',
   currentRoomId,
   selectedRoomId,
   canManage = false,
@@ -53,7 +73,21 @@ export function SpaceRoomsNav({
     return subscribeRoomGroups(space.id, setGroups)
   }, [space?.id])
 
-  const sections = useMemo(() => buildRoomSections(groups, rooms), [groups, rooms])
+  const sections = useMemo(() => {
+    const base = buildRoomSections(groups, rooms)
+    const q = String(filterQuery || '').trim().toLowerCase()
+    if (!q) return base
+    return base
+      .map((section) => ({
+        ...section,
+        rooms: (section.rooms || []).filter((r) => {
+          const name = String(r?.name || '').toLowerCase()
+          const purpose = String(r?.purpose || '').toLowerCase()
+          return name.includes(q) || purpose.includes(q)
+        }),
+      }))
+      .filter((section) => (section.rooms || []).length > 0)
+  }, [groups, rooms, filterQuery])
 
   const toggleCollapse = (key) => {
     setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }))
@@ -121,7 +155,7 @@ export function SpaceRoomsNav({
   }
 
   return (
-    <div className="px-3 pt-2 pb-3">
+    <Appear key={space?.id || 'rooms'} delay={0.08} y={6} className="px-3 pt-2 pb-3">
       <div className="flex items-center justify-between mb-1.5 px-1 gap-1">
         <h4 className="text-[10.5px] font-semibold text-muted uppercase tracking-[0.10em]">
           Salas
@@ -141,8 +175,10 @@ export function SpaceRoomsNav({
 
       {rooms.length === 0 && groups.length === 0 ? (
         <p className="text-[11.5px] text-muted px-1 py-1.5 italic">Nenhuma sala ainda.</p>
+      ) : sections.length === 0 ? (
+        <p className="text-[11.5px] text-muted px-1 py-2 italic">Nenhuma sala com esse nome.</p>
       ) : (
-        <div className="space-y-2.5">
+        <AppearGroup className="space-y-2.5" stagger={0.05} delayChildren={0.04}>
           {sections.map((section) => {
             const key = section.group?.id || '__ungrouped__'
             const isCollapsed = !!collapsed[key]
@@ -157,7 +193,7 @@ export function SpaceRoomsNav({
               : null
 
             return (
-              <div key={key}>
+              <AppearItem key={key} as={motion.div}>
                 {(section.type === 'group' || groups.length > 0) && (
                   <div className="group/header flex items-center gap-0.5 px-0.5 mb-0.5">
                     <button
@@ -215,8 +251,10 @@ export function SpaceRoomsNav({
                 )}
 
                 {!isCollapsed && (
-                  <ul
+                  <AppearList
                     className="space-y-1"
+                    stagger={0.03}
+                    delayChildren={0.02}
                     onDragOver={(e) => { if (canManage) e.preventDefault() }}
                     onDrop={(e) => {
                       if (!canManage) return
@@ -239,6 +277,7 @@ export function SpaceRoomsNav({
                         hasUnread={!!(space?.id && unreadByRoom[roomKey?.(space.id, room.id)])}
                         confirming={confirmDeleteId === room.id}
                         onSelect={() => onSelectRoom?.(room)}
+                        onPrefetch={() => prefetchVoiceJoin(space, room)}
                         onEdit={() => onEditRoom?.(room)}
                         onAskDelete={() => setConfirmDeleteId?.(room.id)}
                         onConfirmDelete={() => {
@@ -263,16 +302,16 @@ export function SpaceRoomsNav({
                       />
                     ))}
                     {section.rooms.length === 0 && section.type === 'group' && (
-                      <li className="px-2 py-1.5 text-[10.5px] text-muted italic">
+                      <AppearItem className="px-2 py-1.5 text-[10.5px] text-muted italic">
                         Arraste salas pra cá
-                      </li>
+                      </AppearItem>
                     )}
-                  </ul>
+                  </AppearList>
                 )}
-              </div>
+              </AppearItem>
             )
           })}
-        </div>
+        </AppearGroup>
       )}
 
       <RoomGroupModal
@@ -284,7 +323,7 @@ export function SpaceRoomsNav({
         onSave={saveGroup}
         onClose={() => { if (!busy) setGroupModal(null) }}
       />
-    </div>
+    </Appear>
   )
 }
 
@@ -297,6 +336,7 @@ function RoomRow({
   hasUnread,
   confirming,
   onSelect,
+  onPrefetch,
   onEdit,
   onAskDelete,
   onConfirmDelete,
@@ -308,7 +348,6 @@ function RoomRow({
 }) {
   const isOptimistic = room.id === '__optimistic__'
   const accent = roomAccentColor(room)
-  const soft = roomSoftColor(room)
   const nameStyle = resolveLabeledNameStyle({
     nameStyle: room.nameStyle,
     fontId: room.fontId,
@@ -342,8 +381,10 @@ function RoomRow({
   const isDragOver = dropTargetId === room.id
 
   return (
-    <li
+    <AppearItem
       className="group/row relative"
+      onMouseEnter={() => onPrefetch?.()}
+      onFocus={() => onPrefetch?.()}
       onDragOver={handleRowDragOver}
       onDragLeave={handleRowDragLeave}
       onDrop={(e) => {
@@ -378,41 +419,24 @@ function RoomRow({
         onClick={() => onSelect?.()}
         aria-current={isActive ? 'true' : undefined}
         className={
-          'relative w-full flex items-center gap-2 pl-2 pr-12 py-2 rounded-[10px] text-left overflow-hidden ' +
-          'transition-[transform,background-color,box-shadow,filter] duration-200 ' +
+          'vc-room-row relative w-full flex items-center gap-2.5 pl-2.5 pr-10 py-[7px] rounded-lg text-left overflow-hidden ' +
+          'transition-[transform,background-color,box-shadow,color] duration-150 ' +
           (isActive
-            ? 'shadow-md scale-[1.01] '
-            : 'hover:translate-x-0.5 hover:bg-surface2 hover:shadow-md hover:scale-[1.01] active:scale-[0.98] ')
-        }
-        style={
-          isActive
-            ? { background: accent, color: 'var(--vc-on-accent, #fff)' }
-            : undefined
+            ? 'is-active '
+            : 'hover:bg-white/[0.04] active:scale-[0.99] ')
         }
       >
         {canManage && !isOptimistic && (
-          <GripVertical size={11} className="text-muted/50 shrink-0 -ml-0.5 cursor-grab" />
+          <GripVertical size={11} className="text-muted/40 shrink-0 -ml-0.5 cursor-grab opacity-0 group-hover/row:opacity-100" />
         )}
         <span
-          className={
-            'w-7 h-7 rounded-[8px] flex items-center justify-center shrink-0 '
-          }
-          style={
-            isActive
-              ? { background: 'var(--vc-bg-canvas)', color: accent }
-              : { background: accent, color: 'var(--vc-on-accent, #fff)' }
-          }
+          className="w-[18px] h-[18px] flex items-center justify-center shrink-0"
+          style={{ color: accent }}
+          aria-hidden
         >
-          <RoomIconMark room={room} size={13} />
+          <RoomIconMark room={room} size={16} />
         </span>
-        <p
-          className={
-            'min-w-0 flex-1 text-[13px] leading-tight truncate font-semibold'
-          }
-          style={{
-            color: isActive ? 'var(--vc-on-accent, #fff)' : accent,
-          }}
-        >
+        <p className="min-w-0 flex-1 text-[13px] leading-tight truncate font-medium text-strong">
           {room.name}
         </p>
         {!isActive && <RoomUnreadPill show={hasUnread} />}
@@ -464,7 +488,7 @@ function RoomRow({
           )}
         </div>
       )}
-    </li>
+    </AppearItem>
   )
 }
 

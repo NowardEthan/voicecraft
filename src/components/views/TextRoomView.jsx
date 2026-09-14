@@ -18,9 +18,10 @@
  * for grep-friendliness.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import MessageList from './MessageList'
+import MessageList, { resolveChatAuthor } from './MessageList'
 import Composer from './Composer'
 import ChatHeader from './ChatHeader'
+import TopicCardsRow from './TopicCardsRow'
 import ImageLightbox from './ImageLightbox'
 import { readChatDensity, writeChatDensity, resolveChatDensity } from './chatDensity'
 import { getFrequentReactions } from '../../shared/firebase/frequentReactions'
@@ -46,6 +47,7 @@ import {
 import { RulesCard } from '../../features/chat/RulesCards'
 import { flashToast } from '../../shared/utils/toast'
 import { Lock } from 'lucide-react'
+import { collectMessageMediaUrls, warmImages } from '../../shared/media/imageWarm'
 
 export default function TextRoomView({
   room,
@@ -142,6 +144,20 @@ export default function TextRoomView({
     })
   }, [chat.messages, room?.lobby])
 
+  // Decode announce / lobby / attachment bitmaps before paint (kills black remount).
+  useEffect(() => {
+    const urls = collectMessageMediaUrls(feedMessages)
+    const lobby = normalizeLobby(room?.lobby)
+    if (lobby?.banner) urls.push(lobby.banner)
+    if (lobby?.iconImage) urls.push(lobby.iconImage)
+    const rules = normalizeRules(room?.rules)
+    if (rules?.banner) urls.push(rules.banner)
+    if (rules?.iconImage) urls.push(rules.iconImage)
+    if (!urls.length) return undefined
+    warmImages(urls, { concurrency: 6 }).catch(() => {})
+    return undefined
+  }, [feedMessages, room?.lobby, room?.rules])
+
   const rulesCfg = useMemo(() => normalizeRules(room?.rules), [room?.rules])
   const rulesActive = isRulesRoom(room)
   const rulesAccepted = useMemo(
@@ -198,7 +214,30 @@ export default function TextRoomView({
     [feedMessages],
   )
 
-  const handleSubmit = useCallback(async ({ text, attachment, replyToId }) => {
+  const topicSourceMessages = useMemo(() => {
+    const list = feedMessages || []
+    return list.filter((m) => m && !m.deleted && (m.pinned || m.kind === 'announce' || m.announce))
+  }, [feedMessages])
+
+  const handleReply = useCallback((msg) => {
+    if (!msg?.id && !msg?.firestoreId) return
+    const author = resolveChatAuthor(msg, members, currentUserId, currentUserName)
+    setReplyTo({
+      id: msg.id || msg.firestoreId,
+      firestoreId: msg.firestoreId || null,
+      author: author?.displayName || msg.author || 'alguém',
+      authorHandle: author?.handle || msg.authorHandle || '',
+      authorId: msg.authorId || author?.userId || null,
+      text: msg.deleted ? '' : (msg.text || ''),
+      attachment: msg.attachment || msg.attachments?.[0] || null,
+      attachments: msg.attachments,
+      deleted: !!msg.deleted,
+    })
+  }, [members, currentUserId, currentUserName])
+
+  const handleCancelReply = useCallback(() => setReplyTo(null), [])
+
+  const handleSubmit = useCallback(async ({ text, attachment, attachments, replyToId } = {}) => {
     if (chatLocked && !canModerateChat) {
       flashToast('Canal trancado')
       return false
@@ -212,25 +251,15 @@ export default function TextRoomView({
         return false
       }
     }
-    const ok = await chat.sendMessage({ text, attachment, replyToId })
-    if (ok) lastSendAtRef.current = Date.now()
+    const ok = await chat.sendMessage({ text, attachment, attachments, replyToId })
+    if (ok) {
+      lastSendAtRef.current = Date.now()
+      setReplyTo(null)
+    }
     return ok
   }, [chat, chatLocked, canModerateChat, slowModeSeconds])
 
   const handleRetry = useCallback((msgId) => chat.retry(msgId), [chat])
-
-  const handleReply = useCallback((msg) => {
-    setReplyTo({
-      id: msg.id,
-      author: msg.author,
-      authorHandle: msg.authorHandle || '',
-      text: msg.text,
-      attachment: msg.attachment,
-      deleted: msg.deleted,
-    })
-  }, [])
-
-  const handleCancelReply = useCallback(() => setReplyTo(null), [])
 
   const handleComposerTextChange = useCallback((next) => {
     textStateRef.current = next
@@ -305,6 +334,12 @@ export default function TextRoomView({
         onUnpinMessage={togglePin}
       />
 
+      <TopicCardsRow
+        messages={topicSourceMessages}
+        accent={accent}
+        onJump={handleJumpToPinned}
+      />
+
       <div className="flex-1 min-h-0 flex flex-col relative overflow-hidden">
         <div className="flex-1 min-h-0 relative overflow-hidden">
           <MessageList
@@ -314,7 +349,10 @@ export default function TextRoomView({
             authorColors={authorColors}
             roomKey={roomKey}
             onRetry={handleRetry}
-            onImageClick={(url) => setLightbox(url)}
+            onImageClick={(imagesOrUrl, index = 0) => {
+              if (Array.isArray(imagesOrUrl)) setLightbox({ images: imagesOrUrl, index })
+              else if (imagesOrUrl) setLightbox({ images: [imagesOrUrl], index: 0 })
+            }}
             emptyHint="Nenhuma mensagem ainda. Mande a primeira."
             query=""
             onReply={handleReply}
@@ -406,9 +444,13 @@ export default function TextRoomView({
         </>
       )}
 
-      {lightbox && (
-        <ImageLightbox src={lightbox} onClose={() => setLightbox(null)} />
-      )}
+      {lightbox?.images?.length ? (
+        <ImageLightbox
+          images={lightbox.images}
+          index={lightbox.index || 0}
+          onClose={() => setLightbox(null)}
+        />
+      ) : null}
     </div>
   )
 }

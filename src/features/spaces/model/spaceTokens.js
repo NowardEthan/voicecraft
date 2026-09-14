@@ -155,6 +155,31 @@ export function bannerOverlay(hex, covered = false) {
 }
 
 /**
+ * Primary CTA paint — Home mockup: cool white → blue gradient with dark ink.
+ * Pass a Space accent hex to tint the same shape for personalized Spaces.
+ *
+ * Returns { background, color, boxShadow } for inline style on buttons.
+ */
+export function ctaStyle(accentHex = null) {
+  const hasAccent = !!(accentHex && parseHex(accentHex))
+  const accent = hasAccent ? uiAccentHex(accentHex) : '#4a9eff'
+  const soft = hasAccent ? hexToRgba(accent, 0.45) : 'rgba(74, 158, 255, 0.45)'
+  const glow = hasAccent ? hexToRgba(accent, 0.35) : 'rgba(74, 158, 255, 0.35)'
+  // Specular white highlight on top → accent mid → deeper blue at bottom.
+  const background = hasAccent
+    ? `linear-gradient(180deg, #ffffff 0%, ${hexToRgba('#ffffff', 0.92)} 18%, ${accent} 62%, ${uiAccentHex(accent)} 100%)`
+    : 'linear-gradient(180deg, #ffffff 0%, #e8f2ff 22%, #7eb6ff 58%, #3d8dff 100%)'
+  // Dark ink reads on the bright top of the gradient.
+  const color = '#0b1220'
+  const boxShadow = [
+    `0 1px 0 rgba(255,255,255,0.55) inset`,
+    `0 0 0 1px ${soft}`,
+    `0 8px 22px -8px ${glow}`,
+  ].join(', ')
+  return { background, color, boxShadow }
+}
+
+/**
  * Compute the CSS custom-property tokens for the current Space. We attach
  * these as inline `style` on the main container so every descendant can read
  * them via `var(--space-accent)` etc.

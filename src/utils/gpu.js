@@ -1,65 +1,76 @@
 /**
- * detectGpu — identifies the user's GPU with a cleaned-up display name.
+ * detectGpu — fast label for settings. Never block the UI/main process.
  *
- * Order: Electron Chromium GPU info → WebGL unmasked renderer → WebGPU.
- * WebGPU alone often only exposes vendor ("nvidia") with an empty device,
- * which previously rendered as the useless label "GPU".
+ * Order: cache → WebGL (sync, usually enough) → Electron basic IPC → skip WebGPU.
  */
-export async function detectGpu() {
-  const candidates = []
+let cached = null
+let inflight = null
 
-  // 1. Electron — Chromium's real GPU feature info (best on desktop)
-  if (typeof window !== 'undefined' && window.electronAPI?.getGpuInfo) {
-    try {
-      const res = await window.electronAPI.getGpuInfo()
-      if (res?.ok && res.info) {
-        const parsed = fromElectronGpuInfo(res.info)
-        if (parsed) candidates.push(parsed)
-      }
-    } catch {}
-  }
-
-  // 2. WebGL — ANGLE unmasked renderer (usually the full marketing name)
+function detectWebGlQuick() {
   try {
     const canvas = document.createElement('canvas')
-    const gl = canvas.getContext('webgl2') || canvas.getContext('webgl')
-    if (gl) {
-      const dbg = gl.getExtension('WEBGL_debug_renderer_info')
-      let rawVendor = dbg ? String(gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) || '') : ''
-      let rawRenderer = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) || '') : ''
-      if (!rawVendor) rawVendor = String(gl.getParameter(gl.VENDOR) || '')
-      if (!rawRenderer) rawRenderer = String(gl.getParameter(gl.RENDERER) || '')
-      if (rawVendor || rawRenderer) {
-        candidates.push(ok('webgl', rawVendor, rawRenderer))
-      }
-    }
-  } catch {}
+    const gl = canvas.getContext('webgl2', { powerPreference: 'high-performance' })
+      || canvas.getContext('webgl', { powerPreference: 'high-performance' })
+    if (!gl) return null
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info')
+    let rawVendor = dbg ? String(gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) || '') : ''
+    let rawRenderer = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) || '') : ''
+    if (!rawVendor) rawVendor = String(gl.getParameter(gl.VENDOR) || '')
+    if (!rawRenderer) rawRenderer = String(gl.getParameter(gl.RENDERER) || '')
+    // Drop GL context ASAP
+    const lose = gl.getExtension('WEBGL_lose_context')
+    lose?.loseContext?.()
+    if (!rawVendor && !rawRenderer) return null
+    return ok('webgl', rawVendor, rawRenderer)
+  } catch {
+    return null
+  }
+}
 
-  // 3. WebGPU — structured, but often incomplete on Chromium
-  if (typeof navigator !== 'undefined' && 'gpu' in navigator) {
-    try {
-      const adapter = await navigator.gpu.requestAdapter()
-      const info = adapter?.info || (await adapter?.requestAdapterInfo?.())
-      if (info) {
-        const { vendor, architecture, device, description } = info
-        if (vendor || device || description) {
-          candidates.push(ok('webgpu', vendor, device || description, description, architecture))
+export async function detectGpu() {
+  if (cached) return cached
+  if (inflight) return inflight
+
+  inflight = (async () => {
+    const candidates = []
+
+    const webgl = detectWebGlQuick()
+    if (webgl) candidates.push(webgl)
+
+    // Electron IPC — timed; never wait forever for 'complete'.
+    if (typeof window !== 'undefined' && window.electronAPI?.getGpuInfo) {
+      try {
+        const res = await Promise.race([
+          window.electronAPI.getGpuInfo(),
+          new Promise((resolve) => setTimeout(() => resolve(null), 1200)),
+        ])
+        if (res?.ok && res.info) {
+          const parsed = fromElectronGpuInfo(res.info)
+          if (parsed) candidates.push(parsed)
         }
-      }
-    } catch {}
-  }
-
-  const best = candidates.find((c) => isUsefulDevice(c.info?.device)) || candidates[0]
-  if (best) {
-    if (!isUsefulDevice(best.info.device)) {
-      best.info.device = [best.info.vendor, best.info.description]
-        .filter((s) => s && isUsefulDevice(s) && s.toLowerCase() !== 'desconhecido')
-        .join(' ') || 'GPU detectada'
+      } catch { /* ignore */ }
     }
-    return best
-  }
 
-  return ok('chromium', '', 'GPU disponível')
+    const best = candidates.find((c) => isUsefulDevice(c.info?.device)) || candidates[0]
+    if (best) {
+      if (!isUsefulDevice(best.info.device)) {
+        best.info.device = [best.info.vendor, best.info.description]
+          .filter((s) => s && isUsefulDevice(s) && s.toLowerCase() !== 'desconhecido')
+          .join(' ') || 'GPU detectada'
+      }
+      cached = best
+      return best
+    }
+
+    cached = ok('chromium', '', 'GPU disponível')
+    return cached
+  })()
+
+  try {
+    return await inflight
+  } finally {
+    inflight = null
+  }
 }
 
 function fromElectronGpuInfo(info) {
@@ -83,7 +94,6 @@ function fromElectronGpuInfo(info) {
 function vendorIdToName(id) {
   const n = Number(id)
   if (!n) return ''
-  // PCI vendor IDs commonly seen in Chromium GPUInfo
   const map = {
     0x10de: 'NVIDIA',
     0x1002: 'AMD',
@@ -128,11 +138,6 @@ function cleanVendor(raw) {
   return String(raw).trim()
 }
 
-/**
- * Pull a human-readable GPU name out of ANGLE / WebGL blobs.
- *   "ANGLE (NVIDIA, NVIDIA GeForce RTX 4050 Laptop GPU (0x0000028F) Direct3D11 vs_5_0 ps_5_0, D3D11)"
- *   → "NVIDIA GeForce RTX 4050 Laptop GPU"
- */
 function cleanDevice(raw, vendor) {
   if (!raw) return ''
   let s = String(raw).trim()
@@ -160,12 +165,10 @@ function cleanDevice(raw, vendor) {
     .trim()
     .replace(/[,\s]+$/g, '')
 
-  // "NVIDIA, NVIDIA GeForce …" leftovers
   if (vendor && vendor !== 'desconhecido') {
     const re = new RegExp(`^${escapeRe(vendor)}\\s*,\\s*`, 'i')
     s = s.replace(re, '')
     const re2 = new RegExp(`^${escapeRe(vendor)}\\s+`, 'i')
-    // Keep "NVIDIA GeForce …" — only strip duplicated "NVIDIA NVIDIA"
     if (/^(nvidia|amd|intel)\s+\1\b/i.test(`${vendor} ${s}`)) {
       s = s.replace(re2, '')
     }

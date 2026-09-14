@@ -1,6 +1,5 @@
 /**
  * Imperative per-process WASAPI loopback capture for ScreenShareAudio.
- * Used by screen-share publish path (and optionally by useAppLoopbackAudio).
  */
 const FRAME_SIZE = 1024
 const RING_FRAMES = 8
@@ -9,7 +8,7 @@ const CHANNELS = 1
 
 /**
  * @param {number} processId
- * @returns {Promise<{ mediaStream: MediaStream, audioTrack: MediaStreamTrack, stop: () => Promise<void> }>}
+ * @returns {Promise<{ mediaStream: MediaStream, audioTrack: MediaStreamTrack, stop: () => Promise<void>, mode?: string }>}
  */
 export async function startAppLoopbackCapture(processId) {
   const api = typeof window !== 'undefined' ? window.electronAPI?.audioService : null
@@ -21,7 +20,6 @@ export async function startAppLoopbackCapture(processId) {
     throw new Error('Selecione um aplicativo com áudio')
   }
 
-  // Ensure the C++ audio service is running before starting loopback.
   if (api.start) {
     const started = await api.start()
     if (started && started.ok === false) {
@@ -29,11 +27,50 @@ export async function startAppLoopbackCapture(processId) {
     }
   }
 
+  // Prefer the selected PID, then other PIDs with the same process name
+  // (Opera/Chrome often put YouTube audio on a sibling/utility process).
+  const candidates = [pid]
+  try {
+    const list = await api.listProcesses?.()
+    if (Array.isArray(list)) {
+      const selected = list.find((p) => Number(p.pid) === pid)
+      const base = String(selected?.name || '').toLowerCase().replace(/\.exe$/i, '')
+      if (base) {
+        for (const p of list) {
+          const n = String(p.name || '').toLowerCase().replace(/\.exe$/i, '')
+          const cpid = Number(p.pid)
+          if (!cpid || cpid === pid) continue
+          if (n === base || n.startsWith(base) || base.startsWith(n)) {
+            candidates.push(cpid)
+          }
+        }
+      }
+    }
+  } catch { /* ignore */ }
+
+  let lastErr = null
+  for (const candidate of candidates.slice(0, 6)) {
+    try {
+      return await startCaptureWithPid(api, candidate)
+    } catch (err) {
+      lastErr = err
+    }
+  }
+  throw lastErr || new Error('Sem áudio do app — tente de novo com o YouTube tocando')
+}
+
+async function startCaptureWithPid(api, pid) {
   const startRes = await api.startLoopback({ processId: pid })
   if (!startRes?.ok) {
     throw new Error(startRes?.error || 'Falha ao iniciar captura do app')
   }
   const sessionId = startRes.sessionId
+  const mode = startRes.mode || 'process'
+
+  // Wait until the service confirms loopback (or errors).
+  if (api.onStatus && !startRes.alreadyRunning) {
+    await waitForLoopbackStatus(api, sessionId, 6000)
+  }
 
   const AudioContextClass = window.AudioContext || window.webkitAudioContext
   if (!AudioContextClass) throw new Error('AudioContext indisponível')
@@ -49,7 +86,6 @@ export async function startAppLoopbackCapture(processId) {
 
   const proc = ctx.createScriptProcessor(FRAME_SIZE, CHANNELS, CHANNELS)
   const dest = ctx.createMediaStreamDestination()
-  // Chromium only runs ScriptProcessor when connected to the context destination.
   const silent = ctx.createGain()
   silent.gain.value = 0
 
@@ -98,14 +134,16 @@ export async function startAppLoopbackCapture(processId) {
     if (writeIdx - readIdx > cap) readIdx = writeIdx - cap
   })
 
-  // Wait briefly for real PCM — fail fast if loopback never starts.
-  await new Promise((r) => setTimeout(r, 400))
-  if (!alive) {
-    throw new Error('Captura cancelada')
+  const deadline = Date.now() + 2500
+  while (alive && framesReceived === 0 && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 100))
   }
+
+  // If the service started but is still silent, keep going — YouTube may
+  // unmute a moment later. Only fail when we got nothing after a long wait
+  // AND the service never tagged loopback frames (protocol / binary broken).
   if (framesReceived === 0) {
-    // Give a bit more time on cold start of the audio service.
-    await new Promise((r) => setTimeout(r, 800))
+    await new Promise((r) => setTimeout(r, 500))
   }
   if (framesReceived === 0) {
     alive = false
@@ -116,7 +154,7 @@ export async function startAppLoopbackCapture(processId) {
     if (sessionId && api.stopLoopback) {
       try { await api.stopLoopback({ sessionId }) } catch { /* ignore */ }
     }
-    throw new Error('Sem áudio do app — o processo pode estar mudo ou sem sessão WASAPI')
+    throw new Error('Sem frames de áudio — deixe o YouTube tocando e tente de novo')
   }
 
   const stop = async () => {
@@ -141,5 +179,34 @@ export async function startAppLoopbackCapture(processId) {
     mediaStream: dest.stream,
     audioTrack,
     stop,
+    mode,
   }
+}
+
+function waitForLoopbackStatus(api, sessionId, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let done = false
+    const timer = setTimeout(() => {
+      if (done) return
+      done = true
+      try { unsub?.() } catch { /* ignore */ }
+      // Don't hard-fail — capture may still work.
+      resolve({ timedOut: true })
+    }, timeoutMs)
+
+    const unsub = api.onStatus((msg) => {
+      if (done || !msg) return
+      if (msg.type === 'loopback-started') {
+        done = true
+        clearTimeout(timer)
+        try { unsub?.() } catch { /* ignore */ }
+        resolve(msg)
+      } else if (msg.type === 'error') {
+        done = true
+        clearTimeout(timer)
+        try { unsub?.() } catch { /* ignore */ }
+        reject(new Error(msg.message || 'Falha no serviço de áudio'))
+      }
+    })
+  })
 }

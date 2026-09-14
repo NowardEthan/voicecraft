@@ -19,7 +19,7 @@ import { useState, useRef, useEffect, forwardRef } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Settings, LogOut, Trash2, Plus, Mic, Headphones,
-  LayoutGrid, Calendar, UserPlus, PanelLeftClose,
+  LayoutGrid, Calendar, UserPlus, PanelLeftClose, Search,
 } from 'lucide-react'
 import SpaceAvatar from '../SpaceAvatar'
 import { PersonAvatar } from '../../features/people'
@@ -27,8 +27,8 @@ import { resolveSpaceCover, spaceTokens } from '../../features/spaces'
 import { SpaceCoverLayer } from '../../features/spaces/components/SpaceCoverLayer'
 import SpaceSettingsModal from '../../features/spaces/components/SpaceSettingsModal'
 import { useNotifications } from '../../features/notifications'
-import VoiceActiveBar from '../../features/rooms/views/voice/components/VoiceActiveBar'
 import { SpaceRoomsNav } from '../../features/rooms/views/SpaceRoomsNav'
+import { Appear, AppearList, AppearItem } from '../../shared/motion/Appear'
 
 const NAV_ITEMS = [
   { key: 'overview', label: 'Visão geral', icon: LayoutGrid },
@@ -58,9 +58,7 @@ export default function SpaceContextPanel({
   onCollapse,
   onOpenSettings,
   optimisticFirstRoom,
-  voiceRoom = null,
-  onFocusVoice,
-  onLeaveCall,
+  onOpenCommands = null,
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [menuPos, setMenuPos] = useState(null)  // { top, right } in viewport coords
@@ -69,9 +67,11 @@ export default function SpaceContextPanel({
   // and rendered as a modal at the bottom of this component.
   const [spaceSettingsOpen, setSpaceSettingsOpen] = useState(false)
   const [confirmDeleteId, setConfirmDeleteId] = useState(null)
+  const [roomQuery, setRoomQuery] = useState('')
   const { unreadByRoom, roomKey } = useNotifications()
   const menuRef = useRef(null)        // the gear button (toggle)
   const popoverRef = useRef(null)     // the portal-rendered popover
+  const searchRef = useRef(null)
 
   // The AppShell used to remount the panel on space change via `key`,
   // which also wiped ephemeral UI (open menu, confirm dialogs, pending
@@ -82,7 +82,27 @@ export default function SpaceContextPanel({
     setMenuPos(null)
     setSpaceSettingsOpen(false)
     setConfirmDeleteId(null)
+    setRoomQuery('')
   }, [space?.id])
+
+  // Ctrl/Cmd+K focuses Space search (mockup). Shift+Ctrl+K opens commands when available.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'k') return
+      const tag = e.target?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) {
+        if (e.target !== searchRef.current) return
+      }
+      e.preventDefault()
+      if (e.shiftKey && onOpenCommands) {
+        onOpenCommands()
+        return
+      }
+      searchRef.current?.focus()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onOpenCommands])
 
   useEffect(() => {
     if (!menuOpen) return
@@ -160,11 +180,11 @@ export default function SpaceContextPanel({
 
   return (
     <aside
-        className="w-full h-full bg-panel border-r border-line flex flex-col overflow-hidden"
+        className="vc-side-panel w-full h-full bg-panel border-r border-line flex flex-col overflow-hidden"
       style={tokens}
     >
-      {/* === Space identity banner (compact) === */}
-      <div className="relative shrink-0 border-b border-line">
+      {/* === Space identity banner — static (no Appear: was ghosting + black hole) === */}
+      <div key={`banner-${space.id}`} className="relative shrink-0 border-b border-line">
         {/* Clip wallpaper only — keep avatar/rings/buttons unclipped */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden>
           {cover ? (
@@ -237,37 +257,51 @@ export default function SpaceContextPanel({
             <button
               type="button"
               onClick={() => onInvite()}
-              className="
-                mt-3 w-full h-9 rounded-full inline-flex items-center justify-center gap-1.5
-                text-[12.5px] font-semibold text-strong
-                hover:opacity-90 active:scale-[0.98] transition-all
-              "
-              style={{ backgroundColor: 'var(--space-accent)' }}
+              className="vc-side-invite mt-3 w-full h-10 rounded-full inline-flex items-center justify-center gap-1.5 text-[13px] font-semibold hover:brightness-110 active:scale-[0.98] transition-all"
+              style={{ backgroundColor: 'var(--space-accent)', color: 'var(--space-on-accent, #fff)' }}
             >
-              <Plus size={14} strokeWidth={2.4} />
+              <Plus size={15} strokeWidth={2.4} />
               Convidar pro Space
             </button>
           )}
+          <div className="mt-2.5 relative">
+            <Search
+              size={13}
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted pointer-events-none"
+            />
+            <input
+              ref={searchRef}
+              value={roomQuery}
+              onChange={(e) => setRoomQuery(e.target.value)}
+              placeholder="Buscar neste Space…"
+              className="w-full h-9 pl-8 pr-[3.25rem] rounded-xl bg-black/25 border border-white/[0.08] text-[12.5px] text-strong placeholder:text-muted focus:outline-none focus:border-[color-mix(in_srgb,var(--space-accent)_45%,transparent)]"
+              aria-label="Buscar salas neste Space"
+            />
+            <kbd className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none px-1.5 h-5 rounded-md bg-white/[0.06] border border-white/[0.08] text-[9.5px] font-semibold text-muted tabular-nums inline-flex items-center">
+              Ctrl K
+            </kbd>
+          </div>
         </div>
       </div>
 
       {/* === Vertical navigation list (per spec) === */}
-      <nav className="shrink-0 px-2 pt-2.5 pb-1.5">
-        <ul className="space-y-0.5">
+      <nav className="vc-side-nav shrink-0 px-2 pt-2.5 pb-1.5">
+        <AppearList key={`nav-${space.id}`} className="space-y-0.5" stagger={0.04} delayChildren={0.06}>
           {NAV_ITEMS.map(item => {
             const Icon = item.icon
             const active = activeView === item.key
             return (
-              <li key={item.key}>
+              <AppearItem key={item.key}>
                 <button
                   type="button"
                   onClick={() => onChangeView?.(item.key)}
+                  aria-pressed={active}
                   className={
-                    'w-full flex items-center gap-2.5 px-2.5 py-2 rounded-[10px] text-left ' +
+                    'vc-side-nav-item w-full flex items-center gap-2.5 px-2.5 py-2 rounded-[10px] text-left ' +
                     'transition-[transform,background-color,color] duration-200 ' +
                     'hover:translate-x-0.5 active:scale-[0.98] ' +
                     (active
-                      ? 'bg-accent/[0.10] text-strong'
+                      ? 'is-active bg-accent/[0.10] text-strong'
                       : 'text-ink hover:bg-surface2 hover:text-strong')
                   }
                 >
@@ -277,17 +311,11 @@ export default function SpaceContextPanel({
                     className={active ? 'text-accent' : 'text-muted'}
                   />
                   <span className="text-[12.5px] font-medium">{item.label}</span>
-                  {active && (
-                    <span
-                      className="ml-auto w-1 h-1 rounded-full bg-accent"
-                      aria-hidden
-                    />
-                  )}
                 </button>
-              </li>
+              </AppearItem>
             )
           })}
-        </ul>
+        </AppearList>
       </nav>
 
       {/* === Salas section (groups + reorder) === */}
@@ -295,6 +323,7 @@ export default function SpaceContextPanel({
         <SpaceRoomsNav
           space={space}
           rooms={rooms}
+          filterQuery={roomQuery}
           currentRoomId={currentRoomId}
           selectedRoomId={selectedRoomId}
           canManage={canManageRooms || isCreator}
@@ -309,23 +338,15 @@ export default function SpaceContextPanel({
         />
       </div>
 
-      {/* Voice connected — above SelfControls (Discord-style) */}
-      {voiceRoom && (
-        <VoiceActiveBar
-          room={voiceRoom}
-          onReturn={onFocusVoice}
-          onLeave={onLeaveCall}
+      {/* === SelfControls — pinned bottom (voice widget lives in PeoplePanel) === */}
+      <Appear key={`self-${space.id}`} delay={0.12} y={8}>
+        <SelfControls
+          currentUserName={currentUserName}
+          currentUserId={currentUserId}
+          members={members}
+          onOpenSettings={onOpenSettings}
         />
-      )}
-
-      {/* === SelfControls — pinned bottom === */}
-      <SelfControls
-        currentUserName={currentUserName}
-        currentUserId={currentUserId}
-        members={members}
-        onOpenSettings={onOpenSettings}
-        flushTop={!!voiceRoom}
-      />
+      </Appear>
       {settingsPortalNode}
 
       {/* Space identity editor — open for edit_space or creator. */}

@@ -8,6 +8,7 @@ import { memo, useMemo, useState } from 'react'
 import { MessageCircle } from 'lucide-react'
 import EmptyState from '../../../shared/ui/EmptyState'
 import SpaceSettingsModal from '../../../features/spaces/components/SpaceSettingsModal'
+import { Appear, AppearGroup, AppearItem } from '../../../shared/motion/Appear'
 import SpaceHero from './SpaceHero'
 import EventSpotlightBar from './EventSpotlightBar'
 import RecentConversations from './RecentConversations'
@@ -21,6 +22,7 @@ import {
   onlineMembers,
   pickActiveRoom,
 } from './overviewHelpers'
+import { motion } from 'framer-motion'
 
 const SpaceOverview = memo(function SpaceOverview({
   space,
@@ -75,34 +77,45 @@ const SpaceOverview = memo(function SpaceOverview({
   const canCreateRoom = canManageRooms || isCreator
 
   return (
-    <div className="@container space-y-4 sm:space-y-5">
-      <SpaceHero
-        space={space}
-        members={members}
-        onlineCount={onlineCount}
-        activeRoomLabel={activeCta}
-        onJoinActive={handleJoinActive}
-        onInvite={onInvite}
-        onMore={canEditSpace ? () => setSettingsOpen(true) : undefined}
-      />
+    <AppearGroup
+      key={space.id}
+      className="@container space-y-4 sm:space-y-5"
+      stagger={0.055}
+      delayChildren={0.04}
+    >
+      <AppearItem as={motion.div}>
+        <SpaceHero
+          space={space}
+          members={members}
+          onlineCount={onlineCount}
+          activeRoomLabel={activeCta}
+          onJoinActive={handleJoinActive}
+          onInvite={onInvite}
+          onMore={canEditSpace ? () => setSettingsOpen(true) : undefined}
+        />
+      </AppearItem>
 
       {!hasRooms ? (
-        <EmptyState
-          icon={MessageCircle}
-          title="Crie sua primeira sala"
-          body="Adicione uma sala de conversa ou voz para o Space ganhar vida."
-          action={canCreateRoom ? { label: 'Criar sala', onClick: () => onCreateRoom?.('conversation') } : undefined}
-          accent
-        />
+        <AppearItem as={motion.div}>
+          <EmptyState
+            icon={MessageCircle}
+            title="Crie sua primeira sala"
+            body="Adicione uma sala de conversa ou voz para o Space ganhar vida."
+            action={canCreateRoom ? { label: 'Criar sala', onClick: () => onCreateRoom?.('conversation') } : undefined}
+            accent
+          />
+        </AppearItem>
       ) : (
         <>
-          <EventSpotlightBar
-            events={space.events}
-            members={members}
-            onOpenEvents={onOpenEvents}
-          />
+          <AppearItem as={motion.div}>
+            <EventSpotlightBar
+              events={space.events}
+              members={members}
+              onOpenEvents={onOpenEvents}
+            />
+          </AppearItem>
 
-          <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.85fr)] gap-4 sm:gap-5 items-start">
+          <AppearItem as={motion.div} className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.85fr)] gap-4 sm:gap-5 items-start">
             <RecentConversations
               rooms={textRooms}
               members={members}
@@ -124,14 +137,16 @@ const SpaceOverview = memo(function SpaceOverview({
                 onOpenEvents={onOpenEvents}
               />
             </div>
-          </div>
+          </AppearItem>
 
-          <SpaceActivity
-            space={space}
-            members={members}
-            rooms={rooms}
-            onSelectRoom={handleSelectRoom}
-          />
+          <AppearItem as={motion.div}>
+            <SpaceActivity
+              space={space}
+              members={members}
+              rooms={rooms}
+              onSelectRoom={handleSelectRoom}
+            />
+          </AppearItem>
         </>
       )}
 
@@ -144,7 +159,7 @@ const SpaceOverview = memo(function SpaceOverview({
           isCreator={isCreator}
         />
       )}
-    </div>
+    </AppearGroup>
   )
 })
 

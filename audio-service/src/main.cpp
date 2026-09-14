@@ -95,9 +95,13 @@ bool json_bool(const std::string& json, const std::string& key, bool fallback) {
 }
 
 void write_audio_frame(const float* samples, uint32_t frames) {
-  uint32_t bytes = frames * sizeof(float);
-  std::fwrite(&bytes, sizeof(uint32_t), 1, stdout);
-  std::fwrite(samples, sizeof(float), frames, stdout);
+  // Protocol: [uint32 LE sample_count][sample_count * float32 LE PCM]
+  // Electron parses the header as sample count (not bytes).
+  std::fwrite(&frames, sizeof(uint32_t), 1, stdout);
+  if (frames > 0 && samples) {
+    std::fwrite(samples, sizeof(float), frames, stdout);
+  }
+  std::fflush(stdout);
 }
 
 void send_device_list() {
@@ -162,7 +166,8 @@ int main() {
         write_audio_frame(samples, frames);
       });
       if (ok) {
-        emit_event("{\"type\":\"loopback-started\",\"sessionId\":\"" + sess_id + "\"}");
+        emit_event("{\"type\":\"loopback-started\",\"sessionId\":\"" + sess_id
+          + "\",\"mode\":\"" + loopback_session.last_mode() + "\"}");
       } else {
         emit_error(loopback_session.last_error());
       }

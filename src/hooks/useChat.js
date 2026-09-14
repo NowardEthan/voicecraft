@@ -50,8 +50,9 @@ import {
 const CHUNK_SIZE = 16 * 1024  // 16 KiB
 const CHAT_STORAGE_PREFIX = 'voicecraft:chat:'
 const MAX_PERSISTED = 500
-const MAX_IMAGE_BYTES = 6 * 1024 * 1024
-const MAX_FILE_BYTES = 8 * 1024 * 1024
+const MAX_IMAGE_BYTES = 25 * 1024 * 1024
+const MAX_FILE_BYTES = 25 * 1024 * 1024
+const MAX_ATTACHMENTS = 10
 const MAX_INLINE_DATA_URL = 200_000
 
 function uid() {
@@ -105,7 +106,21 @@ function persistableAttachment(attachment) {
   else if (attachment.dataUrl && attachment.dataUrl.length <= MAX_INLINE_DATA_URL) {
     next.dataUrl = attachment.dataUrl
   }
+  if (attachment.sticker) next.sticker = true
   return next
+}
+
+function normalizeIncomingAttachments(msg) {
+  if (!msg) return []
+  if (Array.isArray(msg.attachments) && msg.attachments.length) {
+    return msg.attachments.filter(Boolean)
+  }
+  if (msg.attachment) return [msg.attachment]
+  return []
+}
+
+export function messageAttachments(msg) {
+  return normalizeIncomingAttachments(msg)
 }
 
 function persistableMessage(msg) {
@@ -119,9 +134,36 @@ function persistableMessage(msg) {
   }
   if (msg.authorHandle) out.authorHandle = msg.authorHandle
   if (msg.authorPhoto) out.authorPhoto = msg.authorPhoto
-  const att = persistableAttachment(msg.attachment)
-  if (att) out.attachment = att
+  const list = normalizeIncomingAttachments(msg)
+    .map(persistableAttachment)
+    .filter(Boolean)
+  if (list.length === 1) out.attachment = list[0]
+  if (list.length > 1) {
+    out.attachments = list
+    out.attachment = list[0]
+  } else if (list.length === 1) {
+    // already set attachment
+  }
   if (msg.replyToId) out.replyToId = msg.replyToId
+  return out
+}
+
+function toStoredAtt(attachment) {
+  if (!attachment) return null
+  const kind = (attachment?.type || '').startsWith('image/') || attachment?.kind === 'image'
+    ? 'image'
+    : 'file'
+  const out = {
+    kind,
+    name: attachment.name || (kind === 'image' ? 'imagem' : 'arquivo'),
+    type: attachment.type || 'application/octet-stream',
+    size: attachment.size || 0,
+    dataUrl: attachment.dataUrl || null,
+    previewUrl: attachment.previewUrl || null,
+    url: attachment.url || null,
+    file: attachment.file || null,
+  }
+  if (attachment.sticker) out.sticker = true
   return out
 }
 
@@ -292,6 +334,11 @@ export function useChat({
         deleted: !!m.deleted,
         pinned: !!m.pinned,
         text: m.deleted ? '' : (m.text || ''),
+        attachment: m.deleted ? undefined : (m.attachment || undefined),
+        attachments: m.deleted
+          ? undefined
+          : (Array.isArray(m.attachments) && m.attachments.length ? m.attachments : undefined),
+        replyToId: m.replyToId || null,
         direction: m.authorId && userId && m.authorId === userId ? 'out' : (m.direction || 'in'),
         status: m.authorId && userId && m.authorId === userId ? 'sent' : m.status,
       }))
@@ -372,18 +419,14 @@ export function useChat({
     const onJson = (msg) => {
       switch (msg.kind) {
         case 'msg': {
-          // Build attachment from incoming wire shape.
-          let attachment = null
-          if (msg.attachment && (msg.attachment.dataUrl || msg.attachment.url)) {
-            attachment = {
-              kind: msg.attachment.kind,
-              dataUrl: msg.attachment.dataUrl || null,
-              url: msg.attachment.url || null,
-              type: msg.attachment.type || 'application/octet-stream',
-              name: msg.attachment.name || 'arquivo',
-              size: msg.attachment.size || 0,
-            }
-          }
+          const list = normalizeIncomingAttachments(msg).map((a) => ({
+            kind: a.kind || ((a.type || '').startsWith('image/') ? 'image' : 'file'),
+            dataUrl: a.dataUrl || null,
+            url: a.url || null,
+            type: a.type || 'application/octet-stream',
+            name: a.name || 'arquivo',
+            size: a.size || 0,
+          })).filter((a) => a.url || a.dataUrl)
           appendMessage({
             id: msg.id || uid(),
             ts: msg.ts || Date.now(),
@@ -394,7 +437,8 @@ export function useChat({
             text: String(msg.text || ''),
             kind: 'msg',
             direction: 'in',
-            attachment,
+            attachment: list[0] || null,
+            attachments: list.length > 1 ? list : undefined,
             replyToId: msg.replyToId || null,
           })
           break
@@ -425,7 +469,9 @@ export function useChat({
           if (!msg.msgId) break
           setMessages(prev => {
             const next = prev.map(m => (
-              m.id === msg.msgId ? { ...m, deleted: true, text: '' } : m
+              (m.id === msg.msgId || m.firestoreId === msg.msgId)
+                ? { ...m, deleted: true, text: '', attachment: undefined, attachments: undefined }
+                : m
             ))
             saveHistory(roomKey, next)
             return next
@@ -554,9 +600,13 @@ export function useChat({
   }, [signaling, postSystem])
 
   // ----- Outbound actions ---------------------------------------------------
-  const sendMessage = useCallback(async ({ text, attachment, replyToId } = {}) => {
+  const sendMessage = useCallback(async ({ text, attachment, attachments, replyToId } = {}) => {
     const trimmed = String(text || '').trim()
-    if (!trimmed && !attachment) return false
+    const rawList = Array.isArray(attachments) && attachments.length
+      ? attachments
+      : (attachment ? [attachment] : [])
+    const inputList = rawList.slice(0, MAX_ATTACHMENTS)
+    if (!trimmed && inputList.length === 0) return false
 
     const rawKey = String(roomKey || '')
     const sep = rawKey.indexOf(':')
@@ -564,16 +614,7 @@ export function useChat({
 
     const id = uid()
     const ts = Date.now()
-    const kind = (attachment?.type || '').startsWith('image/') ? 'image' : 'file'
-    let storedAtt = attachment
-      ? {
-          kind,
-          name: attachment.name || (kind === 'image' ? 'imagem' : 'arquivo'),
-          type: attachment.type || 'application/octet-stream',
-          size: attachment.size || 0,
-          dataUrl: attachment.dataUrl || null,
-        }
-      : null
+    let storedList = inputList.map(toStoredAtt).filter(Boolean)
 
     const msg = {
       kind: 'msg',
@@ -585,30 +626,62 @@ export function useChat({
       authorPhoto: authorProfile?.photoURL || '',
       text: trimmed,
     }
-    if (replyToId) msg.replyToId = replyToId
+    if (replyToId) msg.replyToId = String(replyToId)
 
     appendMessage({
       ...msg,
-      attachment: storedAtt || undefined,
+      attachment: storedList[0] || undefined,
+      attachments: storedList.length > 1 ? storedList : undefined,
       direction: 'out',
       status: 'sending',
     })
 
     try {
-      if (attachment?.file && signaling?.uploadChatFile) {
-        try {
-          const url = await signaling.uploadChatFile(attachment.file, chatRoomId)
-          if (url) {
-            storedAtt = { ...storedAtt, url, dataUrl: storedAtt?.dataUrl || null }
-            replaceMessage(id, { attachment: storedAtt })
-          }
-        } catch (err) {
-          console.warn('[chat] upload failed:', err)
-        }
+      const needsUpload = storedList.some((a) => a.file)
+      if (needsUpload && !signaling?.uploadChatFile) {
+        throw new Error('Upload de anexo indisponível')
       }
 
-      const persistAtt = persistableAttachment(storedAtt)
-      const wire = persistableMessage({ ...msg, attachment: persistAtt })
+      for (let i = 0; i < storedList.length; i++) {
+        const att = storedList[i]
+        if (!att?.file) continue
+        const url = await signaling.uploadChatFile(att.file, chatRoomId)
+        if (!url) throw new Error('Upload sem URL')
+        if (att.previewUrl) {
+          try { URL.revokeObjectURL(att.previewUrl) } catch {}
+        }
+        storedList[i] = {
+          kind: att.kind,
+          name: att.name,
+          type: att.type,
+          size: att.size,
+          url,
+          dataUrl: null,
+          previewUrl: null,
+          ...(att.sticker ? { sticker: true } : null),
+        }
+        replaceMessage(id, {
+          attachment: storedList[0],
+          attachments: storedList.length > 1 ? storedList : undefined,
+        })
+      }
+
+      // Strip File handles before persist
+      storedList = storedList.map(({ file, ...rest }) => rest)
+
+      const persistList = storedList.map(persistableAttachment).filter(Boolean)
+      if (inputList.length && persistList.length === 0) {
+        throw new Error('Anexo incompleto — envie de novo')
+      }
+      if (persistList.some((a) => !a.url && !a.dataUrl)) {
+        throw new Error('Anexo incompleto — envie de novo')
+      }
+
+      const wire = persistableMessage({
+        ...msg,
+        attachment: persistList[0],
+        attachments: persistList.length > 1 ? persistList : undefined,
+      })
       const dc = channel
       if (dc?.readyState === 'open') {
         try { dc.send(JSON.stringify(wire)) } catch (err) {
@@ -618,12 +691,23 @@ export function useChat({
       await signaling?.sendChatMessage?.(wire, chatRoomId)
       replaceMessage(id, {
         status: 'sent',
-        attachment: storedAtt ? { ...storedAtt, dataUrl: persistAtt?.dataUrl || storedAtt.dataUrl || null, url: persistAtt?.url || storedAtt.url } : undefined,
+        attachment: persistList[0] || undefined,
+        attachments: persistList.length > 1 ? persistList : undefined,
       })
       return true
     } catch (err) {
       console.warn('[chat] send failed:', err)
-      replaceMessage(id, { status: 'failed' })
+      const retryable = inputList.length === 0 || persistableAttachment(storedList[0])?.url
+        || persistableAttachment(storedList[0])?.dataUrl
+      if (!retryable) {
+        setMessages((prev) => {
+          const next = prev.filter((m) => m.id !== id)
+          saveHistory(roomKey, next)
+          return next
+        })
+      } else {
+        replaceMessage(id, { status: 'failed' })
+      }
       return false
     }
   }, [username, userId, authorProfile, appendMessage, replaceMessage, channel, signaling, roomKey])
@@ -716,40 +800,40 @@ export function useChat({
     return true
   }, [username, addTransfer, updateTransfer, channel])
 
-  const retry = useCallback((msgId) => {
-    setMessages(prev => {
-      const target = prev.find(m => m.id === msgId)
-      if (!target) return prev
-      const dc = channel
-      if (!dc || dc.readyState !== 'open') {
-        return prev.map(m => m.id === msgId ? { ...m, status: 'failed' } : m)
-      }
-      // Re-send. Strip local-only fields.
-      const wire = {
-        kind: 'msg',
-        id: target.id,
-        ts: target.ts,
-        author: target.author,
-        text: target.text,
-      }
-      if (target.attachment) {
-        wire.attachment = {
-          dataUrl: target.attachment.dataUrl,
-          type: target.attachment.type,
-          name: target.attachment.name,
-          size: target.attachment.size,
-        }
-      }
-      try {
-        dc.send(JSON.stringify(wire))
-        const next = prev.map(m => m.id === msgId ? { ...m, status: 'sent' } : m)
-        saveHistory(roomKey, next)
-        return next
-      } catch {
-        return prev.map(m => m.id === msgId ? { ...m, status: 'failed' } : m)
-      }
+  const retry = useCallback(async (msgId) => {
+    let target = null
+    setMessages((prev) => {
+      const found = prev.find((m) => m.id === msgId)
+      if (!found || found.status !== 'failed') return prev
+      target = found
+      return prev.map((m) => (m.id === msgId ? { ...m, status: 'sending' } : m))
     })
-  }, [channel, roomKey])
+    if (!target) return
+
+    const rawKey = String(roomKey || '')
+    const sep = rawKey.indexOf(':')
+    const chatRoomId = sep >= 0 ? rawKey.slice(sep + 1) : (rawKey || null)
+
+    try {
+      const persistAtt = persistableAttachment(target.attachment)
+      if (target.attachment && !persistAtt?.url && !persistAtt?.dataUrl) {
+        throw new Error('Anexo incompleto — anexe de novo')
+      }
+      const wire = persistableMessage({
+        ...target,
+        attachment: persistAtt,
+      })
+      const dc = channel
+      if (dc?.readyState === 'open') {
+        try { dc.send(JSON.stringify(wire)) } catch {}
+      }
+      await signaling?.sendChatMessage?.(wire, chatRoomId)
+      replaceMessage(msgId, { status: 'sent', attachment: persistAtt || undefined })
+    } catch (err) {
+      console.warn('[chat] retry failed:', err)
+      replaceMessage(msgId, { status: 'failed' })
+    }
+  }, [channel, roomKey, signaling, replaceMessage])
 
   const clear = useCallback(() => {
     setMessages([])
@@ -972,13 +1056,25 @@ export function useChat({
   // Persist to Firestore so the soft-delete survives room/space switches.
   const deleteMessage = useCallback((msgId, { moderate = false } = {}) => {
     let allowed = false
-    setMessages(prev => {
-      const target = prev.find(m => m.id === msgId)
+    let persistId = msgId
+    setMessages((prev) => {
+      const target = prev.find((m) => m.id === msgId || m.firestoreId === msgId)
       if (!target) return prev
-      if (target.direction !== 'out' && !moderate) return prev
+      const isOwn = target.direction === 'out'
+        || (!!userId && target.authorId === userId)
+      if (!isOwn && !moderate) return prev
       allowed = true
-      const next = prev.map(m => (
-        m.id !== msgId ? m : { ...m, deleted: true, text: '' }
+      persistId = target.firestoreId || target.id || msgId
+      const next = prev.map((m) => (
+        (m.id === target.id || (target.firestoreId && m.firestoreId === target.firestoreId))
+          ? {
+              ...m,
+              deleted: true,
+              text: '',
+              attachment: undefined,
+              attachments: undefined,
+            }
+          : m
       ))
       saveHistory(roomKey, next)
       return next
@@ -988,7 +1084,7 @@ export function useChat({
     const rawKey = String(roomKey || '')
     const sep = rawKey.indexOf(':')
     const chatRoomId = sep >= 0 ? rawKey.slice(sep + 1) : (rawKey || null)
-    signaling?.deleteChatMessage?.(msgId, chatRoomId)?.catch((err) => {
+    signaling?.deleteChatMessage?.(persistId, chatRoomId)?.catch((err) => {
       console.warn('[chat] delete persist failed:', err)
     })
 
@@ -996,7 +1092,7 @@ export function useChat({
       if (channel && channel.readyState === 'open') {
         channel.send(JSON.stringify({
           kind: 'delete',
-          msgId,
+          msgId: persistId,
           userId: userId || signaling?.userId || null,
           ts: Date.now(),
         }))
@@ -1069,4 +1165,4 @@ export function useChat({
   }
 }
 
-export { MAX_IMAGE_BYTES, MAX_FILE_BYTES, readFileAsDataUrl }
+export { MAX_IMAGE_BYTES, MAX_FILE_BYTES, MAX_ATTACHMENTS, readFileAsDataUrl }

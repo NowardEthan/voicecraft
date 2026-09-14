@@ -1,412 +1,245 @@
 /**
- * HomeView — personal home when no Space is selected (rail Home).
- * Layout follows the product mockup; content uses real Spaces / profile data.
- * Mentions / invites inbox are not wired yet — shown as empty states.
+ * HomeView — personal Início.
+ * Tabs stay mounted after first visit (and warm in idle) so covers/data
+ * are already there — only the tab transition animates, never a reload flick.
  */
-import { useMemo } from 'react'
+import { useCallback, useMemo, useState } from 'react'
+import { motion } from 'framer-motion'
 import {
   ArrowRight,
-  AtSign,
   Calendar,
-  Compass,
-  Gamepad2,
-  Headphones,
-  Mic2,
-  Search,
-  UserPlus,
+  MessageSquare,
 } from 'lucide-react'
-import SpaceAvatar from '../SpaceAvatar'
-import { PersonAvatar } from '../../features/people'
-import { getRecentSpaceIds } from '../../features/spaces/model/spacePreferences'
-import { resolveSpaceCover } from '../../features/spaces/model/spaceCover'
-import NotificationBell from '../../features/notifications/NotificationBell'
+import {
+  aggregateUpcomingEvents,
+} from './home/homeData'
+import {
+  pageVariants,
+  staggerContainer,
+  staggerItem,
+} from './home/homeMotion'
+import HomeExplore from './home/HomeExplore'
+import AmigosView from './AmigosView'
+import { useNotifications } from '../../features/notifications'
+import { usePublicSpacesCache } from '../../shared/media/usePublicSpacesCache'
 
-function greetingForHour(d = new Date()) {
-  const h = d.getHours()
-  if (h < 5) return 'Boa madrugada'
-  if (h < 12) return 'Bom dia'
-  if (h < 18) return 'Boa tarde'
-  return 'Boa noite'
-}
-
-function firstName(full) {
-  const s = String(full || '').trim()
-  if (!s) return 'você'
-  return s.split(/\s+/)[0]
-}
-
-function pickContinueSpace(spaces = []) {
-  const byId = new Map(spaces.map((s) => [s.id, s]))
-  for (const id of getRecentSpaceIds()) {
-    if (byId.has(id)) return byId.get(id)
-  }
-  return spaces[0] || null
-}
+const ALL_TABS = ['para-voce', 'amigos', 'mensagens', 'eventos']
 
 export default function HomeView({
   spaces = [],
   accountName = '',
-  accountPhoto = '',
+  homeTab = 'para-voce',
   onSelectSpace,
   onCreateSpace,
   onOpenHub,
-  onOpenAccount,
+  onJoinPublic,
+  onOpenSpaceEvents,
   onOpenNotifTarget,
+  onOpenContinueRoom,
   connected = true,
 }) {
-  const name = firstName(accountName)
-  const greeting = greetingForHour()
-  const continueSpace = useMemo(() => pickContinueSpace(spaces), [spaces])
-  const otherSpaces = useMemo(
-    () => spaces.filter((s) => s.id !== continueSpace?.id).slice(0, 5),
-    [spaces, continueSpace?.id],
-  )
+  const { inbox, roomsBySpace } = useNotifications()
+  const { publicSpaces, publicLoading } = usePublicSpacesCache()
+  const allEvents = useMemo(() => aggregateUpcomingEvents(spaces), [spaces])
+  const [joinBusy, setJoinBusy] = useState(null)
 
+  // Keep all home tabs mounted from the first frame — boot already warmed
+  // their chunks/data, so switching is animation-only.
+  const [mountedTabs] = useState(() => new Set(ALL_TABS))
+
+  const memberIds = useMemo(() => new Set(spaces.map((s) => s.id)), [spaces])
+
+  const handleDiscover = useCallback(async (space) => {
+    if (!space?.id || joinBusy) return
+    setJoinBusy(space.id)
+    try {
+      const already = memberIds.has(space.id) || space.joined
+      await onJoinPublic?.(space.id, { alreadyMember: !!already })
+    } finally {
+      setJoinBusy(null)
+    }
+  }, [joinBusy, memberIds, onJoinPublic])
+
+  const active = homeTab === 'explorar' ? 'para-voce' : homeTab
+
+  return (
+    <div className="relative h-full min-h-0">
+      {mountedTabs.has('para-voce') && (
+        <TabPane active={active === 'para-voce'}>
+          <HomeExplore
+            spaces={spaces}
+            publicSpaces={publicSpaces}
+            publicLoading={publicLoading}
+            roomsBySpace={roomsBySpace}
+            memberIds={memberIds}
+            joinBusy={joinBusy}
+            onJoinPublic={handleDiscover}
+            onSelectSpace={onSelectSpace}
+            onOpenContinueRoom={onOpenContinueRoom}
+            onOpenHub={onOpenHub}
+          />
+        </TabPane>
+      )}
+
+      {mountedTabs.has('amigos') && (
+        <TabPane active={active === 'amigos'}>
+          <AmigosView onOpenFriend={undefined} />
+        </TabPane>
+      )}
+
+      {mountedTabs.has('mensagens') && (
+        <TabPane active={active === 'mensagens'}>
+          <TabShell title="Mensagens" subtitle="Conversas recentes nos seus Spaces">
+            <MessagesTab
+              spaces={spaces}
+              inbox={inbox}
+              onOpenNotif={onOpenNotifTarget}
+              onSelectSpace={onSelectSpace}
+            />
+          </TabShell>
+        </TabPane>
+      )}
+
+      {mountedTabs.has('eventos') && (
+        <TabPane active={active === 'eventos'}>
+          <TabShell title="Eventos" subtitle="Agenda dos Spaces em que você está">
+            {allEvents.length === 0 ? (
+              <EmptyPanel
+                icon={Calendar}
+                title="Nenhum evento próximo"
+                body="Abra um Space e marque um encontro pra galera."
+              />
+            ) : (
+              <motion.ul variants={staggerContainer} initial="initial" animate="animate" className="space-y-2 max-w-xl">
+                {allEvents.slice(0, 20).map((ev) => (
+                  <motion.li key={`${ev.spaceId}-${ev.at}-${ev.title}`} variants={staggerItem}>
+                    <button
+                      type="button"
+                      onClick={() => onOpenSpaceEvents?.(ev.spaceId)}
+                      className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl border border-white/[0.07] bg-white/[0.03] hover:bg-white/[0.06] text-left"
+                    >
+                      <span className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#6366f1] to-[#3b82f6] flex items-center justify-center text-white text-[12px] font-bold">
+                        {new Date(ev.at).getDate()}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[13.5px] font-semibold text-strong truncate">
+                          {ev.title || 'Evento'}
+                        </span>
+                        <span className="block text-[12px] text-muted truncate">{ev.spaceName}</span>
+                      </span>
+                      <ArrowRight size={14} className="text-muted shrink-0" />
+                    </button>
+                  </motion.li>
+                ))}
+              </motion.ul>
+            )}
+          </TabShell>
+        </TabPane>
+      )}
+    </div>
+  )
+}
+
+function TabPane({ active, children }) {
+  return (
+    <div
+      className="absolute inset-0 h-full min-h-0"
+      style={{
+        visibility: active ? 'visible' : 'hidden',
+        pointerEvents: active ? 'auto' : 'none',
+        zIndex: active ? 1 : 0,
+      }}
+      aria-hidden={!active}
+    >
+      {active ? (
+        <motion.div
+          className="h-full min-h-0"
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+        >
+          {children}
+        </motion.div>
+      ) : (
+        children
+      )}
+    </div>
+  )
+}
+
+function TabShell({ title, subtitle, children }) {
   return (
     <div className="h-full min-h-0 overflow-y-auto overscroll-contain bg-canvas">
-      <div className="max-w-[1180px] mx-auto w-full px-4 sm:px-6 md:px-8 pt-6 sm:pt-8 pb-10">
-        {/* Header */}
-        <header className="flex items-start justify-between gap-4 mb-7 sm:mb-9">
-          <div>
-            <h1 className="text-[28px] sm:text-[34px] font-bold text-strong tracking-tight leading-tight">
-              {greeting},{' '}
-              <span className="text-accent">{name}</span>
-            </h1>
-            <p className="mt-1.5 text-[14px] text-muted">
-              Aqui está o que está acontecendo.
-            </p>
-          </div>
-          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-            <IconBtn label="Buscar" onClick={onOpenHub}>
-              <Search size={18} strokeWidth={1.75} />
-            </IconBtn>
-            <NotificationBell placement="header" onOpenTarget={onOpenNotifTarget} />
-            <button
-              type="button"
-              onClick={onOpenAccount}
-              className="ml-1 flex items-center gap-1.5 rounded-full p-0.5 hover:bg-surface2 transition-colors"
-              aria-label="Conta"
-            >
-              <PersonAvatar
-                src={accountPhoto}
-                name={accountName || 'você'}
-                size={36}
-              />
-            </button>
-          </div>
-        </header>
-
-        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_280px] gap-6 xl:gap-8">
-          <div className="min-w-0 space-y-8">
-            {/* Continuar */}
-            <section>
-              <h2 className="text-[15px] font-semibold text-strong mb-3">
-                Continuar de onde parou
-              </h2>
-              <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)] gap-3 sm:gap-4 min-w-0">
-                <ContinueCard
-                  space={continueSpace}
-                  onOpen={() => continueSpace && onSelectSpace?.(continueSpace.id)}
-                  onCreate={onCreateSpace}
-                  connected={connected}
-                />
-                <LiveHintCard
-                  space={continueSpace}
-                  onOpen={() => continueSpace && onSelectSpace?.(continueSpace.id)}
-                />
-              </div>
-            </section>
-
-            {/* Para você */}
-            <section>
-              <h2 className="text-[15px] font-semibold text-strong mb-3">
-                Para você
-              </h2>
-              <div className="rounded-card border border-line bg-surface1/80 overflow-hidden divide-y divide-line">
-                <FeedEmpty
-                  icon={AtSign}
-                  title="Nenhuma menção por enquanto"
-                  body="Quando alguém te marcar em um Space, aparece aqui."
-                />
-                <FeedEmpty
-                  icon={UserPlus}
-                  title="Sem convites pendentes"
-                  body="Convites recebidos vão aparecer nesta lista."
-                  actionLabel="Explorar Spaces"
-                  onAction={onOpenHub}
-                />
-                <FeedEmpty
-                  icon={Calendar}
-                  title="Nenhum evento próximo"
-                  body="Abra um Space para ver a agenda da comunidade."
-                />
-              </div>
-              <button
-                type="button"
-                onClick={onOpenHub}
-                className="mt-4 inline-flex items-center gap-2 text-[13px] font-medium text-accent hover:opacity-90 transition-opacity"
-              >
-                <Compass size={15} strokeWidth={2} />
-                Explorar Spaces públicos
-                <ArrowRight size={14} strokeWidth={2} />
-              </button>
-            </section>
-          </div>
-
-          {/* Pessoas / Spaces online rail */}
-          <aside className="min-w-0">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-[15px] font-semibold text-strong">
-                Seus Spaces
-              </h2>
-              <button
-                type="button"
-                onClick={onOpenHub}
-                className="text-[12px] font-medium text-accent hover:opacity-90"
-              >
-                Ver todos
-              </button>
-            </div>
-            <div className="rounded-card border border-line bg-surface1/60 p-2 space-y-0.5">
-              {spaces.length === 0 ? (
-                <p className="px-3 py-6 text-[13px] text-muted text-center">
-                  Entre em um Space para ver atividade aqui.
-                </p>
-              ) : (
-                [continueSpace, ...otherSpaces].filter(Boolean).map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => onSelectSpace?.(s.id)}
-                    className="w-full flex items-center gap-3 px-2.5 py-2.5 rounded-xl hover:bg-surface2 transition-colors text-left"
-                  >
-                    <SpaceAvatar space={s} size={40} rounded="xl" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-[13.5px] font-semibold text-strong truncate">
-                        {s.name}
-                      </span>
-                      <span className="block text-[11.5px] text-muted truncate">
-                        {s.memberCount || 0} {(s.memberCount || 0) === 1 ? 'pessoa' : 'pessoas'}
-                        {s.roomCount ? ` · ${s.roomCount} salas` : ''}
-                      </span>
-                    </span>
-                    <span className="w-2 h-2 rounded-full bg-positive shrink-0" aria-hidden />
-                  </button>
-                ))
-              )}
-            </div>
-          </aside>
-        </div>
+      <div className="max-w-[720px] mx-auto w-full px-4 sm:px-6 pt-8 pb-12">
+        <h1 className="text-[26px] font-bold text-strong tracking-tight">{title}</h1>
+        {subtitle ? <p className="mt-1 text-[14px] text-muted mb-6">{subtitle}</p> : <div className="mb-6" />}
+        {children}
       </div>
     </div>
   )
 }
 
-function IconBtn({ children, label, onClick, disabled }) {
+function EmptyPanel({ icon: Icon, title, body, actionLabel, onAction }) {
   return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      onClick={onClick}
-      disabled={disabled}
-      className="
-        w-9 h-9 rounded-full flex items-center justify-center
-        text-muted hover:text-strong hover:bg-surface2
-        disabled:opacity-40 disabled:cursor-not-allowed
-        transition-colors
-      "
-    >
-      {children}
-    </button>
-  )
-}
-
-function ContinueCard({ space, onOpen, onCreate, connected }) {
-  if (!space) {
-    return (
-      <div className="relative overflow-hidden rounded-[20px] border border-line bg-surface1 min-h-[220px] flex flex-col justify-end p-5">
-        <div
-          aria-hidden
-          className="absolute inset-0 opacity-40"
-          style={{
-            background:
-              'radial-gradient(ellipse at 30% 20%, var(--space-accent-glow-24), transparent 55%)',
-          }}
-        />
-        <div className="relative z-10">
-          <p className="text-[13px] text-muted mb-2">Nenhum Space ainda</p>
-          <h3 className="text-[20px] font-bold text-strong mb-4">
-            Crie o seu primeiro lugar
-          </h3>
-          <button
-            type="button"
-            onClick={onCreate}
-            disabled={!connected}
-            className="
-              inline-flex items-center gap-2 px-5 py-2.5 rounded-pill
-              bg-accent text-strong text-[13.5px] font-semibold
-              disabled:opacity-50
-            "
-          >
-            Criar Space
-            <ArrowRight size={15} />
-          </button>
-        </div>
+    <div className="rounded-2xl border border-white/[0.07] bg-white/[0.03] px-5 py-10 text-center">
+      <div className="mx-auto w-11 h-11 rounded-full bg-white/[0.05] flex items-center justify-center text-muted mb-3">
+        <Icon size={20} strokeWidth={1.75} />
       </div>
-    )
-  }
-
-  const cover = resolveSpaceCover(space)
-  const slogan = space.slogan || space.description || 'Sua galera. Todo dia.'
-
-  return (
-    <div className="relative overflow-hidden rounded-[20px] border border-line min-h-[220px] group">
-      {cover ? (
-        <img
-          src={cover}
-          alt=""
-          className="absolute inset-0 w-full h-full object-cover scale-[1.02] group-hover:scale-105 transition-transform duration-500"
-        />
-      ) : (
-        <div
-          className="absolute inset-0"
-          style={{
-            background: `linear-gradient(145deg, ${space.color || '#ff3f6c'}55, #0d0f14 70%)`,
-          }}
-        />
-      )}
-      <div
-        aria-hidden
-        className="absolute inset-0"
-        style={{
-          background:
-            'linear-gradient(180deg, rgba(8,10,14,0.25) 0%, rgba(8,10,14,0.72) 55%, rgba(8,10,14,0.92) 100%)',
-        }}
-      />
-      <div className="relative z-10 h-full min-h-[220px] flex flex-col p-5">
-        <div className="flex items-center gap-3 mb-auto">
-          <SpaceAvatar space={space} size={44} rounded="xl" />
-          <div className="min-w-0">
-            <p className="text-[17px] font-bold text-white truncate">{space.name}</p>
-            <p className="text-[12.5px] text-white/70 truncate">{slogan}</p>
-          </div>
-        </div>
-
-        <div className="mt-4 rounded-2xl bg-black/35 border border-white/10 px-3.5 py-3 backdrop-blur-sm">
-          <div className="flex items-center gap-2 text-[12px] text-white/80">
-            <Gamepad2 size={14} className="text-accent shrink-0" />
-            <span className="truncate">
-              {space.roomCount
-                ? `${space.roomCount} ${space.roomCount === 1 ? 'sala' : 'salas'} · ${space.memberCount || 0} pessoas`
-                : `${space.memberCount || 0} pessoas no Space`}
-            </span>
-          </div>
-        </div>
-
+      <p className="text-[14px] font-semibold text-strong">{title}</p>
+      <p className="text-[13px] text-muted mt-1 max-w-sm mx-auto leading-relaxed">{body}</p>
+      {actionLabel && onAction ? (
         <button
           type="button"
-          onClick={onOpen}
-          className="
-            mt-3 w-full inline-flex items-center justify-center gap-2
-            px-4 py-3 rounded-pill
-            text-[14px] font-semibold text-strong
-            bg-gradient-to-r from-accent to-[#ff6b8a]
-            shadow-[0_10px_28px_-10px_var(--space-accent-glow-24)]
-            hover:opacity-95 active:scale-[0.99] transition-all
-          "
+          onClick={onAction}
+          className="mt-4 h-9 px-4 rounded-full text-[12.5px] font-semibold text-white bg-[#3b82f6] hover:opacity-95"
         >
-          Continuar conversa
-          <ArrowRight size={16} strokeWidth={2.25} />
+          {actionLabel}
         </button>
-      </div>
+      ) : null}
     </div>
   )
 }
 
-function LiveHintCard({ space, onOpen }) {
+function MessagesTab({ spaces, inbox, onOpenNotif, onSelectSpace }) {
+  const items = (inbox || []).slice(0, 12)
   return (
-    <div className="rounded-[20px] border border-line bg-surface1 min-h-[220px] p-5 flex flex-col overflow-hidden min-w-0">
-      <div className="flex items-start justify-between gap-3 mb-4 min-w-0">
-        <div className="min-w-0 flex-1">
-          <p className="text-[15px] font-semibold text-strong truncate">Sala de voz agora</p>
-          <p className="text-[12px] text-muted mt-0.5 truncate">
-            {space ? `${space.name} · abra para ver quem está ao vivo` : 'Entre em um Space'}
-          </p>
-        </div>
-        <span className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-pill text-[11px] font-semibold bg-accent-soft text-accent border border-accent/20">
-          <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
-          Ao vivo
-        </span>
-      </div>
-
-      <div className="flex-1 flex flex-col items-center justify-center py-2">
-        <div className="relative flex items-center justify-center mb-3">
-          <div
-            aria-hidden
-            className="absolute w-24 h-24 rounded-full border border-accent/30 animate-pulse"
-          />
-          <div
-            aria-hidden
-            className="absolute w-[4.5rem] h-[4.5rem] rounded-full border border-accent/50"
-          />
-          <div className="relative w-14 h-14 rounded-full bg-accent-soft text-accent flex items-center justify-center">
-            <Mic2 size={26} strokeWidth={1.75} />
-          </div>
-        </div>
-        <p className="text-[12.5px] text-muted text-center max-w-[220px] leading-relaxed">
-          A presença ao vivo aparece quando você entra no Space — presença cross-Space chega em breve.
-        </p>
-        <div className="mt-3 flex items-end gap-1 h-6 opacity-70" aria-hidden>
-          {[4, 10, 6, 14, 8, 12, 5, 11, 7].map((h, i) => (
-            <span
-              key={i}
-              className="w-1 rounded-full bg-accent"
-              style={{ height: h }}
-            />
+    <div className="space-y-4">
+      {items.length === 0 ? (
+        <EmptyPanel
+          icon={MessageSquare}
+          title="Nenhuma mensagem recente"
+          body="Quando houver atividade nos seus Spaces, aparece aqui."
+        />
+      ) : (
+        <ul className="rounded-2xl border border-white/[0.07] bg-white/[0.02] divide-y divide-white/[0.05] overflow-hidden">
+          {items.map((n) => (
+            <li key={n.id}>
+              <button
+                type="button"
+                onClick={() => onOpenNotif?.({ spaceId: n.spaceId, roomId: n.roomId })}
+                className="w-full flex items-start gap-3 px-4 py-3 text-left hover:bg-white/[0.04]"
+              >
+                <MessageSquare size={16} className="text-muted mt-0.5 shrink-0" />
+                <span className="min-w-0">
+                  <span className="block text-[13px] text-strong line-clamp-2">{n.preview}</span>
+                  <span className="block text-[11px] text-muted mt-0.5">
+                    {n.spaceName}{n.roomName ? ` · #${n.roomName}` : ''}
+                  </span>
+                </span>
+              </button>
+            </li>
           ))}
-        </div>
-      </div>
-
-      <button
-        type="button"
-        onClick={onOpen}
-        disabled={!space}
-        className="
-          mt-auto w-full inline-flex items-center justify-center gap-2
-          px-4 py-2.5 rounded-pill
-          text-[13.5px] font-semibold
-          border border-accent/50 text-accent
-          hover:bg-accent-soft disabled:opacity-40 disabled:cursor-not-allowed
-          transition-colors
-        "
-      >
-        <Headphones size={16} strokeWidth={1.75} />
-        Entrar
-      </button>
-    </div>
-  )
-}
-
-function FeedEmpty({ icon: Icon, title, body, actionLabel, onAction }) {
-  return (
-    <div className="flex items-start gap-3 px-4 py-3.5">
-      <div className="w-9 h-9 rounded-full bg-accent-soft text-accent flex items-center justify-center shrink-0">
-        <Icon size={16} strokeWidth={1.75} />
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="text-[13.5px] font-semibold text-strong">{title}</p>
-        <p className="text-[12.5px] text-muted mt-0.5 leading-relaxed">{body}</p>
-        {actionLabel && onAction ? (
-          <button
-            type="button"
-            onClick={onAction}
-            className="mt-2 inline-flex px-3 py-1.5 rounded-pill bg-accent text-strong text-[12px] font-semibold"
-          >
-            {actionLabel}
-          </button>
-        ) : null}
-      </div>
+        </ul>
+      )}
+      {spaces.length > 0 && (
+        <button
+          type="button"
+          onClick={() => onSelectSpace?.(spaces[0].id)}
+          className="text-[13px] font-medium text-[#60a5fa]"
+        >
+          Abrir um Space
+        </button>
+      )}
     </div>
   )
 }

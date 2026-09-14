@@ -12,6 +12,8 @@ import {
   isDefaultCoverFit,
   normalizeCoverFit,
 } from '../model/spaceCover'
+import { SoftCover } from '../../../shared/media/SoftImage'
+import { warmImage, isImageWarm } from '../../../shared/media/imageWarm'
 
 function clamp(n, min, max) {
   return Math.min(max, Math.max(min, n))
@@ -100,6 +102,9 @@ export function SpaceCoverLayer({
 
   if (!src) return null
 
+  // Kick decode immediately so SoftCover can paint at full opacity.
+  if (!isImageWarm(src)) warmImage(src)
+
   const onPointerDown = (e) => {
     if (!interactive || e.button !== 0) return
     if (e.target.closest('[data-cover-controls]')) return
@@ -153,13 +158,7 @@ export function SpaceCoverLayer({
       onPointerCancel={interactive ? endDrag : undefined}
       onDoubleClick={interactive ? () => commit(DEFAULT_COVER_FIT) : undefined}
     >
-      <img
-        src={src}
-        alt=""
-        draggable={false}
-        className="absolute inset-0 w-full h-full object-cover select-none pointer-events-none"
-        style={coverImageStyle(current)}
-      />
+      <SoftCover src={src} imgStyle={coverImageStyle(current)} />
       {showControls && (
         <SpaceCoverFitControls
           fit={current}

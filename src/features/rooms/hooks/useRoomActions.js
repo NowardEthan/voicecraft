@@ -77,12 +77,18 @@ export function useRoomActions() {
 
     const voice = currentRoomRef.current
 
-    // Voice room: join call (or return UI focus to the call you're already in).
+    // Voice room: mount LiveKit immediately; Firestore catches up in background.
     if (room.type === 'voice') {
       setSelectedRoom(null)
       if (voice?.id === room.id) return
-      setTransitioning(true)
-      sig.enterRoom?.(room.id)
+      const prevVoice = voice
+      setCurrentRoom(room)
+      setTransitioning(false)
+      Promise.resolve(sig.enterRoom?.(room.id)).catch((err) => {
+        console.warn('[selectRoom] enter voice failed', err)
+        setCurrentRoom((cur) => (cur?.id === room.id ? (prevVoice || null) : cur))
+        flashToast(err?.message || 'não deu pra entrar na call')
+      })
       return
     }
 

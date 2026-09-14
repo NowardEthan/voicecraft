@@ -15,8 +15,33 @@ import MessageBubble from './MessageBubble'
 import { colorFromId } from '../../features/spaces'
 import { resolveChatDensity, normalizeChatDensity } from './chatDensity'
 import { getLastRead, setLastRead } from '../../features/notifications/unreadStore'
+import { usePerfProfile } from '../../shared/perf/usePerfProfile'
 
 const STICK_THRESHOLD_PX = 100
+
+/** Scroll a message into the chat scroller (not the window). */
+function scrollScrollerToTarget(scroller, target, { behavior = 'smooth', block = 'center' } = {}) {
+  if (!scroller || !target) return false
+  const sRect = scroller.getBoundingClientRect()
+  const tRect = target.getBoundingClientRect()
+  const offsetWithin = (tRect.top - sRect.top) + scroller.scrollTop
+  let next
+  if (block === 'start') {
+    next = offsetWithin - 12
+  } else if (block === 'end') {
+    next = offsetWithin - scroller.clientHeight + tRect.height + 12
+  } else {
+    next = offsetWithin - (scroller.clientHeight / 2) + (tRect.height / 2)
+  }
+  const max = Math.max(0, scroller.scrollHeight - scroller.clientHeight)
+  next = Math.max(0, Math.min(next, max))
+  if (typeof scroller.scrollTo === 'function') {
+    scroller.scrollTo({ top: next, behavior })
+  } else {
+    scroller.scrollTop = next
+  }
+  return true
+}
 
 function isOwnMessage(m, currentUserId, currentUserName) {
   if (m?.authorId && currentUserId) return m.authorId === currentUserId
@@ -113,6 +138,8 @@ export default function MessageList({
   const [stickToBottom, setStickToBottom] = useState(true)
   const [highlightId, setHighlightId] = useState(null)
   const [highlightTick, setHighlightTick] = useState(0)
+  const [forceVisibleId, setForceVisibleId] = useState(null)
+  const [jumpSeq, setJumpSeq] = useState(0)
   const [typingState, setTypingState] = useState({ peers: [] })
   const highlightTimerRef = useRef(null)
   const lastLenRef = useRef(messages.length)
@@ -122,6 +149,8 @@ export default function MessageList({
   })
   const densityKey = normalizeChatDensity(density)
   const dens = resolveChatDensity(densityKey)
+  const perfProfile = usePerfProfile()
+  const messageWindow = Math.max(60, Number(perfProfile?.budgets?.messageWindow) || 200)
 
   const handleScroll = useCallback(() => {
     const el = scrollerRef.current
@@ -132,6 +161,8 @@ export default function MessageList({
     if (stick) setUnseen(0)
   }, [])
 
+  // Only auto-scroll when *new* messages arrive and user is pinned to bottom.
+  // Reactions / likes / pins change the array ref but not length — must NOT scroll.
   useEffect(() => {
     const el = scrollerRef.current
     if (!el) return
@@ -142,22 +173,48 @@ export default function MessageList({
 
     if (stickToBottom) {
       requestAnimationFrame(() => {
-        if (el) el.scrollTop = el.scrollHeight
+        if (!el) return
+        // Header rooms that still fit the viewport: stay at top (rules visible).
+        if (listHeader && el.scrollHeight <= el.clientHeight + 48) {
+          el.scrollTop = 0
+          return
+        }
+        el.scrollTop = el.scrollHeight
       })
       setUnseen(0)
     } else {
-      setUnseen(n => n + incoming)
+      setUnseen((n) => n + incoming)
     }
-  }, [messages.length, stickToBottom])
+  }, [messages.length, stickToBottom, listHeader])
 
+  // Room change: rules/header channels open at the TOP so the card is visible.
+  // Normal chats stick to the latest message.
   useEffect(() => {
-    lastLenRef.current = messages.length
+    lastLenRef.current = 0
     setUnseen(0)
-    requestAnimationFrame(() => {
+    setHighlightId(null)
+    setForceVisibleId(null)
+    setStickToBottom(!listHeader)
+    const id = requestAnimationFrame(() => {
       const el = scrollerRef.current
-      if (el) el.scrollTop = el.scrollHeight
+      if (!el) return
+      el.scrollTop = listHeader ? 0 : el.scrollHeight
+      lastLenRef.current = messages.length
     })
-  }, [messages === undefined ? null : messages])
+    return () => cancelAnimationFrame(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- seed on room switch only
+  }, [roomKey, listHeader])
+
+  // After messages hydrate in a normal chat, pin to bottom once.
+  useEffect(() => {
+    if (listHeader || !stickToBottom) return
+    const el = scrollerRef.current
+    if (!el) return
+    requestAnimationFrame(() => {
+      if (el) el.scrollTop = el.scrollHeight
+      lastLenRef.current = messages.length
+    })
+  }, [messages.length, listHeader, stickToBottom, roomKey])
 
   useEffect(() => {
     if (!stickToBottom || !messages.length) return
@@ -169,16 +226,10 @@ export default function MessageList({
 
   const jumpToMessage = useCallback((id) => {
     if (!id) return
-    const root = scrollerRef.current
-    if (!root) return
-    const target = root.querySelector(`[data-msg-id="${CSS.escape(String(id))}"]`)
-    if (!target) return
+    // Expand the message window first so the target is mounted.
+    setForceVisibleId(String(id))
+    setJumpSeq((n) => n + 1)
     setStickToBottom(false)
-    target.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    setHighlightId(id)
-    setHighlightTick((n) => n + 1)
-    if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current)
-    highlightTimerRef.current = window.setTimeout(() => setHighlightId(null), 2400)
   }, [])
 
   useEffect(() => {
@@ -207,23 +258,99 @@ export default function MessageList({
   const messagesById = useMemo(() => {
     const m = new Map()
     for (const message of messages) {
-      if (message.id) m.set(message.id, message)
+      if (message?.id) m.set(message.id, message)
+      if (message?.firestoreId) m.set(message.firestoreId, message)
     }
     return m
   }, [messages])
 
   const filteredMessages = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return messages
-    return messages.filter(m => {
-      if (m.kind === 'sys' || m.kind === 'announce' || m.announce
-        || m.kind === 'lobby_event' || m.kind === 'lobby_welcome'
-        || m.lobbyEvent) {
-        return true
+    let list = messages
+    if (q) {
+      list = messages.filter(m => {
+        if (m.kind === 'sys' || m.kind === 'announce' || m.announce
+          || m.kind === 'lobby_event' || m.kind === 'lobby_welcome'
+          || m.lobbyEvent) {
+          return true
+        }
+        return String(m.text || m.announce?.title || m.announce?.body || '').toLowerCase().includes(q)
+      })
+    }
+    // Cap DOM size by hardware tier — keep newest messages unless jump/reply parent is older.
+    if (list.length <= messageWindow) return list
+    let start = list.length - messageWindow
+    const ensureVisible = (id) => {
+      if (!id) return
+      const idx = list.findIndex((m) => m?.id === id || m?.firestoreId === id)
+      if (idx >= 0 && idx < start) start = Math.max(0, idx - 12)
+    }
+    ensureVisible(jumpToId)
+    ensureVisible(forceVisibleId)
+    // Expand window so reply parents stay mounted (quote jump + context).
+    for (let pass = 0; pass < 2; pass++) {
+      const from = start
+      for (let i = from; i < list.length; i++) {
+        ensureVisible(list[i]?.replyToId)
       }
-      return String(m.text || m.announce?.title || m.announce?.body || '').toLowerCase().includes(q)
-    })
-  }, [messages, query])
+    }
+    return list.slice(start)
+  }, [messages, query, messageWindow, jumpToId, forceVisibleId])
+
+  // Jump once per click (jumpSeq). Do NOT depend on filteredMessages — that
+  // array churns on every chat update and was cancelling the scroll mid-flight.
+  useEffect(() => {
+    if (!forceVisibleId || !jumpSeq) return undefined
+    let cancelled = false
+    let tries = 0
+    let done = false
+
+    const tryJump = () => {
+      if (cancelled || done) return
+      const scroller = scrollerRef.current
+      if (!scroller) return
+      const id = String(forceVisibleId)
+      const target = scroller.querySelector(`[data-msg-id="${CSS.escape(id)}"]`)
+        || scroller.querySelector(`[data-msg-fs="${CSS.escape(id)}"]`)
+      if (!target) {
+        if (tries++ < 24) requestAnimationFrame(tryJump)
+        return
+      }
+      done = true
+      setStickToBottom(false)
+
+      // Position relative to the chat scroller (not window / scrollIntoView).
+      const sRect = scroller.getBoundingClientRect()
+      const tRect = target.getBoundingClientRect()
+      const offsetWithin = (tRect.top - sRect.top) + scroller.scrollTop
+      const max = Math.max(0, scroller.scrollHeight - scroller.clientHeight)
+      const next = Math.max(
+        0,
+        Math.min(
+          offsetWithin - (scroller.clientHeight / 2) + (tRect.height / 2),
+          max,
+        ),
+      )
+      // Direct assignment is reliable in Electron nested overflow shells.
+      scroller.scrollTop = next
+
+      setHighlightId(id)
+      setHighlightTick((n) => n + 1)
+      if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current)
+      highlightTimerRef.current = window.setTimeout(() => setHighlightId(null), 2400)
+    }
+
+    const raf = requestAnimationFrame(tryJump)
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(raf)
+    }
+  }, [forceVisibleId, jumpSeq])
+
+  const resolveReplyTarget = useCallback((replyToId) => {
+    if (!replyToId) return null
+    return messagesById.get(replyToId) || { id: replyToId, missing: true }
+  }, [messagesById])
 
   const pinnedSet = useMemo(() => {
     const fromProp = new Set(pinnedIds || [])
@@ -278,10 +405,12 @@ export default function MessageList({
       }
       const isMine = isOwnMessage(m, currentUserId, currentUserName)
       const prev = filteredMessages[i - 1]
+      const hasAtt = !!(m.attachment || (Array.isArray(m.attachments) && m.attachments.length))
+      const prevHasAtt = !!(prev?.attachment || (Array.isArray(prev?.attachments) && prev.attachments.length))
       const sameAsPrev = prev
         && prev.kind === 'msg'
-        && !m.attachment
-        && !prev.attachment
+        && !hasAtt
+        && !prevHasAtt
         && !m.replyToId
         && isOwnMessage(prev, currentUserId, currentUserName) === isMine
         && ((isMine ? m.author : prev.author) || 'peer') === ((isMine ? prev.author : m.author) || 'peer')
@@ -374,7 +503,10 @@ function renderTypingLabel(text) {
         {loading ? (
           <SkeletonStack />
         ) : filteredMessages.length === 0 ? (
-          <EmptyHint text={query.trim() ? `sem resultados pra "${query}"` : emptyHint} />
+          <EmptyHint
+            text={query.trim() ? `sem resultados pra "${query}"` : emptyHint}
+            compact={!!listHeader}
+          />
         ) : (
           rows.map(g => {
             if (g.kind === 'day') {
@@ -423,9 +555,12 @@ function renderTypingLabel(text) {
                      * group (stable for the whole chain), fallback to a
                      * per-message id-derived hue.                          */
                     authorColor={g.color || colorFromId(m.authorId || m.author || (g.isMine ? '__me__' : 'peer'))}
-                    replyTo={m.replyToId ? (messagesById.get(m.replyToId) || { id: m.replyToId, missing: true }) : null}
+                    replyTo={m.replyToId ? resolveReplyTarget(m.replyToId) : null}
                     replyAuthor={m.replyToId ? resolveChatAuthor(messagesById.get(m.replyToId), members, currentUserId, currentUserName) : null}
-                    highlighted={highlightId === m.id}
+                    highlighted={
+                      highlightId != null
+                      && (highlightId === m.id || highlightId === m.firestoreId)
+                    }
                     highlightTick={highlightTick}
                     onJumpToReply={jumpToMessage}
                     currentUserId={currentUserId}
@@ -531,9 +666,16 @@ function SkeletonStack() {
   )
 }
 
-function EmptyHint({ text }) {
+function EmptyHint({ text, compact = false }) {
+  // Never use h-full here — it doubles scrollHeight under listHeader (rules)
+  // and auto-scroll-to-bottom hides the card above.
   return (
-    <div className="h-full flex flex-col items-center justify-center text-center px-6">
+    <div
+      className={
+        (compact ? 'py-8' : 'min-h-[min(52vh,360px)] py-12') +
+        ' flex flex-col items-center justify-center text-center px-6'
+      }
+    >
       <MessageSquare size={28} className="text-line mb-3" />
       <p className="text-[12.5px] text-muted leading-relaxed">{text}</p>
     </div>
