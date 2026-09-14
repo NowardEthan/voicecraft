@@ -1,6 +1,6 @@
 {
   "name": "voicecraft",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "P2P voice/video chat for LAN",
   "main": "dist-electron/main.js",
   "scripts": {
