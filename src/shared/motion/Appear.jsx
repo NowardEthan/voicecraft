@@ -24,7 +24,7 @@ export const appearItem = {
   animate: {
     opacity: 1,
     y: 0,
-    transition: { duration: 0.26, ease: APPEAR_EASE },
+    transition: { duration: 0.22, ease: APPEAR_EASE },
   },
 }
 
@@ -45,7 +45,7 @@ export function Appear({
   className = '',
   delay = 0,
   y = 6,
-  duration = 0.26,
+  duration = 0.22,
   as: Comp = motion.div,
   ...rest
 }) {

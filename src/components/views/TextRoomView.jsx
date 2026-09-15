@@ -349,6 +349,8 @@ export default function TextRoomView({
             authorColors={authorColors}
             roomKey={roomKey}
             onRetry={handleRetry}
+            onCopy={chat.copyMessageText}
+            onCancel={chat.cancelOutbox}
             onImageClick={(imagesOrUrl, index = 0) => {
               if (Array.isArray(imagesOrUrl)) setLightbox({ images: imagesOrUrl, index })
               else if (imagesOrUrl) setLightbox({ images: [imagesOrUrl], index: 0 })
@@ -428,6 +430,9 @@ export default function TextRoomView({
             accent={accent}
             channelName={room.name}
             disabled={false}
+            spaceId={space?.id}
+            roomId={room?.id}
+            accountUid={currentUserId}
             onSubmit={async (payload) => {
               const ok = await handleSubmit(payload)
               textStateRef.current = ''

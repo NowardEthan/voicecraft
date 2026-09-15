@@ -15,10 +15,18 @@ export function usePerfProfile() {
     let cancelled = false
     const mode = settings?.perfMode || 'auto'
     setImageWarmPerfMode(mode)
-    setProfile(resolvePerfProfile(mode))
+    const prof = resolvePerfProfile(mode)
+    setProfile(prof)
+    if (typeof document !== 'undefined' && document.body) {
+      document.body.setAttribute('data-perf-tier', prof.tier || 'mid')
+    }
     probeHardware().then((probe) => {
       if (cancelled) return
-      setProfile(resolvePerfProfile(mode))
+      const updatedProf = resolvePerfProfile(mode)
+      setProfile(updatedProf)
+      if (typeof document !== 'undefined' && document.body) {
+        document.body.setAttribute('data-perf-tier', updatedProf.tier || 'mid')
+      }
       const tier = probe?.autoTier
       if (tier && settings?.lastPerfTier !== tier) {
         updateSettings?.({ lastPerfTier: tier })

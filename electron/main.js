@@ -5,6 +5,12 @@ const fs = require('fs')
 const http = require('http')
 const { pathToFileURL } = require('url')
 
+// Telemetria: marca o instante em que o main process começa a executar.
+try {
+  const { performance } = require('node:perf_hooks')
+  performance.mark('voice:process-start')
+} catch {}
+
 let mainWindow
 let tray = null
 let audioServiceProc = null
@@ -1060,8 +1066,8 @@ function resolveWindowIconPng() {
     path.join(__dirname, '..', 'public', 'app-icon.png'),
     path.join(__dirname, '..', 'dist', 'app-icon.png'),
     path.join(app.getAppPath(), 'dist', 'app-icon.png'),
-    path.join(__dirname, '..', 'public', 'brand', 'app-icon', 'voicecraft-app-icon-256.png'),
-    path.join(app.getAppPath(), 'dist', 'brand', 'app-icon', 'voicecraft-app-icon-256.png'),
+    path.join(__dirname, '..', 'public', 'brand', 'app-icon', 'voice-app-icon-256.png'),
+    path.join(app.getAppPath(), 'dist', 'brand', 'app-icon', 'voice-app-icon-256.png'),
   ].filter(Boolean)
   for (const p of candidates) {
     try {
@@ -1097,9 +1103,9 @@ function applyWindowsTaskbarIcon(win, icoPath, pngPath) {
 
 function resolveTrayPng() {
   const candidates = [
-    path.join(__dirname, '..', 'public', 'brand', 'app-icon', 'voicecraft-app-icon-32.png'),
-    path.join(__dirname, '..', 'dist', 'brand', 'app-icon', 'voicecraft-app-icon-32.png'),
-    path.join(app.getAppPath(), 'dist', 'brand', 'app-icon', 'voicecraft-app-icon-32.png'),
+    path.join(__dirname, '..', 'public', 'brand', 'app-icon', 'voice-app-icon-32.png'),
+    path.join(__dirname, '..', 'dist', 'brand', 'app-icon', 'voice-app-icon-32.png'),
+    path.join(app.getAppPath(), 'dist', 'brand', 'app-icon', 'voice-app-icon-32.png'),
     path.join(__dirname, '..', 'public', 'favicon.png'),
     path.join(__dirname, '..', 'dist', 'favicon.png'),
   ]
@@ -1124,7 +1130,7 @@ function createWindow() {
     height: 700,
     minWidth: 600,
     minHeight: 500,
-    backgroundColor: '#0d0f14',
+    backgroundColor: '#071225',
     show: !startHidden,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -1139,6 +1145,12 @@ function createWindow() {
     autoHideMenuBar: true,
     ...(appIcon ? { icon: appIcon } : {}),
   })
+
+  // Telemetria: marca o instante em que a BrowserWindow foi instanciada.
+  try {
+    const { performance } = require('node:perf_hooks')
+    performance.mark('voice:window-created')
+  } catch {}
 
   applyWindowsTaskbarIcon(mainWindow, appIcon, appIconPng)
 
@@ -1201,23 +1213,12 @@ function createWindow() {
   // No File / Edit / View menu — custom title bar owns chrome.
   Menu.setApplicationMenu(null)
 
-  mainWindow.once('ready-to-show', () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return
-    applyWindowsTaskbarIcon(mainWindow, appIcon, appIconPng)
-    if (isDev || !settings.startMinimized) {
-      mainWindow.show()
-      mainWindow.focus()
-    }
-  })
-
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)
     // Open after load so DevTools doesn't race the protocol (Autofill.enable
     // / setAddresses -32601 is Chromium noise, not our code).
     mainWindow.webContents.once('did-finish-load', () => {
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.show()
-        mainWindow.focus()
         if (!mainWindow.webContents.isDevToolsOpened()) {
           mainWindow.webContents.openDevTools({ mode: 'detach' })
         }

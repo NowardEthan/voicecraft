@@ -81,6 +81,9 @@ export function resolvePerfProfile(perfMode = 'auto') {
   const hint = peekHardwareHint()
   const autoTier = cached?.autoTier || hint.tierHint || 'mid'
   const tier = modeToTier(mode, autoTier)
+  if (typeof document !== 'undefined' && document.body && !document.body.getAttribute('data-perf-tier')) {
+    document.body.setAttribute('data-perf-tier', tier)
+  }
   return {
     mode,
     tier,

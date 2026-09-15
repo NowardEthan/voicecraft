@@ -1,5 +1,5 @@
 export { useAuth } from './hooks/useAuth'
-export { default as LoginScreen } from './views/LoginScreen'
+export { default as LoginScreen } from './views/LoginScreenVoice'
 export { default as GoogleAuthBridge } from './views/GoogleAuthBridge'
 export {
   isSignedIn,

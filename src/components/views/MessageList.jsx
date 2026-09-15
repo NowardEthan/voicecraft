@@ -110,6 +110,8 @@ export default function MessageList({
   roomKey = null,
   loading = false,
   onRetry,
+  onCopy,
+  onCancel,
   onImageClick,
   emptyHint = 'Nenhuma mensagem ainda. Mande a primeira.',
   query = '',
@@ -544,6 +546,8 @@ function renderTypingLabel(text) {
                     isLast={idx === g.items.length - 1}
                     density={densityKey}
                     onRetry={onRetry}
+                    onCopy={onCopy}
+                    onCancel={onCancel}
                     onImageClick={onImageClick}
                     onReply={onReply}
                     onToggleReaction={onToggleReaction}
@@ -654,11 +658,11 @@ function SkeletonStack() {
     <div className="space-y-5 px-4 sm:px-6 pt-2">
       {[1, 2, 3].map(i => (
         <div key={i} className="flex gap-3 items-start">
-          <div className="w-10 h-10 rounded-full animate-shimmer" />
+          <div className="w-10 h-10 rounded-full bg-surface2/40 shrink-0" />
           <div className="flex-1 space-y-2 max-w-md">
-            <div className="h-2.5 w-28 rounded animate-shimmer" />
-            <div className="h-3 w-full rounded animate-shimmer" />
-            <div className="h-3 w-3/4 rounded animate-shimmer" />
+            <div className="h-2.5 w-28 rounded bg-surface2/40" />
+            <div className="h-3 w-full rounded bg-surface2/40" />
+            <div className="h-3 w-3/4 rounded bg-surface2/40" />
           </div>
         </div>
       ))}

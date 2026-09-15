@@ -1,12 +1,11 @@
 /**
  * VoiceRoomView — top-level orchestrator for the voice room.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLiveKitRoom } from './useLiveKitRoom'
 import { VoiceRoomHeader } from './components/VoiceRoomHeader'
 import { ParticipantGrid } from './components/ParticipantGrid'
 import { VoiceControlDock } from './components/VoiceControlDock'
-import { ScreenSharePicker } from './components/ScreenSharePicker'
 import { PermissionDeniedState } from './components/PermissionDeniedState'
 import { CallConnectingState } from './components/CallConnectingState'
 import { unlockCallSounds } from '../../../../shared/audio/callSounds'
@@ -16,6 +15,8 @@ import { getRoomCover } from '../../model/roomCover'
 import { getLocalMemberStatus, setLocalMemberStatus } from '../../../people'
 import { getSharedSignaling } from '../../../../shared/connection/useSignaling'
 import useReducedMotion from '../../../../hooks/useReducedMotion'
+
+const ScreenSharePicker = lazy(() => import('./components/ScreenSharePicker'))
 
 const CINEMA_IDLE_MS = 2400
 
@@ -508,12 +509,16 @@ export default function VoiceRoomView({
         </div>
       </div>
 
-      <ScreenSharePicker
-        open={!!shareNeedsPicker}
-        sources={shareSources}
-        onPick={handlePickShareSource}
-        onClose={handleCancelSharePicker}
-      />
+      {shareNeedsPicker && (
+        <Suspense fallback={null}>
+          <ScreenSharePicker
+            open={!!shareNeedsPicker}
+            sources={shareSources}
+            onPick={handlePickShareSource}
+            onClose={handleCancelSharePicker}
+          />
+        </Suspense>
+      )}
     </div>
   )
 }

@@ -1,6 +1,14 @@
 /**
- * bootBootstrap — warm critical assets without freezing the window.
- * Yields to the event loop so TitleBar drag/minimize keep working.
+ * bootBootstrap — runs in idle AFTER the AppShell paints.
+ *
+ * Responsibilities:
+ *   - Connect signaling & receive first Spaces.
+ *   - Hydrate public Spaces.
+ *   - Hydrate friend graph + profiles.
+ *   - Warm covers/avatars in waves.
+ *   - Kick the full icon pack.
+ *
+ * Never blocks the UI. Designed to fail-open (empty arrays on timeout).
  */
 import { auth } from '../firebase/app'
 import { getSharedSignaling } from '../connection/useSignaling'
@@ -9,18 +17,15 @@ import { ensureFullSpaceIcons } from '../../features/spaces'
 import { warmImages, warmImage, isImageWarm, setImageWarmPerfMode } from './imageWarm'
 import { warmImport } from './idlePreload'
 import { ensurePublicSpaces } from './usePublicSpacesCache'
-import { APP_CHUNKS } from './useAppWarmup'
 import { seedFriendsGraph, seedProfiles } from './profileCache'
 import { resolvePerfProfile } from '../perf/perfProfile'
 
-const MIN_MS = 1600
-const MAX_MS = 18_000
+const MAX_MS = 12_000
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-/** Let Chromium paint + handle titlebar IPC. */
 function yieldToMain() {
   return new Promise((resolve) => {
     if (typeof requestAnimationFrame === 'function') {
@@ -38,11 +43,9 @@ function raceTimeout(promise, ms, fallback) {
   ])
 }
 
-function waitFirstSpaces(sig, timeoutMs = 6000) {
+function waitFirstSpaces(sig, timeoutMs = 4000) {
   if (!sig?.onSpaceChanged) return Promise.resolve([])
-  if (Array.isArray(sig._spacesList)) {
-    return Promise.resolve(sig._spacesList)
-  }
+  if (Array.isArray(sig._spacesList)) return Promise.resolve(sig._spacesList)
   return new Promise((resolve) => {
     let done = false
     const finish = (spaces) => {
@@ -59,7 +62,7 @@ function waitFirstSpaces(sig, timeoutMs = 6000) {
   })
 }
 
-function waitFriendsHydrated(sig, timeoutMs = 6000) {
+function waitFriendsHydrated(sig, timeoutMs = 4000) {
   if (!sig?.listenFriendRequests || !sig.userId) {
     return Promise.resolve({ friends: [], incoming: [], outgoing: [] })
   }
@@ -97,13 +100,10 @@ function collectEssentialUrls(spaces, publicSpaces, friendProfiles, urlCap = 40)
   }
   const user = auth.currentUser
   if (user?.photoURL) urls.push(user.photoURL)
-  const base = import.meta.env.BASE_URL || '/'
-  urls.push(`${base}app-icon.png`, `${base}logo.png`)
   return [...new Set(urls)].slice(0, urlCap)
 }
 
-/** Decode in small waves + yield so the window stays responsive. */
-async function warmUntilHot(urls, { budgetMs = 10_000, concurrency = 3 } = {}) {
+async function warmUntilHot(urls, { budgetMs = 6_000, concurrency = 3 } = {}) {
   const list = (urls || []).filter(Boolean)
   if (!list.length) return { warmed: 0, total: 0 }
   const started = Date.now()
@@ -146,18 +146,9 @@ async function hydrateFriendProfiles(sig, graph) {
   return profiles
 }
 
-/** Only critical route chunks during boot — rest warms idle after reveal. */
-async function warmCriticalChunks() {
-  const critical = ['homeExplore', 'voice', 'text', 'people']
-  for (const key of critical) {
-    const fn = APP_CHUNKS[key]
-    if (fn) await warmImport(fn)
-    await yieldToMain()
-  }
-}
-
 /**
- * @param {(phase: string) => void} onPhase
+ * Run after the AppShell mounts. Yields constantly so UI stays snappy.
+ * No `MIN_MS` — finishes the moment work is done.
  */
 export async function runBootBootstrap(onPhase) {
   const report = (phase) => {
@@ -167,19 +158,13 @@ export async function runBootBootstrap(onPhase) {
   const hardCap = sleep(MAX_MS)
 
   const work = (async () => {
-    const minWait = sleep(MIN_MS)
     let urls = []
     let friendsGraph = { friends: [], incoming: [], outgoing: [] }
     let spaces = []
 
     let perfMode = 'auto'
     try {
-      const raw = typeof window !== 'undefined'
-        && window.electronAPI?.getSettings
-        ? await window.electronAPI.getSettings()
-        : null
-      if (raw?.perfMode) perfMode = raw.perfMode
-      else if (typeof localStorage !== 'undefined') {
+      if (typeof localStorage !== 'undefined') {
         const s = JSON.parse(localStorage.getItem('voicecraft:settings') || '{}')
         if (s?.perfMode) perfMode = s.perfMode
       }
@@ -188,19 +173,15 @@ export async function runBootBootstrap(onPhase) {
     setImageWarmPerfMode(perfMode)
     const { warmConcurrency, bootBudgetMs, bootUrlCap } = profile.budgets
 
-    report('portal')
-    const shellP = warmImport(() => import('../../shell/AppShell'))
-    await yieldToMain()
-
     report('link')
     const sig = getSharedSignaling()
-    const spacesP = waitFirstSpaces(sig, 6000)
+    const spacesP = waitFirstSpaces(sig, 4000)
 
     try {
       if (sig?.connect) {
         const p = sig.connect()
         if (p && typeof p.then === 'function') {
-          await raceTimeout(p, 6000, null)
+          await raceTimeout(p, 4000, null)
         }
       }
     } catch { /* fail-open */ }
@@ -211,11 +192,11 @@ export async function runBootBootstrap(onPhase) {
     await yieldToMain()
 
     report('constellations')
-    const publicSpaces = await raceTimeout(ensurePublicSpaces(''), 6000, [])
+    const publicSpaces = await raceTimeout(ensurePublicSpaces(''), 4000, [])
     await yieldToMain()
 
     report('companions')
-    friendsGraph = await waitFriendsHydrated(sig, 6000)
+    friendsGraph = await waitFriendsHydrated(sig, 4000)
     seedFriendsGraph(friendsGraph)
     const friendProfiles = await hydrateFriendProfiles(sig, friendsGraph)
     seedProfiles(friendProfiles)
@@ -226,26 +207,10 @@ export async function runBootBootstrap(onPhase) {
     await warmUntilHot(urls, { budgetMs: bootBudgetMs, concurrency: warmConcurrency })
     await yieldToMain()
 
-    report('chambers')
-    await warmCriticalChunks()
-    await shellP
-    await yieldToMain()
-
     report('sigils')
-    // Don't block boot on full icon pack — kick and continue.
     ensureFullSpaceIcons().catch(() => {})
     await yieldToMain()
 
-    report('doors')
-    const stillCold = urls.filter((u) => !isImageWarm(u)).slice(0, Math.min(12, warmConcurrency * 4))
-    if (stillCold.length) {
-      await warmUntilHot(stillCold, {
-        budgetMs: Math.min(3_000, Math.floor(bootBudgetMs / 3)),
-        concurrency: Math.max(1, warmConcurrency - 1),
-      })
-    }
-
-    await minWait
     return {
       ok: true,
       spaceCount: (spaces || []).length,
@@ -260,21 +225,20 @@ export async function runBootBootstrap(onPhase) {
     work,
     hardCap.then(() => ({ ok: true, timedOut: true })),
   ])
-
-  const elapsed = Date.now() - started
-  if (elapsed < MIN_MS) await sleep(MIN_MS - elapsed)
   report('ready')
   return result
 }
 
 export function warmBootBrand() {
   const base = import.meta.env.BASE_URL || '/'
-  warmImage(`${base}app-icon.png`)
-  warmImage(`${base}logo.png`)
+  warmImage(`${base}brand/voice/voice-icon-primary.png`)
+  warmImage(`${base}brand/voice/voice-symbol-white.png`)
 }
 
+// Copy kept here for legacy callers (BootSplash). Kept the old whimsical phases
+// because BootSplash only listens to "ready" in the new fast path.
 export const BOOT_PHASE_COPY = {
-  portal: 'Acendendo as lanternas do hall…',
+  portal: 'Acendendo as lanternas…',
   link: 'Entrelaçando o fio com o éter…',
   realms: 'Despertando os seus Spaces…',
   constellations: 'Mapeando constelações públicas…',
@@ -282,6 +246,6 @@ export const BOOT_PHASE_COPY = {
   tapestries: 'Polindo capas e tapeçarias…',
   chambers: 'Aquecendo salas de voz e prosa…',
   sigils: 'Gravando sigilos e ícones…',
-  doors: 'Abrindo as portas do VoiceCraft…',
+  doors: 'Abrindo as portas do Voice…',
   ready: 'Tudo pronto. Entre.',
 }

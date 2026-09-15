@@ -176,6 +176,8 @@ export function useLiveKitRoom({
   }, [])
 
   const joinedAtRef = useRef(Date.now())
+  const lastSpeakerUpdateRef = useRef(0)
+  const pendingSpeakersTimerRef = useRef(null)
   const roomRef = useRef(null)
   const localAudioTrackRef = useRef(null)
   const localVideoTrackRef = useRef(null)
@@ -505,14 +507,35 @@ export function useLiveKitRoom({
     }
 
     const onActiveSpeakers = (speakers) => {
-      const map = {}
-      let self = false
-      for (const p of speakers) {
-        if (p.identity === currentUserId) self = true
-        else map[p.identity] = true
+      const applyUpdate = (speakerList) => {
+        const map = {}
+        let self = false
+        for (const p of speakerList) {
+          if (p.identity === currentUserId) self = true
+          else map[p.identity] = true
+        }
+        setSelfSpeaking(self)
+        setRemoteSpeaking(map)
       }
-      setSelfSpeaking(self)
-      setRemoteSpeaking(map)
+
+      const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
+      const delta = now - lastSpeakerUpdateRef.current
+      if (delta >= 50) {
+        if (pendingSpeakersTimerRef.current) {
+          clearTimeout(pendingSpeakersTimerRef.current)
+          pendingSpeakersTimerRef.current = null
+        }
+        lastSpeakerUpdateRef.current = now
+        applyUpdate(speakers)
+      } else {
+        if (!pendingSpeakersTimerRef.current) {
+          pendingSpeakersTimerRef.current = setTimeout(() => {
+            pendingSpeakersTimerRef.current = null
+            lastSpeakerUpdateRef.current = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()
+            applyUpdate(speakers)
+          }, Math.max(0, 50 - delta))
+        }
+      }
     }
 
     lkRoom
@@ -636,6 +659,10 @@ export function useLiveKitRoom({
       try {
         lkRoom.localParticipant?.off?.(ParticipantEvent.LocalTrackCpuConstrained, onCpuConstrained)
       } catch {}
+      if (pendingSpeakersTimerRef.current) {
+        clearTimeout(pendingSpeakersTimerRef.current)
+        pendingSpeakersTimerRef.current = null
+      }
       try {
         lkRoom
           .off(RoomEvent.ConnectionStateChanged, onConnection)

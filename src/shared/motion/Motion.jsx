@@ -34,7 +34,7 @@ const slideUp = {
   initial: { opacity: 0, y: 12 },
   animate: { opacity: 1, y: 0 },
   exit:    { opacity: 0, y: 6 },
-  transition: { duration: 0.26, ease: EASE_OUT },
+  transition: { duration: 0.22, ease: EASE_OUT },
 }
 
 /** Slide in from the right. */
@@ -42,7 +42,7 @@ const slideRight = {
   initial: { opacity: 0, x: 18 },
   animate: { opacity: 1, x: 0 },
   exit:    { opacity: 0, x: 10 },
-  transition: { duration: 0.24, ease: EASE_OUT },
+  transition: { duration: 0.22, ease: EASE_OUT },
 }
 
 /** Slide in from the left. */
@@ -50,7 +50,7 @@ const slideLeft = {
   initial: { opacity: 0, x: -18 },
   animate: { opacity: 1, x: 0 },
   exit:    { opacity: 0, x: -10 },
-  transition: { duration: 0.24, ease: EASE_OUT },
+  transition: { duration: 0.22, ease: EASE_OUT },
 }
 
 /** Spring pop — good for selections, checkmarks, achievement feedback. */

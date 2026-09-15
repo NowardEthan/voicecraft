@@ -16,9 +16,9 @@ export const EASE_SPRING_SNAPPY = { type: 'spring', stiffness: 520, damping: 30,
 
 // Common durations (seconds — framer-motion uses s, CSS uses ms).
 export const DUR = {
-  fast: 0.15,
-  base: 0.22,
-  slow: 0.32,
+  fast: 0.12,
+  base: 0.18,
+  slow: 0.22,
 }
 
 /**

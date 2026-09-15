@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { Monitor, AppWindow, X, Info, Volume2, Headphones, Sparkles, Search } from 'lucide-react'
 import { ModalShell } from '../../../../../shared/motion/ModalShell.jsx'
 import { looksLikeBrowserWindow } from '../../../../../hooks/useScreenShare'
+import useReducedMotion from '../../../../../hooks/useReducedMotion'
 
 function processLabel(p) {
   const title = String(p.title || '').trim()
@@ -13,6 +14,8 @@ function processLabel(p) {
 }
 
 export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
+  const reducedMotion = useReducedMotion()
+
   const screens = sources.filter((s) => s.isScreen)
   const windows = sources.filter((s) => !s.isScreen)
   const [audioMode, setAudioMode] = useState('off') // 'off' | 'app' | 'system'
@@ -297,3 +300,6 @@ function SourceGroup({ title, icon: Icon, items, onPick, warnBrowser = false }) 
     </section>
   )
 }
+
+export default ScreenSharePicker
+

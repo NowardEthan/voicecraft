@@ -5,6 +5,7 @@ import { Headphones, Video, VideoOff, Monitor } from 'lucide-react'
 import { MicrophoneControl } from './MicrophoneControl'
 import { InputDeviceMenu } from './InputDeviceMenu'
 import { LeaveCallButton } from './LeaveCallButton'
+import useReducedMotion from '../../../../../hooks/useReducedMotion'
 
 const dockBtn = [
   'h-11 w-11 rounded-full flex items-center justify-center',
@@ -23,10 +24,12 @@ export function VoiceControlDock({
   mics, activeDeviceId, onPickDevice,
   onLeave, onShareScreen, screenSharing, isDeafened, onToggleDeafen,
   onToggleCamera, cameraOn,
-  reducedMotion,
+  reducedMotion: reducedMotionProp,
   mediaEnabled = true,
   cinema = false,
 }) {
+  const hookReducedMotion = useReducedMotion()
+  const reducedMotion = reducedMotionProp ?? hookReducedMotion
   const mediaLocked = !mediaEnabled
   return (
     <div

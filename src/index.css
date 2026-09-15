@@ -785,7 +785,7 @@ select:focus-visible {
   50% {
     transform: scale(1.07);
     opacity: 1;
-    filter: drop-shadow(0 0 18px rgba(255, 63, 108, 0.35));
+    filter: drop-shadow(0 0 18px rgba(87, 190, 255, 0.35));
   }
 }
 
@@ -810,7 +810,7 @@ select:focus-visible {
   width: 5px;
   height: 5px;
   border-radius: 999px;
-  background: #60a5fa;
+  background: #57BEFF;
   animation: vc-boot-dot 1s ease-in-out infinite;
 }
 
@@ -2879,3 +2879,17 @@ body.vc-app-bg-decor {
   margin: 0.3em 0;
   padding-left: 1.2em;
 }
+
+/* === Low perf tier: disable heavy backdrop-filters (Fase 4 C2) === */
+[data-perf-tier="low"] .backdrop-blur,
+[data-perf-tier="low"] .backdrop-blur-sm,
+[data-perf-tier="low"] .backdrop-blur-md,
+[data-perf-tier="low"] .backdrop-blur-lg,
+[data-perf-tier="low"] .backdrop-blur-xl,
+[data-perf-tier="low"] .backdrop-blur-2xl,
+[data-perf-tier="low"] .vc-blur,
+[data-perf-tier="low"] [class*="backdrop-blur"] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+

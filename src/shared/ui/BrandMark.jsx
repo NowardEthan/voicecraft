@@ -1,17 +1,17 @@
 /**
- * BrandMark — VoiceCraft logo from the official brand kit.
- * Transparent coral mark for dark UI surfaces.
+ * BrandMark — Voice (by Aura Inc.) logo from the official brand kit.
+ * White V symbol for dark UI surfaces.
  */
 export function BrandMark({
   size = 28,
   className = '',
-  alt = 'VoiceCraft',
+  alt = 'Voice',
   decorative = false,
 }) {
   const px = typeof size === 'number' ? `${size}px` : size
   return (
     <img
-      src={`${import.meta.env.BASE_URL}logo.png`}
+      src={`${import.meta.env.BASE_URL}brand/voice/voice-symbol-white.png`}
       alt={decorative ? '' : alt}
       width={typeof size === 'number' ? size : undefined}
       height={typeof size === 'number' ? size : undefined}
@@ -27,13 +27,13 @@ export function BrandMark({
 export function BrandAppIcon({
   size = 48,
   className = '',
-  alt = 'VoiceCraft',
+  alt = 'Voice',
   decorative = false,
 }) {
   const px = typeof size === 'number' ? `${size}px` : size
   return (
     <img
-      src={`${import.meta.env.BASE_URL}app-icon.png`}
+      src={`${import.meta.env.BASE_URL}brand/voice/voice-icon-primary.png`}
       alt={decorative ? '' : alt}
       width={typeof size === 'number' ? size : undefined}
       height={typeof size === 'number' ? size : undefined}

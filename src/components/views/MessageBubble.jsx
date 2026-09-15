@@ -1,3 +1,5 @@
+import { SoftImage } from '../../shared/media/SoftImage'
+
 /**
  * MessageBubble — bubble-style layout (Telegram/Discord hybrid).
  *
@@ -479,31 +481,40 @@ function AttachmentBlock({ attachment, attachments, onImageClick, hasText = fals
   return (
     <div className={`${gap} flex flex-col gap-1.5`} style={{ minWidth: images.length > 1 ? 260 : undefined, width: images.length > 1 ? 'min(100%, 340px)' : undefined }}>
       {images.length === 1 && (
-        attachmentSrc(images[0]) ? (
-          <button
-            type="button"
-            onClick={() => openGallery(0)}
-            className={
-              'block rounded-xl overflow-hidden max-w-[min(100%,560px)] focus:outline-none ' +
-              'focus-visible:ring-2 focus-visible:ring-accent/60 cursor-zoom-in ' +
-              (images[0].sticker ? 'bg-transparent' : '')
-            }
-            title={images[0].sticker ? 'Ampliar sticker' : 'Ampliar imagem'}
-            aria-label={images[0].sticker ? 'Ampliar sticker' : 'Ampliar imagem'}
-          >
-            <img
-              src={attachmentSrc(images[0])}
-              alt={images[0].name || (images[0].sticker ? 'sticker' : 'imagem')}
-              loading="eager"
-              decoding="async"
+        attachmentSrc(images[0]) ? (() => {
+          const imgObj = images[0]
+          const w = imgObj.width || imgObj.w
+          const h = imgObj.height || imgObj.h
+          const ratio = (w && h && Number(w) > 0 && Number(h) > 0)
+            ? `${w} / ${h}`
+            : '16 / 9'
+
+          return (
+            <button
+              type="button"
+              onClick={() => openGallery(0)}
               className={
-                images[0].sticker
-                  ? 'max-h-[min(50vh,280px)] w-auto max-w-[min(100%,280px)] object-contain bg-transparent block'
-                  : 'max-h-[min(70vh,520px)] w-auto max-w-full object-contain bg-black/25 block'
+                'block rounded-xl overflow-hidden max-w-[min(100%,560px)] focus:outline-none ' +
+                'focus-visible:ring-2 focus-visible:ring-accent/60 cursor-zoom-in ' +
+                (imgObj.sticker ? 'bg-transparent' : '')
               }
-            />
-          </button>
-        ) : (
+              style={imgObj.sticker ? undefined : { aspectRatio: ratio }}
+              title={imgObj.sticker ? 'Ampliar sticker' : 'Ampliar imagem'}
+              aria-label={imgObj.sticker ? 'Ampliar sticker' : 'Ampliar imagem'}
+            >
+              <SoftImage
+                src={attachmentSrc(imgObj)}
+                alt={imgObj.name || (imgObj.sticker ? 'sticker' : 'imagem')}
+                imgStyle={imgObj.sticker
+                  ? { objectFit: 'contain', maxHeight: 'min(50vh,280px)', width: 'auto', maxWidth: 'min(100%,280px)' }
+                  : { objectFit: 'contain', maxHeight: 'min(70vh,520px)', width: 'auto', maxWidth: '100%' }
+                }
+                placeholderColor={imgObj.sticker ? 'transparent' : 'rgba(0,0,0,0.25)'}
+                className="w-full h-full"
+              />
+            </button>
+          )
+        })() : (
           <div className="text-[12px] text-muted italic">enviando imagem…</div>
         )
       )}
@@ -535,12 +546,12 @@ function AttachmentBlock({ attachment, attachments, onImageClick, hasText = fals
                 aria-label={`Ampliar imagem ${i + 1}`}
               >
                 {src ? (
-                  <img
+                  <SoftImage
                     src={src}
                     alt={img.name || `imagem ${i + 1}`}
-                    loading="eager"
-                    decoding="async"
-                    className="absolute inset-0 w-full h-full object-cover"
+                    imgStyle={{ objectFit: 'cover' }}
+                    placeholderColor="rgba(0,0,0,0.30)"
+                    className="absolute inset-0 w-full h-full"
                   />
                 ) : (
                   <span className="absolute inset-0 flex items-center justify-center text-[11px] text-muted italic">
@@ -1068,16 +1079,43 @@ export default function MessageBubble({
               )}
             </div>
           </Bubble>
-          {isMine && msg.status === 'failed' && onRetry && !msg.deleted && (
-            <button
-              type="button"
-              onClick={() => onRetry(msg.id)}
-              className="inline-flex items-center gap-1 text-[11px] text-danger hover:text-danger/90"
-              title="Tentar enviar de novo"
-            >
-              <RotateCcw size={11} strokeWidth={2} />
-              falhou — tentar de novo
-            </button>
+          {(isMine && (msg.status === 'failed' || msg.status === 'permanent-failed') && !msg.deleted) && (
+            <div className="flex items-center gap-2 text-[11px] text-danger">
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-danger/15 border border-danger/30">
+                Falha no envio
+              </span>
+              {onRetry && (
+                <button
+                  type="button"
+                  onClick={() => onRetry(msg.id)}
+                  className="inline-flex items-center gap-1 hover:text-danger/90"
+                  title="Tentar enviar de novo"
+                >
+                  <RotateCcw size={11} strokeWidth={2} />
+                  Tentar novamente
+                </button>
+              )}
+              {onCopy && (
+                <button
+                  type="button"
+                  onClick={() => onCopy(msg.id)}
+                  className="inline-flex items-center gap-1 hover:text-danger/90"
+                  title="Copiar texto para área de transferência"
+                >
+                  Copiar texto
+                </button>
+              )}
+              {onCancel && (
+                <button
+                  type="button"
+                  onClick={() => onCancel(msg.id)}
+                  className="inline-flex items-center gap-1 hover:text-danger/90"
+                  title="Excluir mensagem pendente"
+                >
+                  Excluir
+                </button>
+              )}
+            </div>
           )}
           {onToggleReaction && !msg.deleted && (
             <EmojiReactions

@@ -46,8 +46,26 @@ export default function Composer({
   currentUserId = null,
   accent = null,
   channelName = null,
+  spaceId = null,
+  roomId = null,
+  accountUid = null,
 }) {
-  const [text, setText] = useState('')
+  // Drafts (Fase 2 L1): read/write per (spaceId:roomId) in localStorage.
+  const draftKey = spaceId && roomId ? `${spaceId}:${roomId}` : null
+  const draftFromCache = (() => {
+    if (!draftKey || !accountUid) return ''
+    try {
+      const raw = localStorage.getItem(`voicecraft:l1:${accountUid}`)
+      if (!raw) return ''
+      const parsed = JSON.parse(raw)
+      const drafts = parsed?.drafts || {}
+      return typeof drafts[draftKey] === 'string' ? drafts[draftKey] : ''
+    } catch {
+      return ''
+    }
+  })()
+
+  const [text, setText] = useState(draftFromCache)
   const [attachments, setAttachments] = useState([])
   const [attachIndex, setAttachIndex] = useState(0)
   const [emojiOpen, setEmojiOpen] = useState(false)
@@ -56,6 +74,39 @@ export default function Composer({
   const [gifPos, setGifPos] = useState(null)
   const [sizeError, setSizeError] = useState(null)
   const [sending, setSending] = useState(false)
+
+  // Debounced draft writer: 3s after the last keystroke.
+  useEffect(() => {
+    if (!draftKey || !accountUid) return
+    if (text === draftFromCache) return
+    const t = setTimeout(() => {
+      const key = `voicecraft:l1:${accountUid}`
+      try {
+        const raw = localStorage.getItem(key)
+        const parsed = raw ? (JSON.parse(raw) || {}) : {}
+        const next = { ...(parsed.drafts || {}) }
+        if (text && text.length > 0) next[draftKey] = text
+        else delete next[draftKey]
+        const merged = {
+          ...parsed,
+          schemaVersion: parsed.schemaVersion || 1,
+          uid: accountUid,
+          updatedAt: Date.now(),
+          drafts: next,
+        }
+        localStorage.setItem(key, JSON.stringify(merged))
+      } catch {
+        /* ignore */
+      }
+    }, 3000)
+    return () => clearTimeout(t)
+  }, [text, draftKey, accountUid, draftFromCache])
+
+  // Restore draft when channel changes.
+  useEffect(() => {
+    setText(draftFromCache)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey, accountUid])
 
   /* Mention / room suggestion popover state (CONTRATO_FASE2) */
   const [mention, setMention] = useState(null) // null | { kind, query, queryStart, queryEnd, items, selectedId, anchor }
@@ -415,6 +466,25 @@ export default function Composer({
     setAttachIndex(0)
     setSizeError(null)
     setMention(null)
+    // Draft: clear persisted draft for this channel.
+    if (draftKey && accountUid) {
+      try {
+        const key = `voicecraft:l1:${accountUid}`
+        const raw = localStorage.getItem(key)
+        if (raw) {
+          const parsed = JSON.parse(raw) || {}
+          const next = { ...(parsed.drafts || {}) }
+          delete next[draftKey]
+          localStorage.setItem(key, JSON.stringify({
+            ...parsed,
+            schemaVersion: parsed.schemaVersion || 1,
+            uid: accountUid,
+            updatedAt: Date.now(),
+            drafts: next,
+          }))
+        }
+      } catch { /* ignore */ }
+    }
     requestAnimationFrame(() => {
       if (taRef.current) {
         taRef.current.style.height = 'auto'

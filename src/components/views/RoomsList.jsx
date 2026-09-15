@@ -13,6 +13,7 @@ import { useState } from 'react'
 import { Plus, Trash2, ChevronDown } from 'lucide-react'
 import EmptyState from '../../shared/ui/EmptyState'
 import { groupByPurpose, PURPOSE_BY_KEY } from '../../features/rooms'
+import { prefetchRoomMessages } from '../../shared/cache/chatPrefetch'
 
 export default function RoomList({
   space,
@@ -115,6 +116,7 @@ export default function RoomList({
                     <RoomRow
                       key={room.id}
                       room={room}
+                      spaceId={space.id}
                       isActive={isActive}
                       isSelected={isSelected}
                       purpose={purpose}
@@ -171,8 +173,11 @@ export default function RoomList({
 }
 
 // ----------------------------------------------------------------------
-function RoomRow({ room, isActive, isSelected, purpose, canDelete, confirmingDelete, onSelect, onDelete, onCancelDelete }) {
+function RoomRow({ room, spaceId, isActive, isSelected, purpose, canDelete, confirmingDelete, onSelect, onDelete, onCancelDelete }) {
   const Icon = purpose.icon
+  const handlePointerDown = () => {
+    if (spaceId && room?.id) prefetchRoomMessages(spaceId, room.id)
+  }
   return (
     <div
       className={`
@@ -185,6 +190,7 @@ function RoomRow({ room, isActive, isSelected, purpose, canDelete, confirmingDel
             : 'text-ink/75 hover:bg-surface1 hover:text-strong'}
       `}
       onClick={onSelect}
+      onPointerDown={handlePointerDown}
     >
       {/* Left accent bar — Space-accent when active. */}
       <span

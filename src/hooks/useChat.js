@@ -46,6 +46,16 @@ import {
 import {
   bumpReaction as bumpFrequent, unbumpReaction as unbumpFrequent,
 } from '../shared/firebase/frequentReactions'
+import {
+  enqueueMessage as outboxEnqueue, markSent as outboxMarkSent,
+  markPermanentFailed as outboxMarkPermanentFailed,
+  resetForRetry as outboxResetForRetry,
+  getAll as outboxGetAll, deleteItem as outboxDelete,
+} from '../shared/chat/chatOutbox'
+import {
+  setSender as dispatcherSetSender, setActiveUid as dispatcherSetActiveUid,
+  start as dispatcherStart, flush as dispatcherFlush, retryNow as dispatcherRetryNow,
+} from '../shared/chat/outboxDispatcher'
 
 const CHUNK_SIZE = 16 * 1024  // 16 KiB
 const CHAT_STORAGE_PREFIX = 'voicecraft:chat:'
@@ -56,7 +66,15 @@ const MAX_ATTACHMENTS = 10
 const MAX_INLINE_DATA_URL = 200_000
 
 function uid() {
+  // Kept for legacy non-message ids (system events, transfer ids).
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
+}
+
+function genMessageId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return uid()
 }
 
 function storageKey(roomKey) {
@@ -197,6 +215,102 @@ export function useChat({
    * Mesma estratégia dos likes — autoritativo, atualizado pelo
    * listener RTDB e re-aplicado em qualquer mutação de messages. */
   const reactionsFromServerRef = useRef(new Map())
+
+  /* Outbox integration — Fase 3:
+   *   - Register sender with the dispatcher on mount/uid change.
+   *   - Reconcile any pending outbox items for this roomKey into the
+   *     message stream (so reloads show sending/failed bubbles).
+   *   - Trigger flush on mount.                                          */
+  useEffect(() => {
+    if (!userId) return
+    dispatcherSetActiveUid(userId)
+    dispatcherSetSender(async (item) => {
+      // Reconstruct the wire message from the outbox payload.
+      const rawKey = item.roomKey
+      const sep = rawKey.indexOf(':')
+      const chatRoomId = sep >= 0 ? rawKey.slice(sep + 1) : rawKey
+      const persisted = (item.payload?.attachments || []).filter((a) => !a.blob)
+      const wire = persistableMessage({
+        kind: 'msg',
+        id: item.id,
+        ts: item.createdAt,
+        author: item.payload?.author?.name || 'você',
+        authorId: item.payload?.author?.id || userId,
+        authorHandle: item.payload?.author?.handle || '',
+        authorPhoto: item.payload?.author?.photo || '',
+        text: item.payload?.text || '',
+        replyToId: item.payload?.replyToId || null,
+        attachment: persisted[0] || undefined,
+        attachments: persisted.length > 1 ? persisted : undefined,
+      })
+      const dc = channelRef?.current
+      if (dc?.readyState === 'open') {
+        try { dc.send(JSON.stringify(wire)) } catch (err) {
+          console.warn('[outbox] p2p send failed:', err)
+        }
+      }
+      await signaling?.sendChatMessage?.(wire, chatRoomId)
+      // Reflect success in local state if still pending.
+      setMessages((prev) => {
+        if (!prev.find((m) => m.id === item.id)) return prev
+        const next = prev.map((m) => (m.id === item.id ? { ...m, status: 'sent' } : m))
+        saveHistory(roomKey, next)
+        return next
+      })
+    })
+    dispatcherStart()
+    void dispatcherFlush(userId)
+  }, [userId, signaling, roomKey])
+
+  // Channel ref so the dispatcher sender can access the latest channel
+  // without re-registering on every channel change.
+  const channelRef = useRef(channel)
+  channelRef.current = channel
+
+  /* Reconcile outbox into messages on mount / roomKey change. */
+  useEffect(() => {
+    if (!userId || !roomKey) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const items = await outboxGetAll(userId)
+        const mine = items.filter((m) => m.roomKey === roomKey)
+        if (!mine.length || cancelled) return
+        setMessages((prev) => {
+          const byId = new Map(prev.map((m) => [m.id, m]))
+          let changed = false
+          for (const item of mine) {
+            if (byId.has(item.id)) continue
+            byId.set(item.id, {
+              id: item.id,
+              kind: 'msg',
+              ts: item.createdAt,
+              text: item.payload?.text || '',
+              attachment: (item.payload?.attachments || [])[0] || undefined,
+              attachments: (item.payload?.attachments || []).length > 1 ? item.payload.attachments : undefined,
+              replyToId: item.payload?.replyToId || null,
+              author: item.payload?.author?.name || 'você',
+              authorId: item.payload?.author?.id || userId,
+              authorHandle: item.payload?.author?.handle || '',
+              authorPhoto: item.payload?.author?.photo || '',
+              direction: 'out',
+              status: item.status === 'permanent-failed'
+                ? 'permanent-failed'
+                : (item.status === 'in-flight' ? 'sending' : 'sending'),
+            })
+            changed = true
+          }
+          if (!changed) return prev
+          const next = Array.from(byId.values()).sort((a, b) => (a.ts || 0) - (b.ts || 0))
+          saveHistory(roomKey, next)
+          return next
+        })
+      } catch (err) {
+        console.warn('[outbox] reconcile:', err)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [userId, roomKey])
 
   /** Resolve likes for a message — prefer exact id, then firestoreId. */
   const lookupServerLikes = useCallback((m) => {
@@ -612,7 +726,7 @@ export function useChat({
     const sep = rawKey.indexOf(':')
     const chatRoomId = sep >= 0 ? rawKey.slice(sep + 1) : (rawKey || null)
 
-    const id = uid()
+    const id = genMessageId()
     const ts = Date.now()
     let storedList = inputList.map(toStoredAtt).filter(Boolean)
 
@@ -635,6 +749,36 @@ export function useChat({
       direction: 'out',
       status: 'sending',
     })
+
+    // Persist to outbox BEFORE attempting transport so the message
+    // survives a renderer reload / app crash mid-flight. We pass the
+    // SAME id used in the message object so that markSent/markFailed
+    // operate on the exact same outbox record (prevents duplicate sends).
+    try {
+      if (userId && rawKey) {
+        await outboxEnqueue(userId, rawKey, id, {
+          text: trimmed,
+          attachments: storedList.map((a) => ({
+            name: a.name,
+            type: a.type,
+            size: a.size,
+            blob: a.file || null,
+            url: a.url || null,
+            previewUrl: a.previewUrl || null,
+            kind: a.kind,
+          })),
+          replyToId: replyToId ? String(replyToId) : null,
+          author: {
+            id: userId,
+            name: msg.author,
+            handle: msg.authorHandle,
+            photo: msg.authorPhoto,
+          },
+        })
+      }
+    } catch (err) {
+      console.warn('[outbox] enqueue failed (continuing):', err)
+    }
 
     try {
       const needsUpload = storedList.some((a) => a.file)
@@ -682,24 +826,40 @@ export function useChat({
         attachment: persistList[0],
         attachments: persistList.length > 1 ? persistList : undefined,
       })
+      // Note: we DO NOT call signaling.sendChatMessage here.
+      // The outbox dispatcher (sender registered via setSender) is the
+      // single authority for transport — this prevents duplicate sends
+      // when the dispatcher also flushes the message in parallel.
       const dc = channel
       if (dc?.readyState === 'open') {
         try { dc.send(JSON.stringify(wire)) } catch (err) {
           console.warn('[chat] p2p send failed:', err)
         }
       }
-      await signaling?.sendChatMessage?.(wire, chatRoomId)
-      replaceMessage(id, {
-        status: 'sent',
-        attachment: persistList[0] || undefined,
-        attachments: persistList.length > 1 ? persistList : undefined,
-      })
+      // Force an immediate dispatch via the outbox dispatcher so the
+      // user gets fast feedback; backoff retries still apply on failure.
+      try {
+        if (userId) {
+          const { dispatcherFlush } = await import('../shared/chat/outboxDispatcher')
+          await dispatcherFlush(userId)
+        }
+      } catch (err) {
+        console.warn('[outbox] immediate flush:', err)
+      }
+      // NOTE: do NOT mark as 'sent' here or call outboxMarkSent here.
+      // The dispatcher's sender (registered via setSender) is the
+      // single source of truth for transport. It will:
+      //  - on success: setMessages to 'sent' + outboxMarkSent.
+      //  - on failure: outboxMarkFailedAttempt (with backoff) or
+      //    outboxMarkPermanentFailed after MAX_ATTEMPTS (5).
       return true
     } catch (err) {
       console.warn('[chat] send failed:', err)
       const retryable = inputList.length === 0 || persistableAttachment(storedList[0])?.url
         || persistableAttachment(storedList[0])?.dataUrl
       if (!retryable) {
+        // Anexo com File não persistido em URL — outbox marca falha permanente.
+        try { await outboxMarkPermanentFailed(id, err) } catch {}
         setMessages((prev) => {
           const next = prev.filter((m) => m.id !== id)
           saveHistory(roomKey, next)
@@ -804,36 +964,49 @@ export function useChat({
     let target = null
     setMessages((prev) => {
       const found = prev.find((m) => m.id === msgId)
-      if (!found || found.status !== 'failed') return prev
+      if (!found) return prev
+      if (found.status !== 'failed' && found.status !== 'permanent-failed') return prev
       target = found
       return prev.map((m) => (m.id === msgId ? { ...m, status: 'sending' } : m))
     })
     if (!target) return
-
-    const rawKey = String(roomKey || '')
-    const sep = rawKey.indexOf(':')
-    const chatRoomId = sep >= 0 ? rawKey.slice(sep + 1) : (rawKey || null)
-
     try {
-      const persistAtt = persistableAttachment(target.attachment)
-      if (target.attachment && !persistAtt?.url && !persistAtt?.dataUrl) {
-        throw new Error('Anexo incompleto — anexe de novo')
-      }
-      const wire = persistableMessage({
-        ...target,
-        attachment: persistAtt,
-      })
-      const dc = channel
-      if (dc?.readyState === 'open') {
-        try { dc.send(JSON.stringify(wire)) } catch {}
-      }
-      await signaling?.sendChatMessage?.(wire, chatRoomId)
-      replaceMessage(msgId, { status: 'sent', attachment: persistAtt || undefined })
+      await outboxResetForRetry(msgId)
+      await dispatcherRetryNow(msgId)
+      replaceMessage(msgId, { status: 'sending' })
     } catch (err) {
       console.warn('[chat] retry failed:', err)
-      replaceMessage(msgId, { status: 'failed' })
+      replaceMessage(msgId, { status: 'permanent-failed' })
     }
-  }, [channel, roomKey, signaling, replaceMessage])
+  }, [roomKey, replaceMessage, channel, signaling])
+
+  const cancelOutbox = useCallback(async (msgId) => {
+    try { await outboxDelete(msgId) } catch (err) { console.warn('[outbox] cancel:', err) }
+    setMessages((prev) => {
+      const next = prev.filter((m) => m.id !== msgId)
+      saveHistory(roomKey, next)
+      return next
+    })
+  }, [roomKey])
+
+  const copyMessageText = useCallback(async (msgId) => {
+    let text = ''
+    setMessages((prev) => {
+      const found = prev.find((m) => m.id === msgId)
+      text = found?.text || ''
+      return prev
+    })
+    if (!text) return false
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text)
+        return true
+      }
+    } catch (err) {
+      console.warn('[chat] clipboard:', err)
+    }
+    return false
+  }, [])
 
   const clear = useCallback(() => {
     setMessages([])
@@ -1156,6 +1329,8 @@ export function useChat({
     clear,
     postSystem,
     retry,
+    cancelOutbox,
+    copyMessageText,
     toggleReaction,
     toggleLike,
     togglePin,

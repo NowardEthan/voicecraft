@@ -13,6 +13,7 @@ import { RoomThemeControl } from './RoomThemeControl'
 import { VoiceMoreMenu } from './VoiceMoreMenu'
 import { RoomIconMark, roomAccentColor } from '../../../components/RoomIconMark'
 import { resolveLabeledNameStyle } from '../../../model/roomCosmetics'
+import useReducedMotion from '../../../../../hooks/useReducedMotion'
 
 export function VoiceRoomHeader({
   space,
@@ -27,6 +28,7 @@ export function VoiceRoomHeader({
   onLeave,
   cinema = false,
 }) {
+  const reducedMotion = useReducedMotion()
   const themeBtnRef = useRef(null)
   const accent = roomAccentColor(room)
   const nameStyle = resolveLabeledNameStyle({
@@ -132,8 +134,9 @@ export function VoiceRoomHeader({
             className={[
               'h-9 w-9 @[520px]:w-auto @[520px]:px-3.5 rounded-full text-[12.5px] font-medium',
               'inline-flex items-center justify-center gap-1.5',
-              'transition-[background-color,color,transform] duration-150',
-              'hover:scale-[1.03] active:scale-[0.97]',
+              reducedMotion
+                ? 'transition-none'
+                : 'transition-[background-color,color,transform] duration-150 hover:scale-[1.03] active:scale-[0.97]',
               cinema
                 ? 'bg-black/65 hover:bg-black/80 backdrop-blur-md text-white border border-white/20 shadow-[0_10px_28px_-12px_rgba(0,0,0,0.9)]'
                 : 'bg-black/35 hover:bg-black/50 backdrop-blur-md text-white/90 hover:text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]',

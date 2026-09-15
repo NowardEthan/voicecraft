@@ -18,3 +18,10 @@ VoiceCraft-Brand-Kit-Completo/
 .DS_Store
 .claude/
 audio-service/build/
+
+# Local-only artifacts from the dev loop (Phase 5 builds, logs, etc.)
+tests-output.txt
+build-output.txt
+packages/
+Documentação/
+Mockups/

@@ -26,7 +26,7 @@ const panelVariants = {
   initial: { opacity: 0, scale: 0.96, y: 6 },
   animate: { opacity: 1, scale: 1, y: 0 },
   exit:    { opacity: 0, scale: 0.97, y: 2 },
-  transition: { duration: 0.24, ease: EASE_OUT },
+  transition: { duration: 0.22, ease: EASE_OUT },
 }
 
 export function ModalShell({
