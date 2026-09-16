@@ -191,21 +191,27 @@ export default function MessageList({
 
   // Room change: rules/header channels open at the TOP so the card is visible.
   // Normal chats stick to the latest message.
+  //
+  // We depend on a *boolean* derived from `listHeader` instead of the prop
+  // itself, because the parent passes a freshly-built JSX element on every
+  // render — its reference changes on every like/edit/reaction and would
+  // otherwise reset the scroll to top, flicking the chat.
+  const hasListHeader = !!listHeader
   useEffect(() => {
     lastLenRef.current = 0
     setUnseen(0)
     setHighlightId(null)
     setForceVisibleId(null)
-    setStickToBottom(!listHeader)
+    setStickToBottom(!hasListHeader)
     const id = requestAnimationFrame(() => {
       const el = scrollerRef.current
       if (!el) return
-      el.scrollTop = listHeader ? 0 : el.scrollHeight
+      el.scrollTop = hasListHeader ? 0 : el.scrollHeight
       lastLenRef.current = messages.length
     })
     return () => cancelAnimationFrame(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- seed on room switch only
-  }, [roomKey, listHeader])
+  }, [roomKey, hasListHeader])
 
   // After messages hydrate in a normal chat, pin to bottom once.
   useEffect(() => {

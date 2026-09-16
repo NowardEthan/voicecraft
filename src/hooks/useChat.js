@@ -389,7 +389,10 @@ export function useChat({
     const seeded = loadHistory(roomKey) || []
     setMessages(applyLikes(seeded))
     setFiles([])
-    setReady(false)
+    // Don't reset `ready` here — it makes the Composer flash "Reconnecting…"
+    // on every room open. The channel's readyState (managed below) already
+    // reflects the live P2P status, and the cached history is good enough
+    // to render immediately without depending on the data channel.
     setConnectionState(channel ? (channel.readyState || 'connecting') : 'connecting')
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomKey])

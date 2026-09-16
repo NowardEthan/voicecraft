@@ -192,19 +192,44 @@ function runSilentInstaller(filePath, getMainWindow, version) {
   })
 
   try {
-    const child = require('child_process').spawn(filePath, ['/S', '/norestart'], {
-      detached: true,
-      stdio: 'ignore',
-      shell: false,
-      windowsHide: true,
-    })
+    // NSIS flags:
+    //   /S                   — silent install (no wizard)
+    //   /restartapplications — ask the installer to relaunch the calling
+    //                          app (VoiceCraft) when it finishes. Without
+    //                          this, the installer kills the running
+    //                          process to overwrite files and the user
+    //                          has to click the desktop icon manually.
+    //                          We deliberately omit /norestart so we still
+    //                          get a relaunch.
+    const child = require('child_process').spawn(
+      filePath,
+      ['/S', '/restartapplications'],
+      {
+        detached: true,
+        stdio: 'ignore',
+        shell: false,
+        windowsHide: true,
+      }
+    )
     child.unref()
 
     setTimeout(() => {
       const win = typeof getMainWindow === 'function' ? getMainWindow() : null
       if (win && !win.isDestroyed()) {
+        // Bring window to front in case it was minimized/hidden to tray.
+        if (win.isMinimized()) win.restore()
+        if (!win.isVisible()) win.show()
         log('info', '[updater] reloading webContents after silent installer')
         win.webContents.reload()
+      } else {
+        // Renderer was killed by the installer — relaunch the whole app.
+        log('info', '[updater] window gone after install — relaunching Voice')
+        try {
+          require('electron').app.relaunch({ args: process.argv.slice(1) })
+          require('electron').app.exit(0)
+        } catch (err) {
+          console.warn('[updater] relaunch failed:', err?.message || err)
+        }
       }
       isInstallingSilent = false
     }, 5000)
