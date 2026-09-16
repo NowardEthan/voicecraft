@@ -45,7 +45,6 @@ export default defineConfig({
           },
         },
       },
-      // Renderer-side: allow require() in the renderer if any code needs it.
       renderer: {},
     }),
   ],

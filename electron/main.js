@@ -126,6 +126,9 @@ let updaterWired = false
 let autoUpdaterRef = null
 /** Last status pushed to the renderer — replayed when the UI mounts late (login). */
 let lastUpdaterStatus = null
+let lastDownloadedFile = null
+let lastDownloadedVersion = null
+let isInstallingSilent = false
 
 function getAutoUpdater() {
   if (!autoUpdaterRef) {
@@ -143,6 +146,79 @@ function sendUpdater(getMainWindow, channel, payload) {
   try {
     win.webContents.send(channel, payload)
   } catch {}
+}
+
+function resolveInstallerFile(info) {
+  const candidate = info?.downloadedFile
+  if (candidate && typeof candidate === 'string' && candidate.toLowerCase().endsWith('.exe') && fs.existsSync(candidate)) {
+    return candidate
+  }
+  const tempDir = path.join(app.getPath('temp'), 'voicecraft-updater')
+  if (fs.existsSync(tempDir)) {
+    try {
+      const files = fs.readdirSync(tempDir).filter((f) => f.toLowerCase().endsWith('.exe'))
+      if (files.length > 0) {
+        const full = path.join(tempDir, files[files.length - 1])
+        if (fs.existsSync(full)) return full
+      }
+    } catch {}
+  }
+  const localAppDataDir = path.join(process.env.LOCALAPPDATA || '', 'voicecraft-updater', 'pending')
+  if (fs.existsSync(localAppDataDir)) {
+    try {
+      const files = fs.readdirSync(localAppDataDir).filter((f) => f.toLowerCase().endsWith('.exe'))
+      if (files.length > 0) {
+        const full = path.join(localAppDataDir, files[files.length - 1])
+        if (fs.existsSync(full)) return full
+      }
+    } catch {}
+  }
+  return null
+}
+
+function runSilentInstaller(filePath, getMainWindow, version) {
+  if (isInstallingSilent) return { ok: true, alreadyRunning: true }
+  if (!filePath || typeof filePath !== 'string' || !filePath.toLowerCase().endsWith('.exe') || !fs.existsSync(filePath)) {
+    log('error', `[updater] installer file not found or invalid: ${filePath}`)
+    return { ok: false, error: 'installer-not-found' }
+  }
+
+  isInstallingSilent = true
+  log('info', `[updater] running silent installer: ${filePath}`)
+
+  sendUpdater(getMainWindow, 'updater:status', {
+    status: 'installing',
+    version: version || lastDownloadedVersion || null,
+  })
+
+  try {
+    const child = require('child_process').spawn(filePath, ['/S', '/norestart'], {
+      detached: true,
+      stdio: 'ignore',
+      shell: false,
+      windowsHide: true,
+    })
+    child.unref()
+
+    setTimeout(() => {
+      const win = typeof getMainWindow === 'function' ? getMainWindow() : null
+      if (win && !win.isDestroyed()) {
+        log('info', '[updater] reloading webContents after silent installer')
+        win.webContents.reload()
+      }
+      isInstallingSilent = false
+    }, 5000)
+
+    return { ok: true }
+  } catch (err) {
+    isInstallingSilent = false
+    log('error', `[updater] silent installer failed to spawn: ${err?.message || err}`)
+    sendUpdater(getMainWindow, 'updater:status', {
+      status: 'error',
+      message: err?.message || String(err),
+    })
+    return { ok: false, error: err?.message || String(err) }
+  }
 }
 
 function setupUpdater(getMainWindow) {
@@ -167,12 +243,17 @@ function setupUpdater(getMainWindow) {
     setImmediate(() => getAutoUpdater().quitAndInstall(false, true))
     return { ok: true }
   })
+  ipcMain.handle('updater:installSilent', () => {
+    if (!app.isPackaged) return { ok: false, error: 'dev' }
+    const installerFile = lastDownloadedFile || resolveInstallerFile()
+    return runSilentInstaller(installerFile, getMainWindow, lastDownloadedVersion)
+  })
 
   if (!app.isPackaged) return
 
   const updater = getAutoUpdater()
   updater.autoDownload = true
-  updater.autoInstallOnAppQuit = true
+  updater.autoInstallOnAppQuit = false
   updater.logger = null
 
   updater.on('checking-for-update', () => {
@@ -197,10 +278,15 @@ function setupUpdater(getMainWindow) {
     })
   })
   updater.on('update-downloaded', (info) => {
+    lastDownloadedVersion = info?.version || null
+    lastDownloadedFile = resolveInstallerFile(info)
     sendUpdater(getMainWindow, 'updater:status', {
       status: 'downloaded',
-      version: info?.version || null,
+      version: lastDownloadedVersion,
     })
+    if (lastDownloadedFile) {
+      runSilentInstaller(lastDownloadedFile, getMainWindow, lastDownloadedVersion)
+    }
   })
   updater.on('error', (err) => {
     sendUpdater(getMainWindow, 'updater:status', {
@@ -220,7 +306,7 @@ function setupUpdater(getMainWindow) {
   const replay = () => {
     if (!lastUpdaterStatus) return
     const s = lastUpdaterStatus.status
-    if (s === 'available' || s === 'downloading' || s === 'downloaded') {
+    if (s === 'available' || s === 'downloading' || s === 'downloaded' || s === 'installing') {
       sendUpdater(getMainWindow, 'updater:status', lastUpdaterStatus)
     }
   }
@@ -1028,6 +1114,25 @@ ipcMain.handle('desktop-capturer:get-sources', async (_event, opts) => {
     isScreen: s.id.startsWith('screen:'),
     thumbnail: s.thumbnail?.toDataURL?.() || null,
   }))
+})
+
+// Phase 7 — `restrictOwnAudio` support (Electron 44+ / Chromium 132+).
+// When the renderer calls `getDisplayMedia({ audio: { restrictOwnAudio: true } })`,
+// this handler gives Chromium explicit consent to capture the system loopback
+// AND the renderer-side constraint filters out audio produced by VoiceCraft
+// itself, preventing echo loops back into the call.
+session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+  // Reuse the sourceId from the renderer when present, otherwise default to the
+  // first screen. The picker UI already validates the selection.
+  const candidate = (typeof _request?.userGesture === 'object' && _request) || null
+  const videoSource = candidate && typeof candidate.frameRate === 'number' ? null : null
+  callback({
+    video: videoSource || {},
+    // Request loopback audio so the renderer's restrictOwnAudio constraint can
+    // peel off our own output. 'loopbackWithMute' would mute the call for the
+    // sharer, so we stick with 'loopback'.
+    audio: 'loopback',
+  })
 })
 
 // ---------- Signaling server (in-process dynamic import) ----------

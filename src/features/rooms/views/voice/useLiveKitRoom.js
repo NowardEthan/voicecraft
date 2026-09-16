@@ -235,11 +235,7 @@ export function useLiveKitRoom({
     const master = Math.max(0, Math.min(100, Number(settings?.outputVolume ?? 80))) / 100
     const peerMul = peerVolumeMultiplier(peerVolumesRef.current, audio.dataset?.vcPeer)
     const vol = Math.min(1, master * peerMul)
-    // Without headphones, mute remote *mic* playback while capturing system audio —
-    // otherwise loopback sends their voice back (echo). Screen-audio track still plays.
-    const cap = screenAudioCaptureRef.current
-    const duckMic = !!(cap?.active && !cap?.headphones && audio.dataset?.vcSource !== 'screen')
-    audio.volume = (isDeafenedRef.current || duckMic) ? 0 : vol
+    audio.volume = isDeafenedRef.current ? 0 : vol
     if (typeof audio.setSinkId === 'function') {
       audio.setSinkId(settings?.speakerId || '').catch(() => {})
     }

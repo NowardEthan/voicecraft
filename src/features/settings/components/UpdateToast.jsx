@@ -41,17 +41,23 @@ export default function UpdateToast() {
     state.status === 'available'
     || state.status === 'downloading'
     || state.status === 'downloaded'
+    || state.status === 'installing'
   )
 
   const onInstall = useCallback(async () => {
     try {
-      await window.electronAPI?.updater?.install?.()
+      if (window.electronAPI?.updater?.installSilent) {
+        await window.electronAPI.updater.installSilent()
+      } else {
+        await window.electronAPI?.updater?.install?.()
+      }
     } catch {
       /* Settings path still works */
     }
   }, [])
 
   const percent = Math.max(0, Math.min(100, Math.round(state?.percent || 0)))
+  const installing = state?.status === 'installing'
   const ready = state?.status === 'downloaded'
   const downloading = state?.status === 'available' || state?.status === 'downloading'
 
@@ -100,13 +106,13 @@ export default function UpdateToast() {
                     boxShadow: ready ? '0 0 20px var(--space-accent-glow-24)' : 'none',
                   }}
                 >
-                  {ready ? (
+                  {ready && !installing ? (
                     <Sparkles size={16} strokeWidth={1.75} style={{ color: 'var(--space-accent)' }} />
                   ) : (
                     <RefreshCw
                       size={15}
                       strokeWidth={1.75}
-                      className={downloading ? 'animate-spin' : ''}
+                      className={downloading || installing ? 'animate-spin' : ''}
                       style={{ color: 'var(--space-accent)', animationDuration: '1.6s' }}
                     />
                   )}
@@ -116,16 +122,24 @@ export default function UpdateToast() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="text-[13px] font-semibold text-strong tracking-tight leading-snug">
-                        {ready ? 'Atualização pronta' : 'Nova atualização'}
+                        {installing
+                          ? 'Atualizando…'
+                          : ready
+                            ? 'Atualização pronta'
+                            : 'Nova atualização'}
                       </p>
                       <p className="text-[11.5px] text-muted mt-0.5 leading-snug">
-                        {ready
+                        {installing
                           ? (state.version
-                            ? `Versão ${state.version} baixada — reinicie para instalar`
-                            : 'Reinicie para instalar a nova versão')
-                          : (state.version
-                            ? `Baixando versão ${state.version}…`
-                            : 'Baixando a nova versão…')}
+                            ? `Atualizando para ${state.version}… sem fechar`
+                            : 'Atualizando… sem fechar')
+                          : ready
+                            ? (state.version
+                              ? `Versão ${state.version} baixada`
+                              : 'Atualização pronta')
+                            : (state.version
+                              ? `Baixando versão ${state.version}…`
+                              : 'Baixando a nova versão…')}
                       </p>
                     </div>
                     <button
@@ -158,7 +172,7 @@ export default function UpdateToast() {
                     </div>
                   )}
 
-                  {ready && (
+                  {ready && !installing && (
                     <button
                       type="button"
                       onClick={onInstall}

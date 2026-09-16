@@ -18,6 +18,8 @@ function statusLabel(status, percent, version) {
       return `Baixando… ${Math.max(0, Math.min(100, Math.round(percent || 0)))}%`
     case 'downloaded':
       return version ? `Versão ${version} pronta para instalar` : 'Atualização pronta para instalar'
+    case 'installing':
+      return version ? `Atualizando para ${version}… sem fechar` : 'Atualizando… sem fechar'
     case 'not-available':
       return 'Você já está na versão mais recente'
     case 'error':

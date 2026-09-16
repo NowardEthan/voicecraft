@@ -108,6 +108,15 @@ export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
               Áudio do compartilhamento
             </p>
 
+            {audioMode !== 'off' && (
+              <div className="flex items-center gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-amber-200">
+                <Headphones size={15} className="shrink-0 text-amber-400" />
+                <p className="text-[12px] leading-snug">
+                  <span className="font-semibold text-amber-300">Recomendamos fones de ouvido:</span> use fones para evitar retorno ou eco no áudio da chamada.
+                </p>
+              </div>
+            )}
+
             {/* Opção 1: Desligado */}
             <label className="flex items-center gap-3 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2 cursor-pointer select-none hover:bg-white/[0.05] transition-colors">
               <input
