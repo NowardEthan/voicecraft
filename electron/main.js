@@ -1121,19 +1121,10 @@ ipcMain.handle('desktop-capturer:get-sources', async (_event, opts) => {
 // this handler gives Chromium explicit consent to capture the system loopback
 // AND the renderer-side constraint filters out audio produced by VoiceCraft
 // itself, preventing echo loops back into the call.
-session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
-  // Reuse the sourceId from the renderer when present, otherwise default to the
-  // first screen. The picker UI already validates the selection.
-  const candidate = (typeof _request?.userGesture === 'object' && _request) || null
-  const videoSource = candidate && typeof candidate.frameRate === 'number' ? null : null
-  callback({
-    video: videoSource || {},
-    // Request loopback audio so the renderer's restrictOwnAudio constraint can
-    // peel off our own output. 'loopbackWithMute' would mute the call for the
-    // sharer, so we stick with 'loopback'.
-    audio: 'loopback',
-  })
-})
+//
+// NOTE: Electron 44+ throws "Session can only be received when app is ready"
+// if you touch `session.defaultSession` before app.whenReady(). We register
+// the handler inside `app.whenReady()` below instead of here.
 
 // ---------- Signaling server (in-process dynamic import) ----------
 async function startSignalingServer() {
@@ -1420,6 +1411,21 @@ app.whenReady().then(() => {
   })
   session.defaultSession.setPermissionCheckHandler((_wc, permission) => {
     return permission === 'media' || permission === 'display-capture' || permission === 'fullscreen'
+  })
+
+  // Phase 7 — `restrictOwnAudio` support (Electron 44+ / Chromium 132+).
+  // When the renderer calls `getDisplayMedia({ audio: { restrictOwnAudio: true } })`,
+  // this handler gives Chromium explicit consent to capture the system loopback
+  // AND the renderer-side constraint filters out audio produced by VoiceCraft
+  // itself, preventing echo loops back into the call.
+  session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+    callback({
+      video: {},
+      // 'loopback' captures the system audio; the renderer's `restrictOwnAudio:
+      // true` constraint peels off our own output so it does not re-enter the call.
+      // 'loopbackWithMute' would mute the call for the sharer, so we stick with 'loopback'.
+      audio: 'loopback',
+    })
   })
 
   // Realtime now lives on Firebase. The old WS signaling server is leftover
