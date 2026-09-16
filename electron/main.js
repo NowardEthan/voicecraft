@@ -193,17 +193,21 @@ function runSilentInstaller(filePath, getMainWindow, version) {
 
   try {
     // NSIS flags:
-    //   /S                   — silent install (no wizard)
-    //   /restartapplications — ask the installer to relaunch the calling
-    //                          app (VoiceCraft) when it finishes. Without
-    //                          this, the installer kills the running
-    //                          process to overwrite files and the user
-    //                          has to click the desktop icon manually.
-    //                          We deliberately omit /norestart so we still
-    //                          get a relaunch.
+    //   /S            — silent install (no wizard, no progress UI).
+    //   /D=<path>     — install into the same directory the app is currently
+    //                   in (otherwise NSIS defaults to a non-admin path
+    //                   which can differ from where VoiceCraft lives).
+    //
+    // We deliberately do NOT pass /restartapplications or /norestart.
+    // Both trigger UAC elevation prompts on some Windows configurations
+    // even though perMachine:false is set in package.json. Instead we
+    // let the installer terminate us naturally (NSIS closes VoiceCraft
+    // because it owns the files it overwrites) and we relaunch ourselves
+    // via app.relaunch() in the setTimeout below.
+    const currentDir = require('path').dirname(filePath)
     const child = require('child_process').spawn(
       filePath,
-      ['/S', '/restartapplications'],
+      ['/S', `/D=${currentDir}`],
       {
         detached: true,
         stdio: 'ignore',
@@ -221,18 +225,26 @@ function runSilentInstaller(filePath, getMainWindow, version) {
         if (!win.isVisible()) win.show()
         log('info', '[updater] reloading webContents after silent installer')
         win.webContents.reload()
-      } else {
-        // Renderer was killed by the installer — relaunch the whole app.
-        log('info', '[updater] window gone after install — relaunching Voice')
-        try {
-          require('electron').app.relaunch({ args: process.argv.slice(1) })
-          require('electron').app.exit(0)
-        } catch (err) {
-          console.warn('[updater] relaunch failed:', err?.message || err)
-        }
       }
       isInstallingSilent = false
-    }, 5000)
+    }, 5_000)
+
+    // After the installer's own copy-and-quit cycle, NSIS does not
+    // automatically relaunch VoiceCraft. We schedule a self-relaunch
+    // ~12 s later so the installer has plenty of time to finish writing
+    // files. This works for both the common case (NSIS in-place upgrade)
+    // and the case where the previous setTimeout above found the renderer
+    // already dead.
+    setTimeout(() => {
+      try {
+        if (!app.isPackaged) return
+        log('info', '[updater] self-relaunching Voice after silent install')
+        app.relaunch({ args: process.argv.slice(1) })
+        app.exit(0)
+      } catch (err) {
+        console.warn('[updater] self-relaunch failed:', err?.message || err)
+      }
+    }, 12_000)
 
     return { ok: true }
   } catch (err) {
@@ -326,6 +338,35 @@ function setupUpdater(getMainWindow) {
   // Early + late: UI may still be on login when the first check finishes.
   setTimeout(runCheck, 6_000)
   setTimeout(runCheck, 45_000)
+
+  // Periodic polling — the user should not have to close/reopen the app
+  // or click "Verificar atualizações" to discover a new version. We poll
+  // every 30 minutes when the app is in the foreground and skip when
+  // the window is hidden/minimized to avoid waking background timers.
+  const POLL_INTERVAL_MS = 30 * 60 * 1000 // 30 min
+  let pollTimer = null
+  const startPolling = () => {
+    if (pollTimer) return
+    pollTimer = setInterval(() => {
+      const win = typeof getMainWindow === 'function' ? getMainWindow() : null
+      if (win && !win.isDestroyed() && win.isVisible() && !win.isMinimized()) {
+        log('info', '[updater] periodic check (every 30 min)')
+        runCheck()
+      }
+    }, POLL_INTERVAL_MS)
+  }
+  const stopPolling = () => {
+    if (pollTimer) {
+      clearInterval(pollTimer)
+      pollTimer = null
+    }
+  }
+  startPolling()
+  // Re-arm the timer after the user closes the modal/forces a check.
+  app.on('browser-window-created', () => {
+    stopPolling()
+    startPolling()
+  })
 
   // When the window finally loads (or user finishes login), re-push last status.
   const replay = () => {

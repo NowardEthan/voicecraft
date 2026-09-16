@@ -11,6 +11,7 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,3 +36,22 @@ jobs:
           LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
           LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
         run: npm run release
+
+      - name: Verify release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          Write-Host "Validating release $tag ..."
+          $release = gh release view $tag --json assets --jq '.assets[] | .name' 2>$null
+          if (-not $release) { Write-Error "Release $tag not found"; exit 1 }
+          $required = @("$($tag.TrimStart('v'))-Setup-$tag.exe".Replace('v',''), "latest.yml", "$($tag.TrimStart('v'))-Setup-$tag.exe.blockmap")
+          # Simpler: just check by suffix patterns
+          $hasExe = $release | Where-Object { $_ -like "*Setup*.exe" -and $_ -notlike "*__uninstaller*" }
+          $hasYml = $release | Where-Object { $_ -eq "latest.yml" }
+          $hasBlockmap = $release | Where-Object { $_ -like "*Setup*.exe.blockmap" }
+          if (-not $hasExe) { Write-Error "Missing installer .exe in release assets"; exit 1 }
+          if (-not $hasYml) { Write-Error "Missing latest.yml in release assets"; exit 1 }
+          if (-not $hasBlockmap) { Write-Error "Missing .blockmap in release assets"; exit 1 }
+          Write-Host "OK: all 3 required assets present."
