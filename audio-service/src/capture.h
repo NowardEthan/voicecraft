@@ -1,4 +1,6 @@
-// VoiceCraft audio capture — portable interface over OS APIs.
+// Voice audio capture — portable interface over OS APIs.
+// (C++ namespace kept as `voicecraft::audio` for backwards compatibility
+//  with the existing voicecraft-audio.exe binary shipped in 0.6.x.)
 // Backed by miniaudio (single-header library fetched by CMake).
 #pragma once
 

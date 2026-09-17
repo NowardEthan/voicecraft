@@ -43,7 +43,7 @@ export default function TitleBar() {
       <div className="flex items-center gap-2 pl-3 min-w-0 flex-1">
         <BrandMark size={18} decorative className="drop-shadow-[0_0_10px_var(--space-accent-glow-24)]" />
         <span className="text-[12px] font-semibold tracking-tight text-strong/90 truncate">
-          VoiceCraft
+          Voice
         </span>
       </div>
 

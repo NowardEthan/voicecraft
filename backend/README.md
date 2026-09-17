@@ -1,6 +1,6 @@
 # Backend (BaaS)
 
-VoiceCraft’s server-side surface lives here conceptually:
+Voice’s server-side surface lives here conceptually:
 
 | Piece | Path | Role |
 |-------|------|------|

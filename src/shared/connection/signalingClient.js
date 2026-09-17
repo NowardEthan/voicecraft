@@ -1,5 +1,5 @@
 /**
- * VoiceCraft realtime client — Firebase Auth + Firestore + Storage.
+ * Voice realtime client — Firebase Auth + Firestore + Storage.
  *
  * Keeps the same event API the rest of the app already uses
  * (onSpaceChanged, enterRoom, sendSignal, …) so hooks do not change.

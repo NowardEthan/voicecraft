@@ -1,4 +1,4 @@
-// VoiceCraft audio service — entry point.
+// Voice audio service — entry point.
 //
 // Protocol (newline-delimited JSON over stdin for commands, raw PCM
 // chunks prefixed by a 4-byte little-endian size on stdout, JSON status

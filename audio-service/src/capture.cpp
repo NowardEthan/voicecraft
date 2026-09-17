@@ -1,4 +1,4 @@
-// VoiceCraft audio capture — miniaudio backend.
+// Voice audio capture — miniaudio backend.
 // Works on Windows (WASAPI), macOS (Core Audio), Linux (PulseAudio/PipeWire).
 #define MINIAUDIO_IMPLEMENTATION
 #include <miniaudio.h>

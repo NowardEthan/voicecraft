@@ -173,7 +173,7 @@ export default function FeaturedSpacesCarousel({
                   </div>
                 </div>
                 <p className="text-[13px] text-white/75 line-clamp-2 max-w-xl leading-relaxed">
-                  {current.description || current.slogan || 'Uma comunidade ativa no VoiceCraft.'}
+                  {current.description || current.slogan || 'Uma comunidade ativa no Voice.'}
                 </p>
               </div>
 

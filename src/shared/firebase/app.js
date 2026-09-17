@@ -1,5 +1,5 @@
 /**
- * Firebase app for VoiceCraft.
+ * Firebase app for Voice.
  * Uses the Luna project (luna-8787d) — collections are prefixed `vc_`
  * so they never collide with Luna documents.
  */

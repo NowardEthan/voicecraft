@@ -9,7 +9,7 @@
  *   - Aviso final: "Você poderá alterar essas configurações depois."
  *
  * Sem "BEM-VINDO(A)" — o Space ainda não foi criado.
- * Sem "Canais" — sempre "Salas" (termo do VoiceCraft).
+ * Sem "Canais" — sempre "Salas" (termo do Voice).
  */
 import { ShieldCheck } from 'lucide-react'
 import { SpaceReviewPreview } from './SpaceReviewPreview.jsx'

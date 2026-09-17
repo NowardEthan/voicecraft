@@ -491,7 +491,7 @@ export function useVoiceRoom({ room, currentUserId, currentUserName, members = [
     try {
       const source = screenShare.availableSources.find((s) => s.id === sourceId)
       if (source && !source.isScreen && looksLikeBrowserWindow(source.name)) {
-        flashToast('Janela de navegador pode ficar cinza ao focar o VoiceCraft. Prefira a tela inteira e deixe o YouTube visível.')
+        flashToast('Janela de navegador pode ficar cinza ao focar o Voice. Prefira a tela inteira e deixe o YouTube visível.')
       }
       const q = settings?.screenQuality || '720p'
       const fr = settings?.screenFramerate || 15

@@ -230,7 +230,7 @@ export default function HomeExplore({
                       </h3>
                     </div>
                     <p className="text-[13.5px] text-white/75 line-clamp-2 max-w-xl leading-relaxed">
-                      {featuredSpace.description || featuredSpace.slogan || 'Uma comunidade pública no VoiceCraft.'}
+                      {featuredSpace.description || featuredSpace.slogan || 'Uma comunidade pública no Voice.'}
                     </p>
                     <div className="mt-3 flex flex-wrap items-center gap-3 text-[12px] text-white/70">
                       <span className="inline-flex items-center gap-1.5">

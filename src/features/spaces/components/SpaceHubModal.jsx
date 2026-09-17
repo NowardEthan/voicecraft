@@ -373,7 +373,7 @@ export default function SpaceHubModal({
               <p className="mt-2.5 text-[12px] text-[#ff6b7a]" role="alert">{inviteError}</p>
             ) : (
               <p className="mt-2.5 text-[11.5px] text-[#6b7280]">
-                Aceita links voicecraft.app/invite/…, códigos e links ?space=.
+                Aceita links voice.app/invite/…, códigos e links ?space=.
               </p>
             )}
           </section>

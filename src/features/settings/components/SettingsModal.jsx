@@ -26,7 +26,7 @@ function diffSettings(from, to) {
 }
 
 /**
- * Call settings modal — draft until Aplicar; matches the VoiceCraft mockup.
+ * Call settings modal — draft until Aplicar; matches the Voice mockup.
  */
 export default function SettingsModal({
   settings,

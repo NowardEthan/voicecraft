@@ -15,7 +15,7 @@ export function looksLikeBrowserWindow(name = '') {
  *   Uses `navigator.mediaDevices.getDisplayMedia` (the modern Chromium API)
  *   with `audio.restrictOwnAudio: true`. The main process' setDisplayMediaRequestHandler
  *   grants system loopback; the renderer-side constraint tells Chromium to
- *   peel off the VoiceCraft renderer's own audio before handing the stream to
+ *   peel off the Voice renderer's own audio before handing the stream to
  *   the caller. That breaks the echo loop where shared screen audio was
  *   re-injected into the call.
  *
@@ -23,7 +23,7 @@ export function looksLikeBrowserWindow(name = '') {
  *   environments where getDisplayMedia is gated by the OS or blocked.
  *
  * Electron cannot share a Chrome *tab* (only a window or a monitor).
- * Window-capturing Chrome/YouTube goes gray when VoiceCraft is focused:
+ * Window-capturing Chrome/YouTube goes gray when Voice is focused:
  * Windows stops compositing the occluded window, and hardware video
  * overlays never land in the captured bitmap. Sharing the monitor and
  * keeping YouTube visible is the reliable path.
@@ -67,7 +67,7 @@ export function useScreenShare() {
    * Modern path: getDisplayMedia. The Chromium picker UI lets the user pick
    * a tab, window or screen. The `audio` constraint is honoured by the OS:
    *  - `restrictOwnAudio: true` tells Chromium to remove audio produced by
-   *    this renderer (VoiceCraft) from the captured loopback, eliminating
+   *    this renderer (Voice) from the captured loopback, eliminating
    *    the call-echo loop.
    *  - We explicitly disable echoCancellation/noiseSuppression/autoGainControl
    *    on the captured stream because those are designed for microphone

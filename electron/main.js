@@ -196,15 +196,34 @@ function runSilentInstaller(filePath, getMainWindow, version) {
     //   /S            — silent install (no wizard, no progress UI).
     //   /D=<path>     — install into the same directory the app is currently
     //                   in (otherwise NSIS defaults to a non-admin path
-    //                   which can differ from where VoiceCraft lives).
+    //                   which can differ from where Voice lives).
     //
     // We deliberately do NOT pass /restartapplications or /norestart.
     // Both trigger UAC elevation prompts on some Windows configurations
     // even though perMachine:false is set in package.json. Instead we
-    // let the installer terminate us naturally (NSIS closes VoiceCraft
+    // let the installer terminate us naturally (NSIS closes Voice
     // because it owns the files it overwrites) and we relaunch ourselves
     // via app.relaunch() in the setTimeout below.
+    //
+    // PRE-INSTALL KILL: NSIS fails with "Falha ao desinstalar os arquivos
+    // do aplicativo antigo" if a previous VoiceCraft.exe or its child
+    // processes are still holding handles to the install folder. We spawn
+    // taskkill /F /IM /T to terminate them first. This is harmless when
+    // there's nothing to kill — taskkill just exits non-zero.
     const currentDir = require('path').dirname(filePath)
+    try {
+      const taskkill = require('child_process').spawn(
+        'taskkill.exe',
+        ['/F', '/IM', 'VoiceCraft.exe', '/T'],
+        { shell: false, stdio: 'ignore', windowsHide: true }
+      )
+      taskkill.on('exit', () => {})
+      // Give Windows a moment to release file handles.
+      setTimeout(() => {}, 1500)
+    } catch (err) {
+      console.warn('[updater] pre-kill taskkill failed:', err?.message || err)
+    }
+
     const child = require('child_process').spawn(
       filePath,
       ['/S', `/D=${currentDir}`],
@@ -230,7 +249,7 @@ function runSilentInstaller(filePath, getMainWindow, version) {
     }, 5_000)
 
     // After the installer's own copy-and-quit cycle, NSIS does not
-    // automatically relaunch VoiceCraft. We schedule a self-relaunch
+    // automatically relaunch Voice. We schedule a self-relaunch
     // ~12 s later so the installer has plenty of time to finish writing
     // files. This works for both the common case (NSIS in-place upgrade)
     // and the case where the previous setTimeout above found the renderer
@@ -850,7 +869,7 @@ function listAudioCapableProcesses() {
   return new Promise((resolve) => {
     const cp = require('child_process')
     const selfPid = process.pid
-    const fallback = [{ pid: selfPid, name: 'VoiceCraft', title: 'VoiceCraft', hasWindow: true, icon: '' }]
+    const fallback = [{ pid: selfPid, name: 'Voice', title: 'Voice', hasWindow: true, icon: '' }]
 
     if (process.platform !== 'win32') {
       resolve(fallback)
@@ -919,7 +938,7 @@ function listProcessesViaTasklistFiltered() {
       { windowsHide: true, maxBuffer: 1024 * 1024 },
       (err, stdout) => {
         if (err || !stdout) {
-          return resolve([{ pid: selfPid, name: 'VoiceCraft', title: 'VoiceCraft', hasWindow: true, icon: '' }])
+          return resolve([{ pid: selfPid, name: 'Voice', title: 'Voice', hasWindow: true, icon: '' }])
         }
         const seen = new Set()
         const list = []
@@ -1094,7 +1113,7 @@ function ensureOAuthServer({ onResult, distDir }) {
               }
           onResult(payload)
           if (req.method === 'GET') {
-            oauthSend(res, 200, '<!doctype html><meta charset="utf-8"><title>VoiceCraft</title><body style="margin:0;background:#07080c;color:#f6f7f9;font-family:Inter,system-ui,sans-serif;display:grid;place-items:center;height:100vh"><p>Pode voltar ao VoiceCraft.</p></body>', { 'Content-Type': 'text/html; charset=utf-8' })
+            oauthSend(res, 200, '<!doctype html><meta charset="utf-8"><title>Voice</title><body style="margin:0;background:#07080c;color:#f6f7f9;font-family:Inter,system-ui,sans-serif;display:grid;place-items:center;height:100vh"><p>Pode voltar ao Voice.</p></body>', { 'Content-Type': 'text/html; charset=utf-8' })
           } else {
             oauthSend(res, 200, JSON.stringify({ ok: true }), { 'Content-Type': 'application/json' })
           }
@@ -1185,7 +1204,7 @@ ipcMain.handle('desktop-capturer:get-sources', async (_event, opts) => {
 // Phase 7 — `restrictOwnAudio` support (Electron 44+ / Chromium 132+).
 // When the renderer calls `getDisplayMedia({ audio: { restrictOwnAudio: true } })`,
 // this handler gives Chromium explicit consent to capture the system loopback
-// AND the renderer-side constraint filters out audio produced by VoiceCraft
+// AND the renderer-side constraint filters out audio produced by Voice
 // itself, preventing echo loops back into the call.
 //
 // NOTE: Electron 44+ throws "Session can only be received when app is ready"
@@ -1245,7 +1264,7 @@ function applyWindowsTaskbarIcon(win, icoPath, pngPath) {
   try {
     win.setAppDetails({
       appId: 'com.voicecraft.app',
-      relaunchDisplayName: 'VoiceCraft',
+      relaunchDisplayName: 'Voice',
       ...(icoPath ? { appIconPath: icoPath, appIconIndex: 0 } : {}),
     })
   } catch {}
@@ -1303,7 +1322,7 @@ function createWindow() {
       backgroundThrottling: false,
     },
     frame: false,
-    title: 'VoiceCraft',
+    title: 'Voice',
     autoHideMenuBar: true,
     ...(appIcon ? { icon: appIcon } : {}),
   })
@@ -1445,7 +1464,7 @@ function buildTrayIcon() {
 function createTray() {
   if (tray) return
   tray = new Tray(buildTrayIcon())
-  tray.setToolTip('VoiceCraft')
+  tray.setToolTip('Voice')
   rebuildTrayMenu()
   tray.on('click', () => {
     if (!mainWindow) return
@@ -1463,7 +1482,7 @@ function rebuildTrayMenu() {
       else mainWindow.show()
     }},
     { type: 'separator' },
-    { label: 'Sair do VoiceCraft', click: () => {
+    { label: 'Sair do Voice', click: () => {
       app.isQuiting = true
       app.quit()
     }},
@@ -1482,7 +1501,7 @@ app.whenReady().then(() => {
   // Phase 7 — `restrictOwnAudio` support (Electron 44+ / Chromium 132+).
   // When the renderer calls `getDisplayMedia({ audio: { restrictOwnAudio: true } })`,
   // this handler gives Chromium explicit consent to capture the system loopback
-  // AND the renderer-side constraint filters out audio produced by VoiceCraft
+  // AND the renderer-side constraint filters out audio produced by Voice
   // itself, preventing echo loops back into the call.
   session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
     callback({
@@ -1527,4 +1546,4 @@ app.on('before-quit', () => {
   if (tray) { tray.destroy(); tray = null }
 })
 
-log('info', `[app] VoiceCraft started (userData=${app.getPath('userData')})`)
+log('info', `[app] Voice started (userData=${app.getPath('userData')})`)

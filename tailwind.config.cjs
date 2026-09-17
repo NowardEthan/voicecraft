@@ -7,7 +7,7 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        // VoiceCraft Design System v1.0 — exact tokens (DESIGN_SYSTEM §2.1).
+        // Voice Design System v1.0 — exact tokens (DESIGN_SYSTEM §2.1).
         // Backgrounds / surfaces / borders / text scale.
         canvas:    'var(--vc-bg-canvas)',
         rail:      'var(--vc-bg-rail)',

@@ -1,6 +1,6 @@
 /**
  * Motion primitives — opinionated wrappers around framer-motion for
- * VoiceCraft's "premium" feel.
+ * Voice's "premium" feel.
  *
  * All primitives respect prefers-reduced-motion (handled by the inner
  * motion components automatically — they read the OS media query).

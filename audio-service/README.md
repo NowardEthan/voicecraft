@@ -1,4 +1,4 @@
-# VoiceCraft audio service
+# Voice audio service
 
 C++ native process that handles microphone capture (and optionally DSP) outside
 the Electron renderer. Replaces `getUserMedia` for mic so we can use OS-level

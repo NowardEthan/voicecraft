@@ -61,9 +61,9 @@ export function buildInviteShareText({ spaceName, roomName = null, url, code } =
   const link = url || ''
   const codeLine = code ? `\nCódigo: ${code}` : ''
   if (roomName) {
-    return `Te convido pro VoiceCraft — entre em "${space}" e abra a sala "${roomName}":\n${link}${codeLine}`
+    return `Te convido pro Voice — entre em "${space}" e abra a sala "${roomName}":\n${link}${codeLine}`
   }
-  return `Te convido pro VoiceCraft — entre no Space "${space}":\n${link}${codeLine}`
+  return `Te convido pro Voice — entre no Space "${space}":\n${link}${codeLine}`
 }
 
 /**

@@ -262,7 +262,7 @@ export function getVisibleCommand(id, opts = {}) {
 
 export function exportMessagesTranscript(messages = [], { roomName = 'sala' } = {}) {
   const lines = [
-    `# VoiceCraft — ${roomName}`,
+    `# Voice — ${roomName}`,
     `# Exportado em ${new Date().toLocaleString()}`,
     '',
   ]
@@ -380,7 +380,7 @@ export async function runCommand(id, ctx, params = {}) {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `voicecraft-${String(ctx.roomName || 'sala').replace(/\s+/g, '-').toLowerCase()}.txt`
+      a.download = `voice-${String(ctx.roomName || 'sala').replace(/\s+/g, '-').toLowerCase()}.txt`
       document.body.appendChild(a)
       a.click()
       a.remove()

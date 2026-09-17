@@ -1007,7 +1007,7 @@ export function useLiveKitRoom({
       }
       const source = screenShare.availableSources.find((s) => s.id === sourceId)
       if (source && !source.isScreen && looksLikeBrowserWindow(source.name)) {
-        flashToast('Janela de navegador pode ficar cinza ao focar o VoiceCraft. Prefira a tela inteira.')
+        flashToast('Janela de navegador pode ficar cinza ao focar o Voice. Prefira a tela inteira.')
       }
       const share = resolveShareDefaults(settings)
       const q = share.quality

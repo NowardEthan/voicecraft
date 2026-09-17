@@ -2,7 +2,7 @@
  * StudyPreview — preview of an "Estudo" (study / shared references) room.
  *
  * Visual: room name header, then a "referências compartilhadas" area
- * (document rows), then an empty state line. Study rooms in VoiceCraft
+ * (document rows), then an empty state line. Study rooms in Voice
  * are text channels that focus on shared material.
  */
 import { BookOpen, FileText, Plus } from 'lucide-react'

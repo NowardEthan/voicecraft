@@ -1,7 +1,7 @@
-# Processo de Release — VoiceCraft
+# Processo de Release — Voice
 
 Documento adaptado do processo do Lumen (`docs/RELEASE_PROCESS.md`),
-ajustado para o VoiceCraft (Electron + GitHub Actions + `electron-updater`).
+ajustado para o Voice (Electron + GitHub Actions + `electron-updater`).
 
 Canal público: [GitHub Releases](https://github.com/NowardEthan/voicecraft/releases)  
 Versão canônica: `package.json` → campo `version`  
@@ -48,7 +48,7 @@ O `npm version …` faz três coisas:
 
 ### Quando usar cada tipo
 
-| Tipo | Use quando | Exemplos no VoiceCraft |
+| Tipo | Use quando | Exemplos no Voice |
 |------|------------|------------------------|
 | **PATCH** | Bugfix, polish, performance, copy — sem feature nova | crash no rail, toast, fix de settings |
 | **MINOR** | Feature nova **compatível** | Hub de Spaces, salas, update toast, painel novo |
@@ -112,7 +112,7 @@ npm run electron:build
 ```
 
 Saída em `release/`:
-- `VoiceCraft Setup X.Y.Z.exe` — instalador NSIS
+- `Voice Setup X.Y.Z.exe` — instalador NSIS
 - `latest.yml` — metadados do auto-update
 - `*.blockmap` — updates diferenciais (quando gerado)
 
@@ -133,7 +133,7 @@ Saída em `release/`:
 ### Instalação inicial
 
 1. Baixe o `.exe` da release
-2. Instale e abra o VoiceCraft
+2. Instale e abra o Voice
 3. Confira a versão em **Configurações → Atualizações**
 
 ### Atualização (auto-update)
@@ -163,9 +163,9 @@ Também dá para forçar em **Configurações → Atualizações → Verificar a
 Cada GitHub Release deve conter algo assim:
 
 ```
-VoiceCraft Setup 1.0.0.exe
+Voice Setup 1.0.0.exe
 latest.yml
-VoiceCraft Setup 1.0.0.exe.blockmap   # opcional / gerado pelo builder
+Voice Setup 1.0.0.exe.blockmap   # opcional / gerado pelo builder
 ```
 
 Exemplo de `latest.yml`:
@@ -173,10 +173,10 @@ Exemplo de `latest.yml`:
 ```yaml
 version: 1.0.0
 files:
-  - url: VoiceCraft Setup 1.0.0.exe
+  - url: Voice Setup 1.0.0.exe
     sha512: …
     size: …
-path: VoiceCraft Setup 1.0.0.exe
+path: Voice Setup 1.0.0.exe
 sha512: …
 releaseDate: 2026-09-09T00:00:00.000Z
 ```

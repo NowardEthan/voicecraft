@@ -19,7 +19,8 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(miniaudio)
 
 # -----------------------------------------------------------------------
-# VoiceCraft audio service
+# Voice audio service (binary kept as `voicecraft-audio.exe` for
+# backwards-compatible upgrade paths; the C++ namespace is `voicecraft`).
 # - Captures microphone audio via OS APIs
 # - Receives control commands over stdin (JSON lines, one per command)
 # - Emits audio frames over stdout: [4-byte little-endian size][float32 PCM]

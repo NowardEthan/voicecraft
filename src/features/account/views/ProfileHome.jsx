@@ -165,7 +165,7 @@ export function ProfileHome({ profile, spaces = [], onEdit, onEditCover }) {
           {profile.privacy.showActivity && (
             <Card title="Atividade recente">
               {activity.length === 0 ? (
-                <p className="text-[13px] text-muted">Sua atividade aparece aqui conforme você usa o VoiceCraft.</p>
+                <p className="text-[13px] text-muted">Sua atividade aparece aqui conforme você usa o Voice.</p>
               ) : (
                 <ol className="space-y-3">
                   {activity.map((item) => {

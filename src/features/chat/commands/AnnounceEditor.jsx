@@ -216,7 +216,7 @@ export default function AnnounceEditor({
         authorUserId: null,
         authorName: draft.authorMode === 'system' && draft.authorName
           ? draft.authorName
-          : 'Sistema VoiceCraft',
+          : 'Sistema Voice',
         authorPhoto: draft.authorMode === 'system' ? draft.authorPhoto : '',
         authorIcon: draft.authorMode === 'system' ? draft.authorIcon : '🤖',
         authorIconValue: draft.authorMode === 'system' ? draft.authorIconValue : null,

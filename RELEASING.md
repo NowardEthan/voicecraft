@@ -1,4 +1,4 @@
-# Releases do VoiceCraft
+# Releases do Voice
 
 Guia curto. Processo completo (estilo Lumen): `[docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md)`.
 

@@ -52,7 +52,7 @@ export default function HomeNavPanel({
           >
             V
           </span>
-          <h2 className="text-[15px] font-bold text-strong tracking-tight">VoiceCraft</h2>
+          <h2 className="text-[15px] font-bold text-strong tracking-tight">Voice</h2>
         </div>
       </Appear>
 

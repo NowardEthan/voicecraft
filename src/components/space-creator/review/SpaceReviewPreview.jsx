@@ -5,7 +5,7 @@
  * overlaid + name + subtitle), then shows a "Salas" section with the
  * first room. Re-renders whenever the wizard data changes.
  *
- * Per spec §4: never shows "Canais" — VoiceCraft uses "Salas".
+ * Per spec §4: never shows "Canais" — Voice uses "Salas".
  */
 import { Plus, MessageCircle } from 'lucide-react'
 import { SpaceIcon, bannerGradient, bannerOverlay } from '../../../features/spaces'

@@ -1,5 +1,5 @@
 /**
- * VoiceCraft Cloud Functions — scheduled chat autopurge.
+ * Voice Cloud Functions — scheduled chat autopurge.
  *
  * Soft-deletes messages older than chatAutomation.autopurge.olderThanHours
  * for Spaces with autopurge.enabled.

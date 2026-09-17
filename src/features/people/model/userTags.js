@@ -7,7 +7,7 @@ export const TAG_CATALOG = [
     id: 'staff',
     label: 'Staff',
     color: '#7dd3fc',
-    hint: 'Equipe VoiceCraft',
+    hint: 'Equipe Voice',
   },
   {
     id: 'friend',

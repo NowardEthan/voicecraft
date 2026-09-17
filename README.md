@@ -1,4 +1,4 @@
-# VoiceCraft - P2P Voice & Video Chat
+# Voice - P2P Voice & Video Chat
 
 > Software desktop para chamadas de voz/vídeo privadas em rede local (LAN), sem servidor central. Perfeito para uso com Radmin/VNC para conexões remotas.
 
@@ -71,7 +71,7 @@ Apps instalados atualizam sozinhos (mini notificação + Configurações).
 1. Configure Radmin Viewer ou VNC Viewer no computador cliente
 2. Conecte ao computador host via Radmin/VNC
 3. O computador host aparecerá como se estivesse na rede local
-4. Use o VoiceCraft normalmente!
+4. Use o Voice normalmente!
 
 ## 🛠️ Stack Tecnológica
 

@@ -54,17 +54,17 @@ export default function GoogleAuthBridge() {
   const params = new URLSearchParams(window.location.search)
   const alreadyDone = params.get('vcAuth') === 'done' || sessionStorage.getItem(DONE_KEY) === '1'
   const [state, setState] = useState(alreadyDone ? 'done' : 'working')
-  const [detail, setDetail] = useState(alreadyDone ? 'Pode fechar esta aba e voltar ao VoiceCraft.' : 'Abrindo o Google…')
+  const [detail, setDetail] = useState(alreadyDone ? 'Pode fechar esta aba e voltar ao Voice.' : 'Abrindo o Google…')
 
   const complete = async (userCred) => {
     const cred = GoogleAuthProvider.credentialFromResult(userCred)
     const idToken = cred?.idToken
     if (!idToken) throw new Error('O Google não devolveu o token.')
-    setDetail('Enviando para o VoiceCraft…')
+    setDetail('Enviando para o Voice…')
     await postResult(callbackUrl(), { idToken })
     markDone()
     setState('done')
-    setDetail('Pode fechar esta aba e voltar ao VoiceCraft.')
+    setDetail('Pode fechar esta aba e voltar ao Voice.')
   }
 
   const startGoogle = async () => {

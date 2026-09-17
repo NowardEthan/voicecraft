@@ -1,5 +1,5 @@
 /**
- * VoiceCraft account — Google + e-mail/senha on the Luna Firebase project.
+ * Voice account — Google + e-mail/senha on the Luna Firebase project.
  */
 import {
   GoogleAuthProvider,

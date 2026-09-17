@@ -74,7 +74,7 @@ export default function AmigosView({ onOpenFriend }) {
           <div>
             <h1 className="text-[28px] sm:text-[32px] font-bold text-strong tracking-tight">Amigos</h1>
             <p className="mt-1 text-[13.5px] text-muted">
-              Conecte-se, jogue, fale e crie momentos juntos no VoiceCraft.
+              Conecte-se, jogue, fale e crie momentos juntos no Voice.
             </p>
           </div>
           <div className="flex items-center gap-2.5 self-end sm:self-auto">
