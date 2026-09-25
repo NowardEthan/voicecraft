@@ -176,6 +176,40 @@ function resolveInstallerFile(info) {
   return null
 }
 
+
+function shouldSuppressUpdater() {
+  try {
+    const markerPath = require('path').join(app.getPath('userData'), 'update-in-progress')
+    if (!fs.existsSync(markerPath)) return false
+    const raw = fs.readFileSync(markerPath, 'utf8').trim()
+    const lines = raw.split('\n')
+    const markerVersion = lines[0] || ''
+    const markerTs = parseInt(lines[1] || '0', 10)
+    const currentVersion = app.getVersion()
+    const ageMs = Date.now() - markerTs
+
+    // The new app's version matches the marker → update completed cleanly.
+    if (markerVersion && markerVersion === currentVersion) {
+      try { fs.unlinkSync(markerPath) } catch {}
+      return false
+    }
+    // Marker older than 5 min and version doesn't match — treat as
+    // stuck and skip this run (the next manual check will retry).
+    if (ageMs > 5 * 60 * 1000) {
+      try { fs.unlinkSync(markerPath) } catch {}
+      console.warn('[updater] stale update-in-progress marker (' + ageMs + 'ms, v' + markerVersion + '); clearing.')
+      return false
+    }
+    // Recent marker with mismatched version → another concurrent update
+    // is in flight; suppress this run to avoid fighting it.
+    console.warn('[updater] suppressing update check: in-progress marker v' + markerVersion + ' (' + Math.round(ageMs / 1000) + 's old)')
+    return true
+  } catch {
+    return false
+  }
+}
+
+
 function runSilentInstaller(filePath, getMainWindow, version) {
   if (isInstallingSilent) return { ok: true, alreadyRunning: true }
   if (!filePath || typeof filePath !== 'string' || !filePath.toLowerCase().endsWith('.exe') || !fs.existsSync(filePath)) {
@@ -191,6 +225,17 @@ function runSilentInstaller(filePath, getMainWindow, version) {
     version: version || lastDownloadedVersion || null,
   })
 
+  // Update-flow marker — the main process is committed to an upgrade and
+  // must NOT re-launch the old binary if a stray relaunch fires later.
+  // This breaks the loop we hit in 0.6.5/0.6.6 where taskkill killed our
+  // own NSIS installer and app.relaunch() brought the OLD binary back,
+  // which then re-detected 0.6.7 and tried again.
+  const markerPath = require('path').join(app.getPath('userData'), 'update-in-progress')
+  try {
+    const markerVersion = version || lastDownloadedVersion || ''
+    const markerContent = markerVersion + '\n' + Date.now() + '\n'
+    fs.writeFileSync(markerPath, markerContent)
+  } catch {}
   try {
     // NSIS flags:
     //   /S            — silent install (no wizard, no progress UI).
@@ -212,14 +257,11 @@ function runSilentInstaller(filePath, getMainWindow, version) {
     // there's nothing to kill — taskkill just exits non-zero.
     const currentDir = require('path').dirname(filePath)
     try {
-      const taskkill = require('child_process').spawn(
+      require('child_process').spawnSync(
         'taskkill.exe',
         ['/F', '/IM', 'VoiceCraft.exe', '/T'],
-        { shell: false, stdio: 'ignore', windowsHide: true }
+        { shell: false, stdio: 'ignore', windowsHide: true, timeout: 5_000 }
       )
-      taskkill.on('exit', () => {})
-      // Give Windows a moment to release file handles.
-      setTimeout(() => {}, 1500)
     } catch (err) {
       console.warn('[updater] pre-kill taskkill failed:', err?.message || err)
     }
@@ -242,8 +284,6 @@ function runSilentInstaller(filePath, getMainWindow, version) {
         // Bring window to front in case it was minimized/hidden to tray.
         if (win.isMinimized()) win.restore()
         if (!win.isVisible()) win.show()
-        log('info', '[updater] reloading webContents after silent installer')
-        win.webContents.reload()
       }
       isInstallingSilent = false
     }, 5_000)
@@ -352,6 +392,7 @@ function setupUpdater(getMainWindow) {
   })
 
   const runCheck = () => {
+    if (shouldSuppressUpdater()) return
     updater.checkForUpdates().catch(() => {})
   }
   // Early + late: UI may still be on login when the first check finishes.
@@ -362,6 +403,7 @@ function setupUpdater(getMainWindow) {
   // or click "Verificar atualizações" to discover a new version. We poll
   // every 30 minutes when the app is in the foreground and skip when
   // the window is hidden/minimized to avoid waking background timers.
+  // shouldSuppressUpdater — defined alongside runSilentInstaller above.
   const POLL_INTERVAL_MS = 30 * 60 * 1000 // 30 min
   let pollTimer = null
   const startPolling = () => {
@@ -369,6 +411,7 @@ function setupUpdater(getMainWindow) {
     pollTimer = setInterval(() => {
       const win = typeof getMainWindow === 'function' ? getMainWindow() : null
       if (win && !win.isDestroyed() && win.isVisible() && !win.isMinimized()) {
+        if (shouldSuppressUpdater()) return
         log('info', '[updater] periodic check (every 30 min)')
         runCheck()
       }
