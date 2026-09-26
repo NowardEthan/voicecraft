@@ -177,138 +177,36 @@ function resolveInstallerFile(info) {
 }
 
 
-function shouldSuppressUpdater() {
-  try {
-    const markerPath = require('path').join(app.getPath('userData'), 'update-in-progress')
-    if (!fs.existsSync(markerPath)) return false
-    const raw = fs.readFileSync(markerPath, 'utf8').trim()
-    const lines = raw.split('\n')
-    const markerVersion = lines[0] || ''
-    const markerTs = parseInt(lines[1] || '0', 10)
-    const currentVersion = app.getVersion()
-    const ageMs = Date.now() - markerTs
-
-    // The new app's version matches the marker → update completed cleanly.
-    if (markerVersion && markerVersion === currentVersion) {
-      try { fs.unlinkSync(markerPath) } catch {}
-      return false
-    }
-    // Marker older than 5 min and version doesn't match — treat as
-    // stuck and skip this run (the next manual check will retry).
-    if (ageMs > 5 * 60 * 1000) {
-      try { fs.unlinkSync(markerPath) } catch {}
-      console.warn('[updater] stale update-in-progress marker (' + ageMs + 'ms, v' + markerVersion + '); clearing.')
-      return false
-    }
-    // Recent marker with mismatched version → another concurrent update
-    // is in flight; suppress this run to avoid fighting it.
-    console.warn('[updater] suppressing update check: in-progress marker v' + markerVersion + ' (' + Math.round(ageMs / 1000) + 's old)')
-    return true
-  } catch {
-    return false
-  }
-}
 
 
 function runSilentInstaller(filePath, getMainWindow, version) {
-  if (isInstallingSilent) return { ok: true, alreadyRunning: true }
-  if (!filePath || typeof filePath !== 'string' || !filePath.toLowerCase().endsWith('.exe') || !fs.existsSync(filePath)) {
-    log('error', `[updater] installer file not found or invalid: ${filePath}`)
-    return { ok: false, error: 'installer-not-found' }
-  }
-
+  // Back to the simple, proven approach used by Discord/Steam/etc:
+  // the user clicks "Verificar atualizações" → we call electron-updater's
+  // built-in quitAndInstall(isSilent, isForceRunAfter) which:
+  //   1. Quits Voice (no app.relaunch needed)
+  //   2. Runs the NSIS installer in silent mode
+  //   3. Restarts Voice automatically when the installer finishes
+  //
+  // This bypasses our previous hand-rolled taskkill/app.relaunch flow
+  // (which suffered from race conditions on Windows when NSIS was still
+  // copying files while we tried to restart Voice). The user must click
+  // a button to start the update — there is NO background polling or
+  // silent auto-update. They download manually from the GitHub release
+  // page or via the in-app check.
   isInstallingSilent = true
-  log('info', `[updater] running silent installer: ${filePath}`)
-
   sendUpdater(getMainWindow, 'updater:status', {
     status: 'installing',
     version: version || lastDownloadedVersion || null,
   })
 
-  // Update-flow marker — the main process is committed to an upgrade and
-  // must NOT re-launch the old binary if a stray relaunch fires later.
-  // This breaks the loop we hit in 0.6.5/0.6.6 where taskkill killed our
-  // own NSIS installer and app.relaunch() brought the OLD binary back,
-  // which then re-detected 0.6.7 and tried again.
-  const markerPath = require('path').join(app.getPath('userData'), 'update-in-progress')
   try {
-    const markerVersion = version || lastDownloadedVersion || ''
-    const markerContent = markerVersion + '\n' + Date.now() + '\n'
-    fs.writeFileSync(markerPath, markerContent)
-  } catch {}
-  try {
-    // NSIS flags:
-    //   /S            — silent install (no wizard, no progress UI).
-    //   /D=<path>     — install into the same directory the app is currently
-    //                   in (otherwise NSIS defaults to a non-admin path
-    //                   which can differ from where Voice lives).
-    //
-    // We deliberately do NOT pass /restartapplications or /norestart.
-    // Both trigger UAC elevation prompts on some Windows configurations
-    // even though perMachine:false is set in package.json. Instead we
-    // let the installer terminate us naturally (NSIS closes Voice
-    // because it owns the files it overwrites) and we relaunch ourselves
-    // via app.relaunch() in the setTimeout below.
-    //
-    // PRE-INSTALL KILL: NSIS fails with "Falha ao desinstalar os arquivos
-    // do aplicativo antigo" if a previous VoiceCraft.exe or its child
-    // processes are still holding handles to the install folder. We spawn
-    // taskkill /F /IM /T to terminate them first. This is harmless when
-    // there's nothing to kill — taskkill just exits non-zero.
-    const currentDir = require('path').dirname(filePath)
-    try {
-      require('child_process').spawnSync(
-        'taskkill.exe',
-        ['/F', '/IM', 'VoiceCraft.exe', '/T'],
-        { shell: false, stdio: 'ignore', windowsHide: true, timeout: 5_000 }
-      )
-    } catch (err) {
-      console.warn('[updater] pre-kill taskkill failed:', err?.message || err)
-    }
-
-    const child = require('child_process').spawn(
-      filePath,
-      ['/S', `/D=${currentDir}`],
-      {
-        detached: true,
-        stdio: 'ignore',
-        shell: false,
-        windowsHide: true,
-      }
-    )
-    child.unref()
-
-    setTimeout(() => {
-      const win = typeof getMainWindow === 'function' ? getMainWindow() : null
-      if (win && !win.isDestroyed()) {
-        // Bring window to front in case it was minimized/hidden to tray.
-        if (win.isMinimized()) win.restore()
-        if (!win.isVisible()) win.show()
-      }
-      isInstallingSilent = false
-    }, 5_000)
-
-    // After the installer's own copy-and-quit cycle, NSIS does not
-    // automatically relaunch Voice. We schedule a self-relaunch
-    // ~12 s later so the installer has plenty of time to finish writing
-    // files. This works for both the common case (NSIS in-place upgrade)
-    // and the case where the previous setTimeout above found the renderer
-    // already dead.
-    setTimeout(() => {
-      try {
-        if (!app.isPackaged) return
-        log('info', '[updater] self-relaunching Voice after silent install')
-        app.relaunch({ args: process.argv.slice(1) })
-        app.exit(0)
-      } catch (err) {
-        console.warn('[updater] self-relaunch failed:', err?.message || err)
-      }
-    }, 12_000)
-
+    log('info', '[updater] quitting to install v' + (version || lastDownloadedVersion))
+    setImmediate(() => {
+      getAutoUpdater().quitAndInstall(false, true)
+    })
     return { ok: true }
   } catch (err) {
     isInstallingSilent = false
-    log('error', `[updater] silent installer failed to spawn: ${err?.message || err}`)
     sendUpdater(getMainWindow, 'updater:status', {
       status: 'error',
       message: err?.message || String(err),
@@ -392,43 +290,11 @@ function setupUpdater(getMainWindow) {
   })
 
   const runCheck = () => {
-    if (shouldSuppressUpdater()) return
     updater.checkForUpdates().catch(() => {})
   }
   // Early + late: UI may still be on login when the first check finishes.
   setTimeout(runCheck, 6_000)
   setTimeout(runCheck, 45_000)
-
-  // Periodic polling — the user should not have to close/reopen the app
-  // or click "Verificar atualizações" to discover a new version. We poll
-  // every 30 minutes when the app is in the foreground and skip when
-  // the window is hidden/minimized to avoid waking background timers.
-  // shouldSuppressUpdater — defined alongside runSilentInstaller above.
-  const POLL_INTERVAL_MS = 30 * 60 * 1000 // 30 min
-  let pollTimer = null
-  const startPolling = () => {
-    if (pollTimer) return
-    pollTimer = setInterval(() => {
-      const win = typeof getMainWindow === 'function' ? getMainWindow() : null
-      if (win && !win.isDestroyed() && win.isVisible() && !win.isMinimized()) {
-        if (shouldSuppressUpdater()) return
-        log('info', '[updater] periodic check (every 30 min)')
-        runCheck()
-      }
-    }, POLL_INTERVAL_MS)
-  }
-  const stopPolling = () => {
-    if (pollTimer) {
-      clearInterval(pollTimer)
-      pollTimer = null
-    }
-  }
-  startPolling()
-  // Re-arm the timer after the user closes the modal/forces a check.
-  app.on('browser-window-created', () => {
-    stopPolling()
-    startPolling()
-  })
 
   // When the window finally loads (or user finishes login), re-push last status.
   const replay = () => {
