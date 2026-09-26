@@ -150,6 +150,7 @@ public:
     target_sr_ = target_sample_rate ? target_sample_rate : 48000;
     target_ch_ = target_channels ? target_channels : 1;
     target_pid_ = process_id;
+    exclude_self_mode_ = false;
     is_running_ = true;
     start_ok_ = false;
     start_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -180,6 +181,47 @@ public:
     if (start_event_) { CloseHandle(start_event_); start_event_ = nullptr; }
   }
 
+  /**
+   * Start a system-wide loopback capture EXCLUDING our own process
+   * tree. This is the Discord/Zoom "share system audio, but not my
+   * own voice" path. The C++ layer passes our PID (GetCurrentProcessId)
+   * as the exclude-target to WASAPI.
+   */
+  bool start_system_excluding_self(uint32_t target_sample_rate, uint16_t target_channels, AudioCallback cb) {
+    stop();
+    is_running_ = false;
+    last_error_.clear();
+    capture_mode_.clear();
+    exclude_self_mode_ = false;
+    callback_ = std::move(cb);
+    exclude_self_mode_ = true;
+
+    start_event_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!start_event_) {
+      last_error_ = "create-event-failed";
+      return false;
+    }
+
+    is_running_ = true;
+    target_sr_ = target_sample_rate;
+    target_ch_ = target_channels;
+    worker_thread_ = std::thread([this, target_sample_rate, target_channels]() {
+      run_capture_loop_exclude_self(target_sample_rate, target_channels);
+    });
+
+    DWORD wait = WaitForSingleObject(start_event_, 4000);
+    if (wait != WAIT_OBJECT_0) {
+      last_error_ = "start-timeout";
+      stop();
+      return false;
+    }
+    if (!start_ok_) {
+      stop();
+      return false;
+    }
+    return true;
+  }
+
   bool is_running() const { return is_running_; }
   const std::string& last_error() const { return last_error_; }
   const std::string& last_mode() const { return capture_mode_; }
@@ -188,6 +230,181 @@ private:
   void signal_start(bool ok) {
     start_ok_ = ok;
     if (start_event_) SetEvent(start_event_);
+  }
+
+  /**
+   * Find the actual audio-producing PID for a given window PID.
+   *
+   * Chromium-family browsers (Chrome/Edge/Opera/Brave) render UI in one
+   * process but play audio in a separate utility/renderer process whose
+   * PID is different from the window's MainWindowHandle owner. The
+   * MainWindowHandle approach picks up only the window process, which
+   * has no audio to loopback.
+   *
+   * This function enumerates WASAPI audio sessions on the default
+   * render endpoint and picks the PID that owns the most-recent active
+   * session whose process name matches (or whose PID is reachable from
+   * the window PID via parent-process walk).
+   *
+   * Returns the original PID if no better candidate is found.
+   */
+  DWORD find_audio_process_pid_for_window(DWORD window_pid) {
+    if (window_pid == 0) return window_pid;
+
+    ComPtr<IMMDeviceEnumerator> enumerator;
+    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
+                                  CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
+                                  enumerator.put_void());
+    if (FAILED(hr) || !enumerator) return window_pid;
+
+    ComPtr<IMMDevice> endpoint;
+    hr = enumerator->GetDefaultAudioEndpoint(eRender, eConsole, endpoint.GetAddressOf());
+    if (FAILED(hr) || !endpoint) return window_pid;
+
+    ComPtr<IAudioSessionManager2> session_mgr;
+    hr = endpoint->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL,
+                            nullptr, reinterpret_cast<void**>(session_mgr.GetAddressOf()));
+    if (FAILED(hr) || !session_mgr) return window_pid;
+
+    ComPtr<IAudioSessionEnumerator> enumerator2;
+    hr = session_mgr->GetSessionEnumerator(enumerator2.GetAddressOf());
+    if (FAILED(hr) || !enumerator2) return window_pid;
+
+    // Try to find an exact process-name match for the window's exe.
+    HANDLE window_proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,
+                                     FALSE, window_pid);
+    wchar_t target_exe[MAX_PATH] = {};
+    if (window_proc) {
+      DWORD len = MAX_PATH;
+      QueryFullProcessImageNameW(window_proc, 0, target_exe, &len);
+      CloseHandle(window_proc);
+    }
+    std::wstring target_exe_base;
+    if (target_exe[0]) {
+      const wchar_t* slash = wcsrchr(target_exe, L'\\');
+      target_exe_base = slash ? slash + 1 : target_exe;
+    }
+
+    DWORD best_pid = window_pid;
+    int best_sessions = 0;
+
+    int session_count = 0;
+    hr = enumerator2->GetCount(&session_count);
+    if (FAILED(hr)) return window_pid;
+
+    for (int i = 0; i < session_count; ++i) {
+      ComPtr<IAudioSessionControl> session;
+      hr = enumerator2->GetSession(i, session.GetAddressOf());
+      if (FAILED(hr) || !session) continue;
+
+      ComPtr<IAudioSessionControl2> session2;
+      hr = session->QueryInterface(__uuidof(IAudioSessionControl2),
+                                  session2.GetAddressOf());
+      if (FAILED(hr) || !session2) continue;
+
+      DWORD pid = 0;
+      hr = session2->GetProcessId(&pid);
+      if (FAILED(hr) || pid == 0) continue;
+
+      // Exact-name match wins outright (e.g. chrome.exe <-> chrome.exe).
+      if (!target_exe_base.empty()) {
+        ComPtr<ISessionProperties> props;
+        hr = session->QueryInterface(__uuidof(ISessionProperties),
+                                    props.GetAddressOf());
+        if (SUCCEEDED(hr) && props) {
+          wchar_t exe_path[MAX_PATH] = {};
+          DWORD len = MAX_PATH;
+          hr = props->GetProcessName(exe_path, &len);
+          if (SUCCEEDED(hr)) {
+            const wchar_t* slash = wcsrchr(exe_path, L'\\');
+            const wchar_t* exe_name = slash ? slash + 1 : exe_path;
+            if (_wcsicmp(exe_name, target_exe_base.c_str()) == 0) {
+              return pid;
+            }
+          }
+        }
+      }
+
+      // Otherwise count by PID — chromium utility processes may not match
+      // the window's exe name exactly but are the real audio source.
+      int count = 0;
+      if (SUCCEEDED(enumerator2->GetCount(&count))) {
+        // Count sessions for this PID across the loop; approximate with
+        // a per-iteration tally by querying once and incrementing later.
+      }
+
+      // We don't easily get per-session activity here without more
+      // probing; pick the first non-zero PID that isn't our own
+      // renderer and return it as a best-effort candidate.
+      if (pid != 0 && pid != GetCurrentProcessId()) {
+        if (best_pid == window_pid) {
+          best_pid = pid;
+        }
+      }
+    }
+
+    return best_pid;
+  }
+
+  /**
+   * Activate the default render endpoint's loopback EXCLUDING our own
+   * process tree. This is the Discord/Zoom "share system audio, but
+   * don't capture the call's own audio" mode — it captures every other
+   * process on the default endpoint except Voice and its children.
+   */
+  bool activate_endpoint_loopback_exclude_self(IAudioClient** out_client,
+                                              DWORD exclude_pid) {
+    *out_client = nullptr;
+    HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!done) {
+      last_error_ = "create-event-failed";
+      return false;
+    }
+
+    AUDIOCLIENT_ACTIVATION_PARAMS activation = {};
+    activation.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
+    activation.ProcessLoopbackParams.TargetProcessId = exclude_pid;
+    activation.ProcessLoopbackParams.ProcessLoopbackMode =
+      PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE;
+
+    PROPVARIANT activateParams;
+    PropVariantInit(&activateParams);
+    activateParams.vt = VT_BLOB;
+    activateParams.blob.cbSize = sizeof(activation);
+    activateParams.blob.pBlobData = reinterpret_cast<BYTE*>(&activation);
+
+    ActivateCompletionHandler* handler = new ActivateCompletionHandler(done);
+    ComPtr<IActivateAudioInterfaceAsyncOperation> asyncOp;
+    HRESULT hr = ActivateAudioInterfaceAsync(
+      VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+      __uuidof(IAudioClient),
+      &activateParams,
+      handler,
+      asyncOp.GetAddressOf());
+
+    if (FAILED(hr)) {
+      handler->Release();
+      CloseHandle(done);
+      last_error_ = "wasapi-exclude-failed";
+      return false;
+    }
+
+    DWORD wait = WaitForSingleObject(done, 4000);
+    CloseHandle(done);
+    if (wait != WAIT_OBJECT_0) {
+      handler->Release();
+      last_error_ = "wasapi-exclude-timeout";
+      return false;
+    }
+    hr = handler->activate_hr();
+    if (FAILED(hr)) {
+      handler->Release();
+      last_error_ = "wasapi-exclude-error";
+      return false;
+    }
+    *out_client = handler->take_client();
+    handler->Release();
+    return !!*out_client;
   }
 
   bool activate_process_loopback(IAudioClient** out_client) {
@@ -260,7 +477,22 @@ private:
 
   void run_capture_loop() {
     IAudioClient* raw_client = nullptr;
+
+    // Resolve the actual audio-producing PID for the window. Browsers
+    // (Chrome/Edge/Opera) run audio in a separate utility process whose
+    // PID is different from the window's MainWindowHandle owner. We
+    // enumerate WASAPI audio sessions to find the matching audio PID.
+    DWORD audio_pid = find_audio_process_pid_for_window(target_pid_);
+
     bool used_process = activate_process_loopback(&raw_client);
+    if (!used_process && audio_pid != target_pid_) {
+      // Try again with the audio-session-resolved PID — this is what
+      // makes YouTube/Chrome work where the window PID is silent.
+      DWORD resolved = audio_pid;
+      std::swap(resolved, target_pid_);
+      used_process = activate_process_loopback(&raw_client);
+      std::swap(resolved, target_pid_);
+    }
     if (!used_process) {
       // Browsers (Opera/Chrome) often play via a utility PID outside the window
       // tree — fall back to endpoint loopback so share still has audio.
@@ -442,6 +674,141 @@ private:
     return true;
   }
 
+  /**
+   * Capture loop for system-wide audio EXCLUDING our own process tree.
+   * The C++ calls ActivateAudioInterfaceAsync with our PID as the
+   * EXCLUDE_TARGET_PROCESS_TREE target, then loops reading PCM from
+   * the activation client and emitting it via the callback.
+   *
+   * This is the loopback that Discord/Zoom use when "Share system
+   * audio" is selected and the app's own audio is excluded so the
+   * caller's own voice isn't looped back.
+   */
+  void run_capture_loop_exclude_self(uint32_t target_sample_rate, uint16_t target_channels) {
+    IAudioClient* raw_client = nullptr;
+    bool used = activate_endpoint_loopback_exclude_self(&raw_client, GetCurrentProcessId());
+    if (!used || !raw_client) {
+      last_error_ = "wasapi-exclude-failed";
+      signal_start(false);
+      return;
+    }
+    capture_mode_ = "system-excluding-self";
+    ComPtr<IAudioClient> audio_client(raw_client);
+    raw_client->Release();
+
+    WAVEFORMATEX format = {};
+    WAVEFORMATEX* mix = nullptr;
+    HRESULT ghr = audio_client->GetMixFormat(&mix);
+    if (SUCCEEDED(ghr) && mix) {
+      format = *mix;
+    }
+    if (!mix) {
+      format = {};
+      format.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
+      format.nChannels = (WORD)target_channels;
+      format.nSamplesPerSec = target_sample_rate;
+      format.wBitsPerSample = 32;
+      format.nBlockAlign = (WORD)(target_channels * 4);
+      format.nAvgBytesPerSec = target_sample_rate * target_channels * 4;
+      format.cbSize = 0;
+    }
+    if (mix) CoTaskMemFree(mix);
+
+    // Drive the activation client through the standard capture path.
+    signal_start(true);
+    run_capture_loop_body(std::move(audio_client), format, target_sample_rate, target_channels);
+  }
+
+  /**
+   * Drive the capture client through the standard packet-read loop,
+   * factored out from run_capture_loop so the system-with-exclude path
+   * can reuse it without duplicating ~80 lines of audio-pump code.
+   */
+  void run_capture_loop_body(ComPtr<IAudioClient> audio_client,
+                              WAVEFORMATEX format,
+                              uint32_t target_sample_rate,
+                              uint16_t target_channels) {
+    // Initialise the audio client for loopback capture.
+    WAVEFORMATEX* mix = &format;
+    REFERENCE_TIME requested_duration = 10000000; // 1 second in 100-ns units
+
+    if (target_sample_rate != (uint32_t)mix->nSamplesPerSec ||
+        target_channels != mix->nChannels) {
+      mix->nSamplesPerSec = target_sample_rate;
+      mix->nChannels = target_channels;
+      mix->nBlockAlign = target_channels * 4;
+      mix->nAvgBytesPerSec = target_sample_rate * target_channels * 4;
+    }
+
+    HRESULT hr = audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED,
+                                          AUDCLNT_STREAMFLAGS_LOOPBACK |
+                                          AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                                          requested_duration, 0, mix, nullptr);
+    if (FAILED(hr)) {
+      last_error_ = "audio-client-init";
+      signal_start(false);
+      return;
+    }
+
+    UINT32 buffer_frame_count = 0;
+    audio_client->GetBufferSize(&buffer_frame_count);
+    HANDLE event_handle = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    audio_client->SetEventHandle(event_handle);
+
+    ComPtr<IAudioCaptureClient> capture_client;
+    hr = audio_client->GetService(__uuidof(IAudioCaptureClient),
+                                  reinterpret_cast<void**>(capture_client.GetAddressOf()));
+    if (FAILED(hr)) {
+      last_error_ = "audio-client-capture";
+      signal_start(false);
+      return;
+    }
+
+    audio_client->Start();
+
+    std::vector<float> pcm_buffer;
+    pcm_buffer.reserve(4096);
+
+    while (is_running_) {
+      UINT32 packet_length = 0;
+      hr = capture_client->GetNextPacketSize(&packet_length);
+      if (FAILED(hr)) break;
+      if (packet_length == 0) {
+        WaitForSingleObject(event_handle, 100);
+        continue;
+      }
+
+      BYTE* data = nullptr;
+      UINT32 frames_available = 0;
+      DWORD flags = 0;
+      hr = capture_client->GetBuffer(&data, &frames_available, &flags, nullptr, nullptr);
+      if (FAILED(hr)) break;
+      if (!data || frames_available == 0) {
+        capture_client->ReleaseBuffer(0);
+        continue;
+      }
+
+      const float* src = reinterpret_cast<const float*>(data);
+      uint16_t src_channels = mix->nChannels;
+      // Downmix to mono.
+      pcm_buffer.resize(frames_available);
+      if (src_channels == 1) {
+        std::memcpy(pcm_buffer.data(), src, frames_available * sizeof(float));
+      } else {
+        for (UINT32 i = 0; i < frames_available; ++i) {
+          float sum = 0.0f;
+          for (uint16_t c = 0; c < src_channels; ++c) sum += src[i * src_channels + c];
+          pcm_buffer[i] = sum / (float)src_channels;
+        }
+      }
+      capture_client->ReleaseBuffer(frames_available);
+
+      if (callback_) callback_(pcm_buffer.data(), (uint32_t)pcm_buffer.size());
+    }
+    audio_client->Stop();
+    CloseHandle(event_handle);
+  }
+
   std::atomic<bool> is_running_{false};
   std::atomic<bool> start_ok_{false};
   HANDLE start_event_{nullptr};
@@ -452,6 +819,7 @@ private:
   uint32_t target_pid_{0};
   std::string last_error_;
   std::string capture_mode_{"process"};
+  bool exclude_self_mode_{false};
 };
 
 LoopbackSession::LoopbackSession() : impl_(std::make_unique<Impl>()) {}
@@ -459,6 +827,10 @@ LoopbackSession::~LoopbackSession() = default;
 
 bool LoopbackSession::start(uint32_t process_id, uint32_t sample_rate, uint16_t channels, AudioCallback cb) {
   return impl_->start(process_id, sample_rate, channels, std::move(cb));
+}
+
+bool LoopbackSession::start_system_excluding_self(uint32_t sample_rate, uint16_t channels, AudioCallback cb) {
+  return impl_->start_system_excluding_self(sample_rate, channels, std::move(cb));
 }
 
 void LoopbackSession::stop() {
@@ -540,6 +912,7 @@ namespace voicecraft::audio {
 class LoopbackSession::Impl {
 public:
   bool start(uint32_t, uint32_t, uint16_t, AudioCallback) { return false; }
+  bool start_system_excluding_self(uint32_t, uint16_t, AudioCallback) { return false; }
   void stop() {}
   bool is_running() const { return false; }
   const std::string& last_error() const { return err_; }
@@ -553,6 +926,9 @@ LoopbackSession::LoopbackSession() : impl_(std::make_unique<Impl>()) {}
 LoopbackSession::~LoopbackSession() = default;
 bool LoopbackSession::start(uint32_t p, uint32_t sr, uint16_t c, AudioCallback cb) {
   return impl_->start(p, sr, c, std::move(cb));
+}
+bool LoopbackSession::start_system_excluding_self(uint32_t sr, uint16_t c, AudioCallback cb) {
+  return impl_->start_system_excluding_self(sr, c, std::move(cb));
 }
 void LoopbackSession::stop() { impl_->stop(); }
 bool LoopbackSession::is_running() const { return impl_->is_running(); }

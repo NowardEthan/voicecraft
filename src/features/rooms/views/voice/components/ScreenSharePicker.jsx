@@ -217,7 +217,32 @@ export function ScreenSharePicker({ open, sources = [], onPick, onClose }) {
               )}
             </div>
 
-            {/* Opção 3: Sistema inteiro */}
+            {/* Opção 3: Sistema inteiro (Discord-style — sem eco da call) */}
+            <label className="flex flex-col gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2.5 hover:bg-white/[0.05] transition-colors">
+              <span className="flex items-center gap-3 cursor-pointer select-none">
+                <input
+                  type="radio"
+                  name="audioMode"
+                  value="system-exclude-self"
+                  checked={audioMode === 'system-exclude-self'}
+                  onChange={() => setAudioMode('system-exclude-self')}
+                  className="accent-[var(--space-accent)]"
+                />
+                <span className="inline-flex items-center gap-1.5 text-[12.5px] font-medium text-strong">
+                  <Sparkles size={13} className="text-accent" />
+                  Tela inteira com áudio (sem eco da call)
+                </span>
+              </span>
+              {audioMode === 'system-exclude-self' && (
+                <p className="pl-6 text-[11.5px] text-muted leading-snug">
+                  Captura todo o áudio do Windows exceto o Voice. O outro participante ouve tudo
+                  que sai nos seus auto-falantes (YouTube, jogo, Spotify) sem receber sua voz
+                  de volta. Requer voicecraft-audio.exe compilado com suporte a exclude-self.
+                </p>
+              )}
+            </label>
+
+            {/* Opção 4: Sistema inteiro (legado — pode causar eco) */}
             <label className="flex flex-col gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2.5 cursor-pointer select-none hover:bg-white/[0.05] transition-colors">
               <div className="flex items-center gap-3">
                 <input

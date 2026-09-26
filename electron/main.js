@@ -1071,6 +1071,51 @@ ipcMain.handle('audio-service:stop-loopback', (_e, payload) => {
   return { ok: true }
 })
 
+/**
+ * Start "system audio, but not the call itself" capture. Equivalent to
+ * selecting "Tela inteira com áudio" in Discord/Zoom but with the Voice
+ * process tree excluded so the call's own audio is NOT re-captured
+ * (eliminates the loop where the professor hears their own voice back).
+ */
+ipcMain.handle('audio-service:start-loopback-system', async () => {
+  const started = startAudioService()
+  if (!started?.ok && !started?.alreadyRunning) {
+    return { ok: false, error: started?.error || 'audio-service-unavailable' }
+  }
+  const crypto = require('crypto')
+  const sessionId = crypto.randomUUID
+    ? crypto.randomUUID()
+    : ('sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9))
+
+  const waitResult = await new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pendingLoopbackWaiters.delete(sessionId)
+      resolve({ ok: false, error: 'timeout-waiting-loopback' })
+    }, 8000)
+
+    pendingLoopbackWaiters.set(sessionId, (msg) => {
+      clearTimeout(timer)
+      pendingLoopbackWaiters.delete(sessionId)
+      if (msg?.type === 'loopback-started') {
+        resolve({ ok: true, mode: msg.mode || 'system' })
+      } else {
+        resolve({ ok: false, error: msg?.message || 'wasapi-error' })
+      }
+    })
+
+    activeLoopbackSessions.set(sessionId, { processId: 0, mode: 'system', startedAt: Date.now() })
+    sendAudioCommand({ type: 'start-loopback-system', sessionId })
+  })
+
+  if (!waitResult?.ok) {
+    activeLoopbackSessions.delete(sessionId)
+    try { sendAudioCommand({ type: 'stop-loopback', sessionId }) } catch {}
+    return { ok: false, error: waitResult?.error || 'loopback-failed' }
+  }
+
+  return { ok: true, sessionId, mode: waitResult.mode || 'system' }
+})
+
 app.on('before-quit', () => stopAudioService())
 
 // ---------- Google OAuth via the system browser ----------

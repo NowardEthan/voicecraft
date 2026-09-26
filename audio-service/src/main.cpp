@@ -171,6 +171,21 @@ int main() {
       } else {
         emit_error(loopback_session.last_error());
       }
+    } else if (type == "start-loopback-system") {
+      // System-wide capture EXCLUDING our own process tree (Discord/
+      // Zoom behaviour for "share system audio, but not my own voice").
+      std::string sess_id = json_get(line, "sessionId");
+      if (sess_id.empty()) sess_id = "loopback-system";
+      // 0 = exclude-self mode. The C++ side picks the current process id.
+      bool ok = loopback_session.start_system_excluding_self(48000, 1, [](const float* samples, uint32_t frames) {
+        write_audio_frame(samples, frames);
+      });
+      if (ok) {
+        emit_event("{\"type\":\"loopback-started\",\"sessionId\":\"" + sess_id
+          + "\",\"mode\":\"" + loopback_session.last_mode() + "\"}");
+      } else {
+        emit_error(loopback_session.last_error());
+      }
     } else if (type == "stop-loopback") {
       loopback_session.stop();
       emit_event("{\"type\":\"loopback-stopped\"}");

@@ -24,6 +24,9 @@ public:
   static std::vector<AudioProcessInfo> list_audio_processes();
 
   bool start(uint32_t process_id, uint32_t sample_rate, uint16_t channels, AudioCallback cb);
+  // Start endpoint loopback EXCLUDING our own process tree. The C++
+  // automatically passes our PID as the excluded target to WASAPI.
+  bool start_system_excluding_self(uint32_t sample_rate, uint16_t channels, AudioCallback cb);
   void stop();
   bool is_running() const;
   const std::string& last_error() const;
