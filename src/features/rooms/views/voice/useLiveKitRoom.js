@@ -111,6 +111,24 @@ async function waitForVideoDimensions(mediaTrack, timeoutMs = 2000) {
   }
 }
 
+function screenAudioFailureMessage(error, audioMode) {
+  const raw = String(error?.message || error || '').trim()
+  const normalized = raw.toLowerCase()
+  if (normalized.includes('wasapi-process-activate-0x8000000e')) {
+    return 'O Windows não conseguiu iniciar o áudio do aplicativo. Confirme que ele está reproduzindo som e tente compartilhar novamente.'
+  }
+  if (normalized.includes('wasapi-exclude-activate-0x8000000e')) {
+    return 'O Windows não conseguiu iniciar o áudio do sistema. Reproduza algum som e tente compartilhar novamente.'
+  }
+  if (/0x[0-9a-f]{8}/i.test(raw)) {
+    return 'O Windows não conseguiu iniciar a captura de áudio. Tente compartilhar novamente ou reinicie o aplicativo.'
+  }
+  if (raw) return raw
+  return audioMode === 'app'
+    ? 'Não foi possível capturar o áudio do aplicativo. Confirme que ele está reproduzindo som.'
+    : 'Não foi possível capturar o áudio do sistema. Reproduza algum som e tente novamente.'
+}
+
 export function useLiveKitRoom({
   room,
   space,
@@ -187,6 +205,8 @@ export function useLiveKitRoom({
   const localScreenAudioTrackRef = useRef(null)
   const appLoopbackStopRef = useRef(null)
   const screenPublishingRef = useRef(false)
+  const screenAudioStopPromiseRef = useRef(null)
+  const screenStopPromiseRef = useRef(null)
   const callReadyRef = useRef(false)
   const remoteAudiosRef = useRef(new Map())
   const [peerVolumes, setPeerVolumes] = useState(() => loadPeerVolumes())
@@ -871,30 +891,71 @@ export function useLiveKitRoom({
     return () => clearInterval(timer)
   }, [ensureLocalMicHealthy])
 
+  const stopScreenAudio = useCallback(async ({ notify = false, checkMic = true } = {}) => {
+    if (screenAudioStopPromiseRef.current) return screenAudioStopPromiseRef.current
+
+    const stopping = Promise.resolve().then(async () => {
+      const lkRoom = roomRef.current
+      const audioTrack = localScreenAudioTrackRef.current
+      localScreenAudioTrackRef.current = null
+      const stopLoop = appLoopbackStopRef.current
+      appLoopbackStopRef.current = null
+
+      if (stopLoop) {
+        try { await stopLoop() } catch {}
+      }
+      if (audioTrack) {
+        try {
+          if (lkRoom?.state === ConnectionState.Connected) {
+            await lkRoom.localParticipant.unpublishTrack(audioTrack, true)
+          }
+        } catch {}
+        try { audioTrack.stop() } catch {}
+      }
+      if (notify) {
+        flashToast('Tela compartilhada sem áudio: a captura de áudio foi encerrada. Compartilhe novamente para reativá-la.')
+      }
+      if (checkMic) await ensureLocalMicHealthy()
+    })
+
+    screenAudioStopPromiseRef.current = stopping
+    try {
+      await stopping
+    } finally {
+      if (screenAudioStopPromiseRef.current === stopping) screenAudioStopPromiseRef.current = null
+    }
+  }, [ensureLocalMicHealthy])
+
   const stopScreenShare = useCallback(async () => {
-    const lkRoom = roomRef.current
-    const videoTrack = localScreenTrackRef.current
-    const audioTrack = localScreenAudioTrackRef.current
-    localScreenTrackRef.current = null
-    localScreenAudioTrackRef.current = null
-    screenPublishingRef.current = false
-    setScreenSharing(false)
-    const stopLoop = appLoopbackStopRef.current
-    appLoopbackStopRef.current = null
-    if (stopLoop) {
-      try { await stopLoop() } catch {}
+    if (screenStopPromiseRef.current) return screenStopPromiseRef.current
+
+    const stopping = Promise.resolve().then(async () => {
+      const lkRoom = roomRef.current
+      const videoTrack = localScreenTrackRef.current
+      localScreenTrackRef.current = null
+      screenPublishingRef.current = false
+      setScreenSharing(false)
+
+      await stopScreenAudio({ checkMic: false })
+      if (videoTrack) {
+        try {
+          if (lkRoom?.state === ConnectionState.Connected) {
+            await lkRoom.localParticipant.unpublishTrack(videoTrack, true)
+          }
+        } catch {}
+        try { videoTrack.stop() } catch {}
+      }
+      try { screenShare.stop() } catch {}
+      await ensureLocalMicHealthy()
+    })
+
+    screenStopPromiseRef.current = stopping
+    try {
+      await stopping
+    } finally {
+      if (screenStopPromiseRef.current === stopping) screenStopPromiseRef.current = null
     }
-    const connected = lkRoom?.state === ConnectionState.Connected
-    for (const track of [videoTrack, audioTrack]) {
-      if (!track) continue
-      try {
-        if (connected) await lkRoom.localParticipant.unpublishTrack(track, true)
-      } catch {}
-      try { track.stop() } catch {}
-    }
-    try { screenShare.stop() } catch {}
-    await ensureLocalMicHealthy()
-  }, [screenShare, ensureLocalMicHealthy])
+  }, [screenShare, stopScreenAudio, ensureLocalMicHealthy])
 
   const publishScreenStream = useCallback(async (mediaStream, opts = {}) => {
     const lkRoom = roomRef.current
@@ -918,18 +979,10 @@ export function useLiveKitRoom({
       throw new Error('Selecione um aplicativo valido para compartilhar audio')
     }
 
-    let loop = null
     let localVideo = null
-    let localAudio = null
     try {
       await waitForRoomConnected(lkRoom)
       await waitForVideoDimensions(mediaTrack)
-
-      // Requested audio is validated before anything is published. There is no
-      // desktop-capture or system-wide fallback for app mode.
-      if (audioMode === 'app') loop = await startAppLoopbackCapture(Number(opts.appPid))
-      else if (audioMode === 'system-excluding-voice') loop = await startSystemLoopbackCapture()
-      if (loop) appLoopbackStopRef.current = loop.stop
 
       try { mediaTrack.contentHint = 'motion' } catch {}
       localVideo = new LocalVideoTrack(mediaTrack, undefined, true)
@@ -947,51 +1000,80 @@ export function useLiveKitRoom({
         },
         degradationPreference: 'maintain-framerate',
       })
-      localScreenTrackRef.current = videoPublication?.track || localVideo
+      const activeVideoTrack = videoPublication?.track || localVideo
+      localScreenTrackRef.current = activeVideoTrack
 
       mediaTrack.addEventListener('ended', () => {
-        if (localScreenTrackRef.current) void stopScreenShare()
+        if (localScreenTrackRef.current === activeVideoTrack) void stopScreenShare()
       }, { once: true })
+      setScreenSharing(true)
 
-      if (loop) {
-        try { loop.audioTrack.contentHint = 'music' } catch {}
-        loop.audioTrack.addEventListener('ended', () => {
-          if (localScreenAudioTrackRef.current) void stopScreenShare()
-        }, { once: true })
-        localAudio = new LocalAudioTrack(loop.audioTrack, undefined, true)
-        localAudio.source = Track.Source.ScreenShareAudio
-        const audioPublication = await lkRoom.localParticipant.publishTrack(localAudio, {
-          source: Track.Source.ScreenShareAudio,
-          name: 'screen-audio',
-          dtx: false,
-          red: true,
-        })
-        localScreenAudioTrackRef.current = audioPublication?.track || localAudio
-        flashToast(audioMode === 'app'
-          ? 'Audio do aplicativo validado e compartilhado'
-          : 'Audio do sistema compartilhado, excluindo o VoiceCraft')
-      } else {
+      // Screen audio is best-effort. Native capture or audio publication failure
+      // degrades to video-only sharing and must not roll back the published video.
+      if (audioMode !== 'off') {
+        let loop = null
+        try {
+          loop = audioMode === 'app'
+            ? await startAppLoopbackCapture(Number(opts.appPid))
+            : await startSystemLoopbackCapture()
+          if (localScreenTrackRef.current !== activeVideoTrack || mediaTrack.readyState === 'ended') {
+            await loop.stop()
+            await ensureLocalMicHealthy()
+            return
           }
 
-      setScreenSharing(true)
+          appLoopbackStopRef.current = loop.stop
+          const loopMediaTrack = loop.audioTrack
+          try { loopMediaTrack.contentHint = 'music' } catch {}
+          const localAudio = new LocalAudioTrack(loopMediaTrack, undefined, true)
+          localAudio.source = Track.Source.ScreenShareAudio
+          localScreenAudioTrackRef.current = localAudio
+          loopMediaTrack.addEventListener('ended', () => {
+            const current = localScreenAudioTrackRef.current
+            if (current === localAudio || current?.mediaStreamTrack === loopMediaTrack) {
+              void stopScreenAudio({ notify: true })
+            }
+          }, { once: true })
+          const audioPublication = await lkRoom.localParticipant.publishTrack(localAudio, {
+            source: Track.Source.ScreenShareAudio,
+            name: 'screen-audio',
+            dtx: false,
+            red: true,
+          })
+          const publishedAudio = audioPublication?.track || localAudio
+          if (localScreenTrackRef.current !== activeVideoTrack
+            || localScreenAudioTrackRef.current !== localAudio) {
+            try { await lkRoom.localParticipant.unpublishTrack(publishedAudio, true) } catch {}
+            try { publishedAudio.stop() } catch {}
+            if (appLoopbackStopRef.current === loop.stop) appLoopbackStopRef.current = null
+            try { await loop.stop() } catch {}
+            await ensureLocalMicHealthy()
+            return
+          }
+
+          localScreenAudioTrackRef.current = publishedAudio
+          flashToast(audioMode === 'app'
+            ? 'Audio do aplicativo validado e compartilhado'
+            : 'Audio do sistema compartilhado, excluindo o VoiceCraft')
+        } catch (audioError) {
+          const videoStillActive = localScreenTrackRef.current === activeVideoTrack
+          await stopScreenAudio({ checkMic: false })
+          if (videoStillActive) {
+            flashToast(`Tela compartilhada sem áudio: ${screenAudioFailureMessage(audioError, audioMode)}`)
+          }
+        }
+      }
+
       await ensureLocalMicHealthy()
     } catch (err) {
-      // Audio-requested sharing is transactional: roll back video, native audio,
-      // and renderer capture if any validation or publication step fails.
-      const publishedAudio = localScreenAudioTrackRef.current || localAudio
+      // Fatal room/video failures still roll back the complete screen share.
+      await stopScreenAudio({ checkMic: false })
       const publishedVideo = localScreenTrackRef.current || localVideo
-      localScreenAudioTrackRef.current = null
       localScreenTrackRef.current = null
-        setScreenSharing(false)
-      for (const track of [publishedAudio, publishedVideo]) {
-        if (!track) continue
-        try { await lkRoom.localParticipant.unpublishTrack(track, true) } catch {}
-        try { track.stop() } catch {}
-      }
-      const stopLoop = appLoopbackStopRef.current || loop?.stop
-      appLoopbackStopRef.current = null
-      if (stopLoop) {
-        try { await stopLoop() } catch {}
+      setScreenSharing(false)
+      if (publishedVideo) {
+        try { await lkRoom.localParticipant.unpublishTrack(publishedVideo, true) } catch {}
+        try { publishedVideo.stop() } catch {}
       }
       try { screenShare.stop() } catch {}
       try { mediaTrack.stop() } catch {}
@@ -1000,7 +1082,7 @@ export function useLiveKitRoom({
     } finally {
       screenPublishingRef.current = false
     }
-  }, [settings, stopScreenShare, ensureLocalMicHealthy, screenShare])
+  }, [settings, stopScreenShare, stopScreenAudio, ensureLocalMicHealthy, screenShare])
 
   const handleShareScreen = useCallback(async () => {
     const lkRoom = roomRef.current

@@ -5,6 +5,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <objidl.h>
 #include <tlhelp32.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
@@ -112,18 +113,22 @@ std::string process_name(DWORD pid) {
   return out;
 }
 
-class ActivateCompletionHandler final : public IActivateAudioInterfaceCompletionHandler {
+class ActivateCompletionHandler final : public IActivateAudioInterfaceCompletionHandler,
+                                        public IAgileObject {
  public:
   explicit ActivateCompletionHandler(HANDLE event) : event_(event) {}
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** value) override {
     if (!value) return E_POINTER;
     if (iid == __uuidof(IUnknown) || iid == __uuidof(IActivateAudioInterfaceCompletionHandler)) {
       *value = static_cast<IActivateAudioInterfaceCompletionHandler*>(this);
-      AddRef();
-      return S_OK;
+    } else if (iid == IID_IAgileObject) {
+      *value = static_cast<IAgileObject*>(this);
+    } else {
+      *value = nullptr;
+      return E_NOINTERFACE;
     }
-    *value = nullptr;
-    return E_NOINTERFACE;
+    AddRef();
+    return S_OK;
   }
   ULONG STDMETHODCALLTYPE AddRef() override { return static_cast<ULONG>(InterlockedIncrement(&refs_)); }
   ULONG STDMETHODCALLTYPE Release() override {
@@ -265,20 +270,21 @@ class LoopbackSession::Impl {
     ComPtr<IAudioClient> client(raw_client);
     raw_client->Release();
 
-    WAVEFORMATEX* mix = nullptr;
-    HRESULT hr = client->GetMixFormat(&mix);
-    if (FAILED(hr) || !mix) {
-      last_error_ = hresult_error("wasapi-mix-format", hr);
-      signal_started(false);
-      return;
-    }
+    WAVEFORMATEX format{};
+    format.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
+    format.nChannels = 1;
+    format.nSamplesPerSec = 48000;
+    format.wBitsPerSample = 32;
+    format.nBlockAlign = static_cast<WORD>(
+      format.nChannels * format.wBitsPerSample / 8);
+    format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
+    format.cbSize = 0;
 
-    hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED,
+    HRESULT hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED,
       AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
-      1000000, 0, mix, nullptr);
+      1000000, 0, &format, nullptr);
     if (FAILED(hr)) {
       last_error_ = hresult_error("wasapi-initialize", hr);
-      CoTaskMemFree(mix);
       signal_started(false);
       return;
     }
@@ -287,14 +293,12 @@ class LoopbackSession::Impl {
     hr = client->GetService(__uuidof(IAudioCaptureClient), capture.put_void());
     if (FAILED(hr) || !capture) {
       last_error_ = hresult_error("wasapi-capture-service", hr);
-      CoTaskMemFree(mix);
       signal_started(false);
       return;
     }
     hr = client->Start();
     if (FAILED(hr)) {
       last_error_ = hresult_error("wasapi-start", hr);
-      CoTaskMemFree(mix);
       signal_started(false);
       return;
     }
@@ -302,9 +306,8 @@ class LoopbackSession::Impl {
     mode_ = exclude_ ? "system-excluding-process-tree" : "process-tree";
     signal_started(true);  // Only after Initialize + GetService + Start succeeded.
 
-    const WORD source_channels = std::max<WORD>(1, mix->nChannels);
-    const bool source_float = mix->wFormatTag == WAVE_FORMAT_IEEE_FLOAT ||
-      (mix->wFormatTag == WAVE_FORMAT_EXTENSIBLE && mix->wBitsPerSample == 32);
+    const WORD source_channels = std::max<WORD>(1, format.nChannels);
+    const bool source_float = format.wFormatTag == WAVE_FORMAT_IEEE_FLOAT;
     std::vector<float> mono;
     while (running_) {
       UINT32 packet_frames = 0;
@@ -324,7 +327,7 @@ class LoopbackSession::Impl {
             for (WORD c = 0; c < source_channels; ++c) mono[i] += input[i * source_channels + c];
             mono[i] /= source_channels;
           }
-        } else if (mix->wBitsPerSample == 16) {
+        } else if (format.wBitsPerSample == 16) {
           const auto* input = reinterpret_cast<const int16_t*>(data);
           for (UINT32 i = 0; i < frames; ++i) {
             for (WORD c = 0; c < source_channels; ++c) mono[i] += input[i * source_channels + c] / 32768.0f;
@@ -336,7 +339,6 @@ class LoopbackSession::Impl {
       if (callback_ && !mono.empty()) callback_(mono.data(), static_cast<uint32_t>(mono.size()));
     }
     client->Stop();
-    CoTaskMemFree(mix);
     running_ = false;
   }
 
