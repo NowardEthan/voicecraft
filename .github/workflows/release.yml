@@ -34,17 +34,38 @@ jobs:
           New-Item -ItemType Directory -Force resources/bin | Out-Null
           Copy-Item audio-service/build-ci/Release/voicecraft-audio.exe resources/bin/voicecraft-audio.exe -Force
 
-      - name: Build & publish
+      - name: Build release artifacts
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Unsigned builds; avoids winCodeSign symlink privilege failures.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-          # Embedded into Electron main at build time so friends can join calls
-          # without a local keys file. Set these in repo Settings -> Secrets.
           LIVEKIT_URL: ${{ secrets.LIVEKIT_URL }}
           LIVEKIT_API_KEY: ${{ secrets.LIVEKIT_API_KEY }}
           LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
-        run: npm run release
+        run: npm run build
+
+      - name: Publish release artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = node -p "require('./package.json').version"
+          $installer = "release/VoiceCraft-Setup-$version.exe"
+          $blockmap = "$installer.blockmap"
+          $metadata = "release/latest.yml"
+          $required = @($installer, $blockmap, $metadata)
+          foreach ($asset in $required) {
+            if (-not (Test-Path -LiteralPath $asset)) {
+              Write-Error "Missing release artifact: $asset"
+              exit 1
+            }
+          }
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --title "VoiceCraft $tag" --generate-notes
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          gh release upload $tag $installer $blockmap $metadata --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify release assets
         env:
@@ -52,15 +73,17 @@ jobs:
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
-          Write-Host "Validating release $tag ..."
-          $release = gh release view $tag --json assets --jq '.assets[] | .name' 2>$null
-          if (-not $release) { Write-Error "Release $tag not found"; exit 1 }
-          $required = @("$($tag.TrimStart('v'))-Setup-$tag.exe".Replace('v',''), "latest.yml", "$($tag.TrimStart('v'))-Setup-$tag.exe.blockmap")
-          # Simpler: just check by suffix patterns
-          $hasExe = $release | Where-Object { $_ -like "*Setup*.exe" -and $_ -notlike "*__uninstaller*" }
-          $hasYml = $release | Where-Object { $_ -eq "latest.yml" }
-          $hasBlockmap = $release | Where-Object { $_ -like "*Setup*.exe.blockmap" }
-          if (-not $hasExe) { Write-Error "Missing installer .exe in release assets"; exit 1 }
-          if (-not $hasYml) { Write-Error "Missing latest.yml in release assets"; exit 1 }
-          if (-not $hasBlockmap) { Write-Error "Missing .blockmap in release assets"; exit 1 }
-          Write-Host "OK: all 3 required assets present."
+          $version = node -p "require('./package.json').version"
+          $expected = @(
+            "VoiceCraft-Setup-$version.exe",
+            "VoiceCraft-Setup-$version.exe.blockmap",
+            "latest.yml"
+          )
+          $assets = @(gh release view $tag --json assets --jq '.assets[].name')
+          foreach ($name in $expected) {
+            if ($assets -notcontains $name) {
+              Write-Error "Missing release asset: $name"
+              exit 1
+            }
+          }
+          Write-Host "OK: installer, blockmap, and latest.yml uploaded."

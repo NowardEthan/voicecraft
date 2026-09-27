@@ -1,6 +1,6 @@
 {
   "name": "voicecraft",
-  "version": "0.7.3",
+  "version": "0.7.4",
   "description": "P2P voice/video chat for LAN",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -107,6 +107,7 @@
         "repo": "voicecraft",
         "releaseType": "release"
       }
-    ]
+    ],
+    "artifactName": "VoiceCraft-Setup-${version}.${ext}"
   }
 }
