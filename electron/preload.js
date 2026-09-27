@@ -69,6 +69,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     send: (cmd) => ipcRenderer.invoke('audio-service:send', cmd),
     listProcesses: () => ipcRenderer.invoke('audio-service:list-processes'),
     startLoopback: (payload) => ipcRenderer.invoke('audio-service:start-loopback', payload),
+    startLoopbackSystem: () => ipcRenderer.invoke('audio-service:start-loopback-system'),
     stopLoopback: (payload) => ipcRenderer.invoke('audio-service:stop-loopback', payload),
     // Subscribe to PCM frames coming from the C++ service.
     onFrame: (cb) => {
@@ -85,7 +86,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
           : new Uint8Array(raw?.buffer || raw || [])
         const floats = new Float32Array(u8.buffer, u8.byteOffset, u8.byteLength / 4)
         floats.type = type
-        const meta = { type, floats, sampleRate: 48000, channels: 1 }
+        const meta = {
+          type,
+          floats,
+          sessionId: payload?.sessionId || null,
+          sampleRate: payload?.sampleRate || 48000,
+          channels: payload?.channels || 1,
+          frames: payload?.frames || floats.length,
+        }
         cb(floats, u8.byteLength / 4, meta)
       }
       ipcRenderer.on('audio:frame', handler)

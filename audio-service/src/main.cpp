@@ -1,225 +1,166 @@
-// Voice audio service — entry point.
-//
-// Protocol (newline-delimited JSON over stdin for commands, raw PCM
-// chunks prefixed by a 4-byte little-endian size on stdout, JSON status
-// events on stderr):
-//
-//   Commands (stdin):
-//     {"type":"list-devices"}\n
-//     {"type":"start","sampleRate":48000,"channels":1,"hpf":true,"agc":true,
-//      "gate":true,"threshold":-45,"deviceId":""}\n
-//     {"type":"stop"}\n
-//     {"type":"shutdown"}\n
-//
-//   Audio output (stdout, raw binary):
-//     [4-byte LE uint32 frame_size_in_samples]
-//     [frame_size * 4 bytes float32 little-endian PCM, mono]
-//     [next frame...]
-//
-//   Status events (stderr, JSON lines):
-//     {"type":"ready","sampleRate":48000,"channels":1}
-//     {"type":"error","message":"..."}
-//     {"type":"device-list","devices":[{"id":"...","name":"...","isDefault":true}]}
-
 #include "capture.h"
 #include "loopback_wasapi.h"
 
 #include <atomic>
-#include <chrono>
 #include <csignal>
 #include <cstdio>
-#include <cstring>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 #include <string>
-#include <thread>
-#include <vector>
 
 namespace {
-
+constexpr int kProtocolVersion = 2;
+constexpr const char* kServiceVersion = "1.0.0";
 std::atomic<bool> g_shutdown{false};
-
-void on_signal(int) {
-  g_shutdown = true;
-}
-
-void emit_event(const std::string& json) {
-  std::fprintf(stderr, "%s\n", json.c_str());
-  std::fflush(stderr);
-}
-
-void emit_error(const std::string& msg) {
-  emit_event("{\"type\":\"error\",\"message\":\"" + msg + "\"}");
-}
-
-std::string read_line() {
-  std::string line;
-  while (!g_shutdown) {
-    if (!std::getline(std::cin, line)) return "";  // EOF
-    if (!line.empty()) return line;
+void on_signal(int) { g_shutdown = true; }
+void emit(const std::string& json) { std::fprintf(stderr, "%s\n", json.c_str()); std::fflush(stderr); }
+std::string escape_json(const std::string& value) {
+  std::string out;
+  for (const char c : value) {
+    if (c == '"' || c == '\\') out.push_back('\\');
+    if (c == '\n') { out += "\\n"; continue; }
+    if (c == '\r') { out += "\\r"; continue; }
+    out.push_back(c);
   }
-  return "";
+  return out;
 }
-
-// Tiny JSON value extractor for the small subset we use. Avoids linking
-// a full JSON library. Looks for `"key":<value>` patterns in flat objects.
+void error(const std::string& message, const std::string& session_id = {}) {
+  emit("{\"type\":\"error\",\"message\":\"" + escape_json(message) + "\"" +
+       (session_id.empty() ? "" : ",\"sessionId\":\"" + escape_json(session_id) + "\"") + "}");
+}
 std::string json_get(const std::string& json, const std::string& key) {
-  std::string needle = "\"" + key + "\"";
-  auto p = json.find(needle);
-  if (p == std::string::npos) return "";
-  p = json.find(':', p + needle.size());
-  if (p == std::string::npos) return "";
-  p = json.find_first_not_of(" \t\r\n", p + 1);
-  if (p == std::string::npos) return "";
-  if (json[p] == '"') {
-    auto end = json.find('"', p + 1);
-    if (end == std::string::npos) return "";
-    return json.substr(p + 1, end - p - 1);
+  const std::string needle = "\"" + key + "\"";
+  auto pos = json.find(needle);
+  if (pos == std::string::npos || (pos = json.find(':', pos + needle.size())) == std::string::npos) return {};
+  pos = json.find_first_not_of(" \t\r\n", pos + 1);
+  if (pos == std::string::npos) return {};
+  if (json[pos] == '"') {
+    const auto end = json.find('"', pos + 1);
+    return end == std::string::npos ? std::string() : json.substr(pos + 1, end - pos - 1);
   }
-  // Number or bool — read until , } or whitespace.
-  auto end = json.find_first_of(",} \t\r\n", p);
-  if (end == std::string::npos) return json.substr(p);
-  return json.substr(p, end - p);
+  const auto end = json.find_first_of(",} \t\r\n", pos);
+  return json.substr(pos, end == std::string::npos ? std::string::npos : end - pos);
 }
-
 int json_int(const std::string& json, const std::string& key, int fallback) {
-  std::string v = json_get(json, key);
-  if (v.empty()) return fallback;
-  try { return std::stoi(v); } catch (...) { return fallback; }
+  try { const auto value = json_get(json, key); return value.empty() ? fallback : std::stoi(value); }
+  catch (...) { return fallback; }
 }
-
 bool json_bool(const std::string& json, const std::string& key, bool fallback) {
-  std::string v = json_get(json, key);
-  if (v.empty()) return fallback;
-  return v == "true";
+  const auto value = json_get(json, key);
+  return value.empty() ? fallback : value == "true";
 }
-
-void write_audio_frame(const float* samples, uint32_t frames) {
-  // Protocol: [uint32 LE sample_count][sample_count * float32 LE PCM]
-  // Electron parses the header as sample count (not bytes).
-  std::fwrite(&frames, sizeof(uint32_t), 1, stdout);
-  if (frames > 0 && samples) {
-    std::fwrite(samples, sizeof(float), frames, stdout);
-  }
+constexpr uint32_t kFrameMagic = 0x32414356;  // "VCA2" little-endian
+constexpr uint32_t kSourceMicrophone = 1;
+constexpr uint32_t kSourceLoopback = 2;
+std::mutex g_stdout_mutex;
+void write_audio(uint32_t source, const float* samples, uint32_t frames) {
+  std::lock_guard<std::mutex> lock(g_stdout_mutex);
+  const uint32_t header[] = {kFrameMagic, source, frames};
+  std::fwrite(header, sizeof(uint32_t), 3, stdout);
+  if (frames && samples) std::fwrite(samples, sizeof(float), frames, stdout);
   std::fflush(stdout);
 }
-
-void send_device_list() {
-  auto devs = voicecraft::audio::CaptureSession::list_input_devices();
-  std::ostringstream oss;
-  oss << "{\"type\":\"device-list\",\"devices\":[";
-  bool first = true;
-  for (const auto& d : devs) {
-    if (!first) oss << ",";
-    first = false;
-    oss << "{\"id\":\"" << d.id << "\","
-        << "\"name\":\"" << d.name << "\","
-        << "\"isDefault\":" << (d.is_default ? "true" : "false") << "}";
-  }
-  oss << "]}";
-  emit_event(oss.str());
+void service_started() {
+  emit("{\"type\":\"service-started\",\"version\":\"" + std::string(kServiceVersion) +
+       "\",\"protocolVersion\":" + std::to_string(kProtocolVersion) +
+       ",\"capabilities\":[\"microphone\",\"process-loopback-strict\",\"system-loopback-exclude-process-tree\",\"session-tagged-ipc\",\"source-tagged-frames-v2\",\"serialized-loopback\"]}");
 }
-
-void send_process_list() {
-  auto procs = voicecraft::audio::LoopbackSession::list_audio_processes();
-  std::ostringstream oss;
-  oss << "{\"type\":\"process-list\",\"processes\":[";
+void send_devices() {
+  const auto devices = voicecraft::audio::CaptureSession::list_input_devices();
+  std::ostringstream out;
+  out << "{\"type\":\"device-list\",\"devices\":[";
   bool first = true;
-  for (const auto& p : procs) {
-    if (!first) oss << ",";
+  for (const auto& device : devices) {
+    if (!first) out << ',';
     first = false;
-    oss << "{\"pid\":" << p.pid << ","
-        << "\"name\":\"" << p.name << "\","
-        << "\"icon\":\"" << p.icon << "\"}";
+    out << "{\"id\":\"" << escape_json(device.id) << "\",\"name\":\""
+        << escape_json(device.name) << "\",\"isDefault\":" << (device.is_default ? "true" : "false") << '}';
   }
-  oss << "]}";
-  emit_event(oss.str());
+  out << "]}";
+  emit(out.str());
 }
-
+void send_processes() {
+  const auto processes = voicecraft::audio::LoopbackSession::list_audio_processes();
+  std::ostringstream out;
+  out << "{\"type\":\"process-list\",\"processes\":[";
+  bool first = true;
+  for (const auto& process : processes) {
+    if (!first) out << ',';
+    first = false;
+    out << "{\"pid\":" << process.pid << ",\"name\":\"" << escape_json(process.name) << "\",\"icon\":\"\"}";
+  }
+  out << "]}";
+  emit(out.str());
+}
 }  // namespace
 
 int main() {
   std::signal(SIGINT, on_signal);
   std::signal(SIGTERM, on_signal);
-
-  // Unbuffered stdout so audio frames flush immediately.
   std::setvbuf(stdout, nullptr, _IONBF, 0);
-
-  voicecraft::audio::CaptureSession session;
-  voicecraft::audio::LoopbackSession loopback_session;
-
-  emit_event("{\"type\":\"service-started\",\"version\":\"0.2.0\"}");
+  voicecraft::audio::CaptureSession microphone;
+  voicecraft::audio::LoopbackSession loopback;
+  service_started();
 
   std::string line;
   while (!g_shutdown && std::getline(std::cin, line)) {
     if (line.empty()) continue;
-    auto type = json_get(line, "type");
-    if (type == "list-devices") {
-      send_device_list();
+    const auto type = json_get(line, "type");
+    if (type == "capabilities") {
+      service_started();
+    } else if (type == "list-devices") {
+      send_devices();
     } else if (type == "list-processes") {
-      send_process_list();
-    } else if (type == "start-loopback") {
-      uint32_t pid = static_cast<uint32_t>(json_int(line, "processId", 0));
-      std::string sess_id = json_get(line, "sessionId");
-      if (sess_id.empty()) sess_id = "loopback-1";
-      bool ok = loopback_session.start(pid, 48000, 1, [](const float* samples, uint32_t frames) {
-        write_audio_frame(samples, frames);
-      });
+      send_processes();
+    } else if (type == "start-loopback" || type == "start-loopback-system") {
+      const auto session_id = json_get(line, "sessionId");
+      if (session_id.empty()) { error("session-id-required"); continue; }
+      if (loopback.is_running()) { error("loopback-session-busy", session_id); continue; }
+      const uint32_t process_id = static_cast<uint32_t>(json_int(line,
+        type == "start-loopback" ? "processId" : "excludedProcessId", 0));
+      const auto loopback_audio = [](const float* samples, uint32_t frames) {
+        write_audio(kSourceLoopback, samples, frames);
+      };
+      const bool ok = type == "start-loopback"
+        ? loopback.start(process_id, 48000, 1, loopback_audio)
+        : loopback.start_system_excluding_process(process_id, 48000, 1, loopback_audio);
       if (ok) {
-        emit_event("{\"type\":\"loopback-started\",\"sessionId\":\"" + sess_id
-          + "\",\"mode\":\"" + loopback_session.last_mode() + "\"}");
+        emit("{\"type\":\"loopback-started\",\"sessionId\":\"" + escape_json(session_id) +
+             "\",\"mode\":\"" + loopback.last_mode() + "\",\"sampleRate\":48000,\"channels\":1}");
       } else {
-        emit_error(loopback_session.last_error());
-      }
-    } else if (type == "start-loopback-system") {
-      // System-wide capture EXCLUDING our own process tree (Discord/
-      // Zoom behaviour for "share system audio, but not my own voice").
-      std::string sess_id = json_get(line, "sessionId");
-      if (sess_id.empty()) sess_id = "loopback-system";
-      // 0 = exclude-self mode. The C++ side picks the current process id.
-      bool ok = loopback_session.start_system_excluding_self(48000, 1, [](const float* samples, uint32_t frames) {
-        write_audio_frame(samples, frames);
-      });
-      if (ok) {
-        emit_event("{\"type\":\"loopback-started\",\"sessionId\":\"" + sess_id
-          + "\",\"mode\":\"" + loopback_session.last_mode() + "\"}");
-      } else {
-        emit_error(loopback_session.last_error());
+        error(loopback.last_error(), session_id);
       }
     } else if (type == "stop-loopback") {
-      loopback_session.stop();
-      emit_event("{\"type\":\"loopback-stopped\"}");
+      const auto session_id = json_get(line, "sessionId");
+      loopback.stop();
+      emit("{\"type\":\"loopback-stopped\",\"sessionId\":\"" + escape_json(session_id) + "\"}");
     } else if (type == "start") {
-      voicecraft::audio::CaptureConfig cfg;
-      cfg.sample_rate = static_cast<uint32_t>(json_int(line, "sampleRate", 48000));
-      cfg.channels = static_cast<uint16_t>(json_int(line, "channels", 1));
-      cfg.enable_hpf = json_bool(line, "hpf", true);
-      cfg.enable_agc = json_bool(line, "agc", true);
-      cfg.enable_gate = json_bool(line, "gate", true);
-      cfg.gate_threshold_db = static_cast<float>(json_int(line, "threshold", -45));
-      cfg.device_id = json_get(line, "deviceId");
-      cfg.frame_size_ms = static_cast<uint16_t>(json_int(line, "frameSizeMs", 20));
-
-      std::ostringstream oss;
-      oss << "{\"type\":\"ready\",\"sampleRate\":" << cfg.sample_rate
-          << ",\"channels\":" << cfg.channels << "}";
-      emit_event(oss.str());
-
-      bool ok = session.start(cfg, [](const float* samples, uint32_t frames) {
-        write_audio_frame(samples, frames);
-      });
-      if (!ok) emit_error(session.last_error());
+      voicecraft::audio::CaptureConfig config;
+      config.sample_rate = static_cast<uint32_t>(json_int(line, "sampleRate", 48000));
+      config.channels = static_cast<uint16_t>(json_int(line, "channels", 1));
+      config.enable_hpf = json_bool(line, "hpf", true);
+      config.enable_agc = json_bool(line, "agc", true);
+      config.enable_gate = json_bool(line, "gate", true);
+      config.gate_threshold_db = static_cast<float>(json_int(line, "threshold", -45));
+      config.device_id = json_get(line, "deviceId");
+      config.frame_size_ms = static_cast<uint16_t>(json_int(line, "frameSizeMs", 20));
+      const auto microphone_audio = [](const float* samples, uint32_t frames) {
+        write_audio(kSourceMicrophone, samples, frames);
+      };
+      if (microphone.start(config, microphone_audio)) {
+        emit("{\"type\":\"ready\",\"sampleRate\":" + std::to_string(config.sample_rate) +
+             ",\"channels\":" + std::to_string(config.channels) + "}");
+      } else error(microphone.last_error());
     } else if (type == "stop") {
-      session.stop();
-      emit_event("{\"type\":\"stopped\"}");
+      microphone.stop();
+      emit("{\"type\":\"stopped\"}");
     } else if (type == "shutdown") {
       break;
-    } else {
-      emit_error("unknown command: " + type);
-    }
+    } else error("unknown-command:" + type);
   }
-
-  session.stop();
-  emit_event("{\"type\":\"service-stopped\"}");
+  loopback.stop();
+  microphone.stop();
+  emit("{\"type\":\"service-stopped\"}");
   return 0;
 }

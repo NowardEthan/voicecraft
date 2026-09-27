@@ -15,19 +15,19 @@ echo.
 
 where curl >nul 2>nul
 if not errorlevel 1 (
-    curl -sL "https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h" ^
+    curl -sL "https://raw.githubusercontent.com/mackron/miniaudio/v0.11.21/miniaudio.h" ^
         -o "third_party\miniaudio_repo\miniaudio.h"
     if exist "third_party\miniaudio_repo\miniaudio.h" goto have_miniaudio
 )
 
 powershell -NoProfile -Command ^
-    "$ProgressPreference = 'SilentlyContinue'; try { Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h' -OutFile 'third_party\miniaudio_repo\miniaudio.h' -ErrorAction Stop; exit 0 } catch { exit 1 }"
+    "$ProgressPreference = 'SilentlyContinue'; try { Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/mackron/miniaudio/v0.11.21/miniaudio.h' -OutFile 'third_party\miniaudio_repo\miniaudio.h' -ErrorAction Stop; exit 0 } catch { exit 1 }"
 if not errorlevel 1 (
     if exist "third_party\miniaudio_repo\miniaudio.h" goto have_miniaudio
 )
 
 echo Falha no download automatico.
-echo Baixe manualmente de:  https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h
+echo Baixe manualmente de:  https://raw.githubusercontent.com/mackron/miniaudio/v0.11.21/miniaudio.h
 echo E salve em:             third_party\miniaudio_repo\miniaudio.h
 exit /b 1
 
@@ -48,13 +48,12 @@ if not errorlevel 1 (
     pushd build
     cl /nologo %COMMON% /Fe:voicecraft-audio.exe /Fo: ^
         ..\src\main.cpp ..\src\capture.cpp ..\src\loopback_wasapi.cpp ^
-        /link winmm.lib ole32.lib mmdevapi.lib psapi.lib
+        /link winmm.lib ole32.lib mmdevapi.lib psapi.lib uuid.lib
     set RC=!errorlevel!
     popd
     if not "!RC!"=="0" exit /b !RC!
-    echo.
-    echo OK: build\voicecraft-audio.exe
-    exit /b 0
+    call :install_validated
+    exit /b !errorlevel!
 )
 
 where g++ >nul 2>nul
@@ -63,13 +62,25 @@ if not errorlevel 1 (
     g++ -std=c++17 -O2 -I src -I third_party\miniaudio_repo ^
         -DMA_NO_RESOURCE_MANAGEMENT=1 -DMA_NO_LOGGING=1 -DMA_NO_JSON=1 -DMA_NO_DATA_STRUCTURES=1 ^
         src\main.cpp src\capture.cpp src\loopback_wasapi.cpp -o build\voicecraft-audio.exe ^
-        -lwinmm -lole32 -lpsapi -lmmdevapi -static
+        -lwinmm -lole32 -lpsapi -lmmdevapi -luuid -static
     if errorlevel 1 exit /b 1
-    echo.
-    echo OK: build\voicecraft-audio.exe
-    exit /b 0
+    call :install_validated
+    exit /b !errorlevel!
 )
 
+goto no_compiler
+
+:install_validated
+node "..\scripts\validate-audio-helper.mjs" "audio-service\build\voicecraft-audio.exe"
+if errorlevel 1 exit /b 1
+if not exist "..\resources\bin" mkdir "..\resources\bin"
+copy /y "build\voicecraft-audio.exe" "..\resources\bin\voicecraft-audio.exe" >nul
+if errorlevel 1 exit /b 1
+echo.
+echo OK: helper validado e instalado em resources\bin\voicecraft-audio.exe
+exit /b 0
+
+:no_compiler
 echo.
 echo Nenhum compilador C++ encontrado no PATH.
 echo Instale um dos seguintes:

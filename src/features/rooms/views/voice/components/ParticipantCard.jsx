@@ -33,7 +33,7 @@ export const ParticipantCard = memo(function ParticipantCard({
   const canPromote = typeof onPromote === 'function' && hasVideo
   const canControlVolume = !isSelf && typeof onVolumeChange === 'function'
   const [volumeOpen, setVolumeOpen] = useState(false)
-  const vol = Math.max(0, Math.min(PEER_VOLUME_MAX, Number(volume) || PEER_VOLUME_DEFAULT))
+  const vol = Math.max(0, Math.min(PEER_VOLUME_MAX, Number.isFinite(Number(volume)) ? Number(volume) : PEER_VOLUME_DEFAULT))
   const isPeerMuted = canControlVolume && vol === 0
   const stateLabel = isMuted
     ? 'Microfone desligado'

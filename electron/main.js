@@ -5,7 +5,7 @@ const fs = require('fs')
 const http = require('http')
 const { pathToFileURL } = require('url')
 
-// Telemetria: marca o instante em que o main process começa a executar.
+// Telemetria: marca o instante em que o main process comeÃ§a a executar.
 try {
   const { performance } = require('node:perf_hooks')
   performance.mark('voice:process-start')
@@ -17,7 +17,7 @@ let audioServiceProc = null
 
 const isDev = !app.isPackaged
 
-// ---------- LiveKit token minting (inlined — Vite won't ship sibling requires in asar) ----------
+// ---------- LiveKit token minting (inlined â€” Vite won't ship sibling requires in asar) ----------
 function parseLiveKitKeysFile(raw) {
   const out = { url: '', apiKey: '', apiSecret: '' }
   const text = String(raw || '')
@@ -68,7 +68,7 @@ function loadLiveKitCredentials() {
       if (!fs.existsSync(file)) continue
       const parsed = parseLiveKitKeysFile(fs.readFileSync(file, 'utf8'))
       if (parsed.url && parsed.apiKey && parsed.apiSecret
-        && !parsed.apiSecret.includes('•')) {
+        && !parsed.apiSecret.includes('â€¢')) {
         return parsed
       }
     } catch {}
@@ -95,11 +95,11 @@ async function mintLiveKitToken({ spaceId, roomId, identity, displayName }) {
   const creds = loadLiveKitCredentials()
   if (!creds.url || !creds.apiKey || !creds.apiSecret) {
     throw new Error(
-      'LiveKit não configurado. Salve URL, API Key e Secret em %APPDATA%\\voicecraft\\livekit-keys.txt',
+      'LiveKit nÃ£o configurado. Salve URL, API Key e Secret em %APPDATA%\\voicecraft\\livekit-keys.txt',
     )
   }
-  if (!identity) throw new Error('identity obrigatória')
-  if (!roomId) throw new Error('roomId obrigatório')
+  if (!identity) throw new Error('identity obrigatÃ³ria')
+  if (!roomId) throw new Error('roomId obrigatÃ³rio')
 
   const { AccessToken } = require('livekit-server-sdk')
   const roomName = livekitRoomName(spaceId, roomId)
@@ -124,7 +124,7 @@ async function mintLiveKitToken({ spaceId, roomId, identity, displayName }) {
 // at runtime (that path does not exist under dist-electron/).
 let updaterWired = false
 let autoUpdaterRef = null
-/** Last status pushed to the renderer — replayed when the UI mounts late (login). */
+/** Last status pushed to the renderer â€” replayed when the UI mounts late (login). */
 let lastUpdaterStatus = null
 let lastDownloadedVersion = null
 let updateDownloaded = false
@@ -220,7 +220,7 @@ function setupUpdater(getMainWindow) {
   ipcMain.handle('updater:get-status', () => lastUpdaterStatus)
   ipcMain.handle('updater:check', async () => {
     if (!app.isPackaged) {
-      return { ok: false, error: 'Atualizações só funcionam no app instalado.' }
+      return { ok: false, error: 'AtualizaÃ§Ãµes sÃ³ funcionam no app instalado.' }
     }
     try {
       const result = await getAutoUpdater().checkForUpdates()
@@ -307,7 +307,7 @@ function setupUpdater(getMainWindow) {
   }
 }
 
-// Dev and the installed app must not share Cache/GPUCache — a leftover
+// Dev and the installed app must not share Cache/GPUCache â€” a leftover
 // tray instance + `npm run dev` both lock AppData\Roaming\voicecraft and
 // Chromium then prints "Unable to move the cache: Acesso negado (0x5)"
 // and "Gpu Cache Creation failed: -2".
@@ -322,12 +322,12 @@ if (process.platform === 'win32') {
 }
 
 // Keep RTDB / WebSocket presence alive when the window is occluded or
-// minimized — Chromium otherwise throttles timers and can stall presence.
+// minimized â€” Chromium otherwise throttles timers and can stall presence.
 app.commandLine.appendSwitch('disable-background-timer-throttling')
 app.commandLine.appendSwitch('disable-renderer-backgrounding')
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
-// Prefer system DNS on Windows — Chromium AsyncDns often fails to resolve
-// LiveKit media hosts (ip-*.host.livekit.cloud → ERR_NAME_NOT_RESOLVED / -105).
+// Prefer system DNS on Windows â€” Chromium AsyncDns often fails to resolve
+// LiveKit media hosts (ip-*.host.livekit.cloud â†’ ERR_NAME_NOT_RESOLVED / -105).
 app.commandLine.appendSwitch('disable-features', 'AsyncDns,DnsOverHttps')
 if (process.platform === 'win32') {
   app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess2')
@@ -348,9 +348,9 @@ function ensureCacheDirs() {
   const root = app.getPath('userData')
   const cacheDir = path.join(root, 'Cache')
   try { fs.mkdirSync(cacheDir, { recursive: true }) } catch {}
-  // Prefer the Chromium switch only — setPath('cache') nested userData on Win.
+  // Prefer the Chromium switch only â€” setPath('cache') nested userData on Win.
   app.commandLine.appendSwitch('disk-cache-dir', cacheDir)
-  // Shader disk cache is what throws gpu_disk_cache.cc — GPU still works,
+  // Shader disk cache is what throws gpu_disk_cache.cc â€” GPU still works,
   // it just compiles in memory instead of fighting a locked GPUCache folder.
   app.commandLine.appendSwitch('disable-gpu-shader-disk-cache')
 }
@@ -398,7 +398,7 @@ function resolveAudioServiceBinary() {
 }
 
 // ---------- Settings persistence ----------
-// Plain JSON in userData — synchronous reads/writes are fine for tiny files
+// Plain JSON in userData â€” synchronous reads/writes are fine for tiny files
 // like this, and avoids an async dance with the renderer on every change.
 const settingsPath = path.join(app.getPath('userData'), 'settings.json')
 const DEFAULT_SETTINGS = {
@@ -409,17 +409,17 @@ const DEFAULT_SETTINGS = {
   outputVolume: 80,
   // DSP
   dspLevel: 'off',
-  // Screen share — 720p/30 is enough for voice rooms and much cheaper
+  // Screen share â€” 720p/30 is enough for voice rooms and much cheaper
   screenQuality: '720p',
   screenFramerate: 30,
   screenWithAudio: false,
   callSounds: true,
-  // GPU acceleration (must be applied BEFORE app.whenReady — see below)
+  // GPU acceleration (must be applied BEFORE app.whenReady â€” see below)
   gpuAcceleration: true,
-  // Performance profile — Auto scales; Chromium zero-copy needs restart
+  // Performance profile â€” Auto scales; Chromium zero-copy needs restart
   perfMode: 'auto', // auto | performance | balanced | economy
   perfHud: false,
-  // Last Auto tier from renderer probe — enables zero-copy on next launch when high
+  // Last Auto tier from renderer probe â€” enables zero-copy on next launch when high
   lastPerfTier: null, // high | mid | low | null
   // UI
   startMinimized: false,
@@ -437,7 +437,7 @@ const earlySettings = (() => {
 
 // GPU: if user disabled, switch Chromium off. Otherwise append extra
 // switches that tune Chromium's GPU pipeline for desktop apps.
-// MUST be called before app.whenReady() — that's why this runs at module load.
+// MUST be called before app.whenReady() â€” that's why this runs at module load.
 if (!earlySettings.gpuAcceleration) {
   app.disableHardwareAcceleration()
   console.log('[app] hardware acceleration disabled by user setting')
@@ -499,13 +499,13 @@ ipcMain.handle('app:log', (_e, level, msg) => log(level, msg))
 ipcMain.handle('net:fetch-storage-image', async (_e, payload = {}) => {
   const url = typeof payload.url === 'string' ? payload.url.trim() : ''
   const idToken = typeof payload.idToken === 'string' ? payload.idToken : ''
-  if (!/^https:\/\//i.test(url)) throw new Error('URL inválida')
+  if (!/^https:\/\//i.test(url)) throw new Error('URL invÃ¡lida')
   let host
-  try { host = new URL(url).hostname } catch { throw new Error('URL inválida') }
+  try { host = new URL(url).hostname } catch { throw new Error('URL invÃ¡lida') }
   const allowed = host === 'firebasestorage.googleapis.com'
     || host === 'storage.googleapis.com'
     || host.endsWith('.firebasestorage.app')
-  if (!allowed) throw new Error('Host não permitido')
+  if (!allowed) throw new Error('Host nÃ£o permitido')
 
   const headers = { Accept: 'image/*,*/*' }
   if (idToken) headers.Authorization = `Firebase ${idToken}`
@@ -544,7 +544,7 @@ ipcMain.handle('system:get-gpu-info', async () => {
   }
 })
 
-/** Light snapshot for perf HUD / hardware probe — never blocks on complete GPU info. */
+/** Light snapshot for perf HUD / hardware probe â€” never blocks on complete GPU info. */
 ipcMain.handle('system:perf-snapshot', async () => {
   try {
     const memory = await process.getProcessMemoryInfo()
@@ -609,147 +609,247 @@ ipcMain.handle('app:get-paths', () => ({
 }))
 
 // ---------- Audio service (C++ child process) ----------
-// Spawns the C++ audio service, pipes float32 PCM frames from stdout to the
-// renderer via IPC, and listens for commands/status on stdin/stderr.
+const AUDIO_PROTOCOL_VERSION = 2
+const AUDIO_FRAME_MAGIC = 0x32414356
+const REQUIRED_AUDIO_CAPABILITIES = new Set([
+  'process-loopback-strict',
+  'system-loopback-exclude-process-tree',
+  'session-tagged-ipc',
+  'source-tagged-frames-v2',
+  'serialized-loopback',
+])
+let audioServiceReadyPromise = null
+let audioServiceHandshake = null
+let activeLoopbackSession = null
+let loopbackOperation = Promise.resolve()
+const pendingLoopbackWaiters = new Map()
+
+function sendAudioStatus(msg) {
+  const wc = mainWindow?.webContents
+  if (wc && !wc.isDestroyed()) {
+    try { wc.send('audio:status', msg) } catch {}
+  }
+}
+
+function rejectAudioHandshake(message) {
+  if (!audioServiceHandshake) return
+  const { reject, timer } = audioServiceHandshake
+  audioServiceHandshake = null
+  clearTimeout(timer)
+  reject(new Error(message))
+}
+
+function acceptAudioHandshake(msg) {
+  if (!audioServiceHandshake || msg?.type !== 'service-started') return
+  const capabilities = new Set(Array.isArray(msg.capabilities) ? msg.capabilities : [])
+  const missing = [...REQUIRED_AUDIO_CAPABILITIES].filter((cap) => !capabilities.has(cap))
+  if (msg.protocolVersion !== AUDIO_PROTOCOL_VERSION || missing.length) {
+    rejectAudioHandshake(
+      msg.protocolVersion !== AUDIO_PROTOCOL_VERSION
+        ? 'audio-service-protocol-incompatible'
+        : ('audio-service-missing-capabilities:' + missing.join(',')),
+    )
+    try { audioServiceProc?.kill() } catch {}
+    return
+  }
+  const { resolve, timer } = audioServiceHandshake
+  audioServiceHandshake = null
+  clearTimeout(timer)
+  resolve({ ok: true, protocolVersion: msg.protocolVersion, version: msg.version, capabilities: [...capabilities] })
+}
+
+function settleLoopbackWaiter(msg) {
+  const sessionId = msg?.sessionId
+  if (!sessionId) return
+  const waiter = pendingLoopbackWaiters.get(sessionId)
+  if (!waiter) return
+  if (msg.type !== 'loopback-started' && msg.type !== 'loopback-stopped' && msg.type !== 'error') return
+  pendingLoopbackWaiters.delete(sessionId)
+  clearTimeout(waiter.timer)
+  waiter.resolve(msg)
+}
+
 function startAudioService() {
-  if (audioServiceProc) return { ok: true, alreadyRunning: true }
+  if (audioServiceReadyPromise) return audioServiceReadyPromise
   const bin = resolveAudioServiceBinary()
-  if (!bin) return { ok: false, error: 'binário não encontrado — compile audio-service primeiro (ver audio-service/README.md)' }
+  if (!bin) return Promise.resolve({ ok: false, error: 'audio-service-binary-not-found' })
+  const wc = mainWindow?.webContents
+  if (!wc || wc.isDestroyed()) return Promise.resolve({ ok: false, error: 'renderer-unavailable' })
 
-  try {
-    audioServiceProc = require('child_process').spawn(bin, [], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-    })
-  } catch (err) {
-    audioServiceProc = null
-    return { ok: false, error: String(err?.message || err) }
-  }
+  audioServiceReadyPromise = new Promise((outerResolve) => {
+    try {
+      audioServiceProc = require('child_process').spawn(bin, [], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
+      })
+    } catch (err) {
+      audioServiceProc = null
+      outerResolve({ ok: false, error: err?.message || String(err) })
+      return
+    }
 
-  // Stop the service if the renderer's webContents is gone or being torn down,
-  // so we don't accumulate frames in a queue that will be flushed to a
-  // disposed frame (which is what triggers "Render frame was disposed").
-  const wc = mainWindow && mainWindow.webContents
-  if (!wc || wc.isDestroyed()) {
-    stopAudioService()
-    return { ok: false, error: 'webContents indisponível ou destruído' }
-  }
-  wc.once('destroyed', () => {
-    log('info', '[audio] renderer destroyed, stopping service')
-    stopAudioService()
-  })
-
-  let leftover = Buffer.alloc(0)
-
-  audioServiceProc.stdout.on('data', (chunk) => {
-    leftover = Buffer.concat([leftover, chunk])
-    // Frames: [uint32 LE size_in_samples][size * float32 samples]
-    while (leftover.length >= 4) {
-      const frames = leftover.readUInt32LE(0)
-      const bytes = frames * 4
-      if (leftover.length < 4 + bytes) break
-      const payload = leftover.subarray(4, 4 + bytes)
-      leftover = leftover.subarray(4 + bytes)
-      // Render frames can be disposed mid-reload — guard the IPC send so
-      // the main process doesn't spam the console with "Render frame was
-      // disposed" errors during HMR.
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        const wc = mainWindow.webContents
-        if (wc && !wc.isDestroyed()) {
+    let stdout = Buffer.alloc(0)
+    let stderr = ''
+    audioServiceProc.stdout.on('data', (chunk) => {
+      stdout = Buffer.concat([stdout, chunk])
+      while (stdout.length >= 12) {
+        const magic = stdout.readUInt32LE(0)
+        if (magic !== AUDIO_FRAME_MAGIC) {
+          rejectAudioHandshake('audio-service-frame-protocol-incompatible')
+          try { audioServiceProc?.kill() } catch {}
+          return
+        }
+        const source = stdout.readUInt32LE(4)
+        const frames = stdout.readUInt32LE(8)
+        if (frames > 480000) {
+          rejectAudioHandshake('audio-service-frame-too-large')
+          try { audioServiceProc?.kill() } catch {}
+          return
+        }
+        const bytes = frames * 4
+        if (stdout.length < 12 + bytes) break
+        const payload = stdout.subarray(12, 12 + bytes)
+        stdout = stdout.subarray(12 + bytes)
+        const type = source === 2 ? 'loopback' : source === 1 ? 'mic' : 'unknown'
+        if (type === 'unknown') continue
+        const target = mainWindow?.webContents
+        if (target && !target.isDestroyed()) {
           try {
-            // Tag loopback frames so renderer can filter mic vs app-audio.
-            const frameType = activeLoopbackSessions.size > 0 ? 'loopback' : 'mic'
-            wc.send('audio:frame', { type: frameType, payload })
-          } catch (err) {
-            // Swallow — renderer just disposed, nothing to do.
+            target.send('audio:frame', {
+              type,
+              sessionId: type === 'loopback' ? activeLoopbackSession?.sessionId || null : null,
+              sampleRate: 48000,
+              channels: 1,
+              frames,
+              payload,
+            })
+          } catch {}
+        }
+      }
+    })
+
+    audioServiceProc.stderr.on('data', (data) => {
+      stderr += data.toString()
+      const lines = stderr.split(/\r?\n/)
+      stderr = lines.pop() || ''
+      for (const line of lines) {
+        if (!line.trim()) continue
+        try {
+          const msg = JSON.parse(line)
+          acceptAudioHandshake(msg)
+          settleLoopbackWaiter(msg)
+          if (msg.type === 'loopback-stopped' && activeLoopbackSession?.sessionId === msg.sessionId) {
+            activeLoopbackSession = null
           }
-        }
+          sendAudioStatus(msg)
+        } catch {}
       }
-    }
-  })
+    })
 
-  audioServiceProc.stderr.on('data', (data) => {
-    for (const line of data.toString().split(/\r?\n/)) {
-      if (!line.trim()) continue
-      try {
-        const msg = JSON.parse(line)
-        if (msg?.type === 'error' && activeLoopbackSessions.size > 0 && pendingLoopbackWaiters.size === 0) {
-          // Only clear sessions on late errors after start finished waiting.
-          activeLoopbackSessions.clear()
-        }
-        if (msg?.type === 'loopback-stopped') {
-          activeLoopbackSessions.clear()
-        }
-        notifyLoopbackWaiters(msg)
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          const wc = mainWindow.webContents
-          if (wc && !wc.isDestroyed()) {
-            try { wc.send('audio:status', msg) } catch {}
-          }
-        }
-      } catch {
-        // Ignore non-JSON lines
+    audioServiceProc.once('exit', (code, signal) => {
+      rejectAudioHandshake('audio-service-exited-before-handshake')
+      for (const [id, waiter] of pendingLoopbackWaiters) {
+        clearTimeout(waiter.timer)
+        waiter.resolve({ type: 'error', sessionId: id, message: 'audio-service-exited' })
       }
+      pendingLoopbackWaiters.clear()
+      activeLoopbackSession = null
+      audioServiceProc = null
+      audioServiceReadyPromise = null
+      sendAudioStatus({ type: 'exited', code, signal })
+    })
+
+    wc.once('destroyed', stopAudioService)
+    const timer = setTimeout(() => rejectAudioHandshake('audio-service-handshake-timeout'), 5000)
+    audioServiceHandshake = {
+      timer,
+      resolve: (info) => {
+        sendAudioCommand({ type: 'list-devices' })
+        outerResolve(info)
+      },
+      reject: (err) => outerResolve({ ok: false, error: err.message }),
     }
+    sendAudioCommand({ type: 'capabilities' })
   })
-
-  audioServiceProc.on('exit', (code, signal) => {
-    audioServiceProc = null
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      const wc = mainWindow.webContents
-      if (wc && !wc.isDestroyed()) {
-        try { wc.send('audio:status', { type: 'exited', code, signal }) } catch {}
-      }
-    }
-  })
-
-  // Initial command: list devices (renderer will react and start capture).
-  sendAudioCommand({ type: 'list-devices' })
-
-  return { ok: true }
+  return audioServiceReadyPromise
 }
 
 function stopAudioService() {
-  if (!audioServiceProc) return
-  try { sendAudioCommand({ type: 'shutdown' }) } catch {}
-  try { audioServiceProc.kill() } catch {}
+  const proc = audioServiceProc
   audioServiceProc = null
+  audioServiceReadyPromise = null
+  activeLoopbackSession = null
+  rejectAudioHandshake('audio-service-stopped')
+  if (!proc) return
+  try { proc.stdin?.write(JSON.stringify({ type: 'shutdown' }) + '\n') } catch {}
+  try { proc.kill() } catch {}
 }
 
 function sendAudioCommand(obj) {
-  if (!audioServiceProc || !audioServiceProc.stdin || audioServiceProc.stdin.writable === false) return
+  if (!audioServiceProc?.stdin || audioServiceProc.stdin.writable === false) return false
   try {
     audioServiceProc.stdin.write(JSON.stringify(obj) + '\n')
-  } catch (err) {
-    console.error('[audio] sendCommand failed:', err)
+    return true
+  } catch {
+    return false
   }
+}
+
+function waitForLoopbackEvent(sessionId, timeoutMs = 9000) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pendingLoopbackWaiters.delete(sessionId)
+      resolve({ type: 'error', sessionId, message: 'loopback-response-timeout' })
+    }, timeoutMs)
+    pendingLoopbackWaiters.set(sessionId, { resolve, timer })
+  })
+}
+
+function serializeLoopback(operation) {
+  const result = loopbackOperation.then(operation, operation)
+  loopbackOperation = result.catch(() => {})
+  return result
+}
+
+async function startNativeLoopback(kind, processId) {
+  return serializeLoopback(async () => {
+    if (!Number.isInteger(processId) || processId <= 0) return { ok: false, error: 'pid-not-found' }
+    if (activeLoopbackSession) return { ok: false, error: 'loopback-session-busy' }
+    const ready = await startAudioService()
+    if (!ready?.ok) return ready
+    const sessionId = require('crypto').randomUUID()
+    const pending = waitForLoopbackEvent(sessionId)
+    const command = kind === 'system'
+      ? { type: 'start-loopback-system', excludedProcessId: processId, sessionId }
+      : { type: 'start-loopback', processId, sessionId }
+    activeLoopbackSession = { sessionId, kind, processId, mode: 'starting', sampleRate: 48000, channels: 1, startedAt: Date.now() }
+    if (!sendAudioCommand(command)) {
+      activeLoopbackSession = null
+      return { ok: false, error: 'audio-service-command-failed' }
+    }
+    const msg = await pending
+    if (msg.type !== 'loopback-started') {
+      activeLoopbackSession = null
+      return { ok: false, error: msg.message || 'loopback-start-failed' }
+    }
+    activeLoopbackSession = {
+      ...activeLoopbackSession,
+      mode: msg.mode,
+      sampleRate: msg.sampleRate || 48000,
+      channels: msg.channels || 1,
+    }
+    return { ok: true, ...activeLoopbackSession }
+  })
 }
 
 ipcMain.handle('audio-service:start', () => startAudioService())
 ipcMain.handle('audio-service:stop', () => { stopAudioService(); return { ok: true } })
-ipcMain.handle('audio-service:available', () => ({ available: !!resolveAudioServiceBinary() }))
-ipcMain.handle('audio-service:send', (_e, obj) => { sendAudioCommand(obj); return { ok: true } })
-
-// Active loopback sessions: Map<sessionId, { processId, startedAt }>
-const activeLoopbackSessions = new Map()
-/** @type {Map<string, (msg: any) => void>} */
-const pendingLoopbackWaiters = new Map()
-
-function notifyLoopbackWaiters(msg) {
-  if (!msg) return
-  if (msg.type === 'loopback-started' && msg.sessionId && pendingLoopbackWaiters.has(msg.sessionId)) {
-    const fn = pendingLoopbackWaiters.get(msg.sessionId)
-    pendingLoopbackWaiters.delete(msg.sessionId)
-    try { fn?.(msg) } catch {}
-    return
-  }
-  if (msg.type === 'error' || msg.type === 'loopback-started') {
-    for (const [id, fn] of pendingLoopbackWaiters.entries()) {
-      pendingLoopbackWaiters.delete(id)
-      try { fn?.(msg) } catch {}
-    }
-  }
-}
+ipcMain.handle('audio-service:available', () => ({ available: !!resolveAudioServiceBinary(), protocolVersion: AUDIO_PROTOCOL_VERSION }))
+ipcMain.handle('audio-service:send', async (_e, obj) => {
+  const ready = await startAudioService()
+  if (!ready?.ok) return ready
+  return { ok: sendAudioCommand(obj) }
+})
 
 /** Low-level / shell processes users never want for app audio capture. */
 const PROCESS_DENY = new Set([
@@ -761,7 +861,7 @@ const PROCESS_DENY = new Set([
   'securityhealthservice', 'securityhealthsystray', 'widgetservice',
   'widgets', 'crossdeviceresume', 'backgroundtaskhost', 'wudfhost',
   'spoolsv', 'dashost', 'audiodg', 'lsm', 'winlogon', 'userinit',
-  'explorer', // shell — raramente útil pra capturar áudio
+  'explorer', // shell â€” raramente Ãºtil pra capturar Ã¡udio
 ])
 
 /**
@@ -866,115 +966,29 @@ function listProcessesViaTasklistFiltered() {
   })
 }
 
-ipcMain.handle('audio-service:list-processes', async () => {
-  const processes = await listAudioCapableProcesses()
-  return processes
-})
-
-ipcMain.handle('audio-service:start-loopback', async (_e, payload) => {
-  const processId = payload?.processId
-  if (typeof processId !== 'number' || processId <= 0) {
-    return { ok: false, error: 'pid-not-found' }
-  }
-  const started = startAudioService()
-  if (!started?.ok && !started?.alreadyRunning) {
-    return { ok: false, error: started?.error || 'audio-service-unavailable' }
-  }
-  for (const [id, sess] of activeLoopbackSessions.entries()) {
-    if (sess.processId === processId) {
-      return { ok: true, sessionId: id, alreadyRunning: true }
-    }
-  }
-  const crypto = require('crypto')
-  const sessionId = crypto.randomUUID
-    ? crypto.randomUUID()
-    : ('sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9))
-
-  const waitResult = await new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      pendingLoopbackWaiters.delete(sessionId)
-      resolve({ ok: false, error: 'timeout-waiting-loopback' })
-    }, 8000)
-
-    pendingLoopbackWaiters.set(sessionId, (msg) => {
-      clearTimeout(timer)
-      pendingLoopbackWaiters.delete(sessionId)
-      if (msg?.type === 'loopback-started') {
-        resolve({ ok: true, mode: msg.mode || 'process' })
-      } else {
-        resolve({ ok: false, error: msg?.message || 'wasapi-error' })
-      }
-    })
-
-    activeLoopbackSessions.set(sessionId, { processId, startedAt: Date.now() })
-    sendAudioCommand({ type: 'start-loopback', processId, sessionId })
-  })
-
-  if (!waitResult?.ok) {
-    activeLoopbackSessions.delete(sessionId)
-    try { sendAudioCommand({ type: 'stop-loopback', sessionId }) } catch {}
-    return { ok: false, error: waitResult?.error || 'loopback-failed' }
-  }
-
-  return { ok: true, sessionId, mode: waitResult.mode || 'process' }
-})
-
-// (pendingLoopbackWaiters declared above with activeLoopbackSessions)
-
-ipcMain.handle('audio-service:stop-loopback', (_e, payload) => {
-  const sessionId = payload?.sessionId
-  if (!sessionId) {
+ipcMain.handle('audio-service:list-processes', async () => listAudioCapableProcesses())
+ipcMain.handle('audio-service:start-loopback', (_e, payload = {}) => (
+  startNativeLoopback('app', Number(payload.processId))
+))
+ipcMain.handle('audio-service:start-loopback-system', () => (
+  startNativeLoopback('system', process.pid)
+))
+ipcMain.handle('audio-service:stop-loopback', (_e, payload = {}) => serializeLoopback(async () => {
+  const sessionId = payload.sessionId
+  if (!sessionId || activeLoopbackSession?.sessionId !== sessionId) {
     return { ok: false, error: 'unknown-session' }
   }
-  activeLoopbackSessions.delete(sessionId)
-  sendAudioCommand({ type: 'stop-loopback', sessionId })
-  return { ok: true }
-})
-
-/**
- * Start "system audio, but not the call itself" capture. Equivalent to
- * selecting "Tela inteira com áudio" in Discord/Zoom but with the Voice
- * process tree excluded so the call's own audio is NOT re-captured
- * (eliminates the loop where the professor hears their own voice back).
- */
-ipcMain.handle('audio-service:start-loopback-system', async () => {
-  const started = startAudioService()
-  if (!started?.ok && !started?.alreadyRunning) {
-    return { ok: false, error: started?.error || 'audio-service-unavailable' }
+  const pending = waitForLoopbackEvent(sessionId, 4000)
+  if (!sendAudioCommand({ type: 'stop-loopback', sessionId })) {
+    activeLoopbackSession = null
+    return { ok: false, error: 'audio-service-command-failed' }
   }
-  const crypto = require('crypto')
-  const sessionId = crypto.randomUUID
-    ? crypto.randomUUID()
-    : ('sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9))
-
-  const waitResult = await new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      pendingLoopbackWaiters.delete(sessionId)
-      resolve({ ok: false, error: 'timeout-waiting-loopback' })
-    }, 8000)
-
-    pendingLoopbackWaiters.set(sessionId, (msg) => {
-      clearTimeout(timer)
-      pendingLoopbackWaiters.delete(sessionId)
-      if (msg?.type === 'loopback-started') {
-        resolve({ ok: true, mode: msg.mode || 'system' })
-      } else {
-        resolve({ ok: false, error: msg?.message || 'wasapi-error' })
-      }
-    })
-
-    activeLoopbackSessions.set(sessionId, { processId: 0, mode: 'system', startedAt: Date.now() })
-    sendAudioCommand({ type: 'start-loopback-system', sessionId })
-  })
-
-  if (!waitResult?.ok) {
-    activeLoopbackSessions.delete(sessionId)
-    try { sendAudioCommand({ type: 'stop-loopback', sessionId }) } catch {}
-    return { ok: false, error: waitResult?.error || 'loopback-failed' }
-  }
-
-  return { ok: true, sessionId, mode: waitResult.mode || 'system' }
-})
+  const msg = await pending
+  activeLoopbackSession = null
+  return msg.type === 'loopback-stopped'
+    ? { ok: true }
+    : { ok: false, error: msg.message || 'loopback-stop-failed' }
+}))
 
 app.on('before-quit', () => stopAudioService())
 
@@ -1149,7 +1163,7 @@ ipcMain.handle('desktop-capturer:get-sources', async (_event, opts) => {
   }))
 })
 
-// Phase 7 — `restrictOwnAudio` support (Electron 44+ / Chromium 132+).
+// Phase 7 â€” `restrictOwnAudio` support (Electron 44+ / Chromium 132+).
 // When the renderer calls `getDisplayMedia({ audio: { restrictOwnAudio: true } })`,
 // this handler gives Chromium explicit consent to capture the system loopback
 // AND the renderer-side constraint filters out audio produced by Voice
@@ -1174,7 +1188,7 @@ async function startSignalingServer() {
 
 function resolveAppIcon() {
   const candidates = [
-    // Packaged: copied next to the exe via extraResources (outside asar — Windows needs this for taskbar).
+    // Packaged: copied next to the exe via extraResources (outside asar â€” Windows needs this for taskbar).
     process.resourcesPath ? path.join(process.resourcesPath, 'icon.ico') : null,
     path.join(__dirname, '..', 'public', 'icon.ico'),
     path.join(__dirname, '..', 'dist', 'icon.ico'),
@@ -1206,7 +1220,7 @@ function resolveWindowIconPng() {
   return null
 }
 
-/** Windows taskbar uses AppUserModelId + app details — setIcon alone is not enough. */
+/** Windows taskbar uses AppUserModelId + app details â€” setIcon alone is not enough. */
 function applyWindowsTaskbarIcon(win, icoPath, pngPath) {
   if (process.platform !== 'win32' || !win || win.isDestroyed()) return
   try {
@@ -1313,7 +1327,7 @@ function createWindow() {
       }
       if (items.length) items.push({ type: 'separator' })
       items.push({
-        label: 'Adicionar ao dicionário',
+        label: 'Adicionar ao dicionÃ¡rio',
         click: () => {
           try {
             mainWindow.webContents.session.addWordToSpellCheckerDictionary(params.misspelledWord)
@@ -1339,7 +1353,7 @@ function createWindow() {
     Menu.buildFromTemplate(items).popup({ window: mainWindow })
   })
 
-  // No File / Edit / View menu — custom title bar owns chrome.
+  // No File / Edit / View menu â€” custom title bar owns chrome.
   Menu.setApplicationMenu(null)
 
   if (process.env.VITE_DEV_SERVER_URL) {
@@ -1446,23 +1460,14 @@ app.whenReady().then(() => {
     return permission === 'media' || permission === 'display-capture' || permission === 'fullscreen'
   })
 
-  // Phase 7 — `restrictOwnAudio` support (Electron 44+ / Chromium 132+).
-  // When the renderer calls `getDisplayMedia({ audio: { restrictOwnAudio: true } })`,
-  // this handler gives Chromium explicit consent to capture the system loopback
-  // AND the renderer-side constraint filters out audio produced by Voice
-  // itself, preventing echo loops back into the call.
+  // Desktop capture is intentionally video-only. Shared audio is supplied only
+  // by the protocol-v2 native helper after non-silence validation.
   session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
-    callback({
-      video: {},
-      // 'loopback' captures the system audio; the renderer's `restrictOwnAudio:
-      // true` constraint peels off our own output so it does not re-enter the call.
-      // 'loopbackWithMute' would mute the call for the sharer, so we stick with 'loopback'.
-      audio: 'loopback',
-    })
+    callback({ video: {} })
   })
 
   // Realtime now lives on Firebase. The old WS signaling server is leftover
-  // and must not bind :5185 here — a second instance would crash the app
+  // and must not bind :5185 here â€” a second instance would crash the app
   // with EADDRINUSE.
   createWindow()
   createTray()

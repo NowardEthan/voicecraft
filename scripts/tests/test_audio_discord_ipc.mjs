@@ -1,85 +1,56 @@
-/**
- * test_audio_discord_ipc.mjs — Automated verification for Etapa A of CONTRATO_AUDIO_DISCORD.md
- */
-import fs from 'fs'
-import path from 'path'
-import { fileURLToPath } from 'url'
+/** Static contract checks for protocol-v2 native screen audio. */
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const ROOT = path.resolve(__dirname, '../../')
-
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
+const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8')
 let passed = 0
 let failed = 0
-
-function assert(cond, name) {
-  if (cond) {
-    console.log(`PASS  ${name}`)
-    passed++
-  } else {
-    console.error(`FAIL  ${name}`)
-    failed++
-  }
+function assert(condition, name) {
+  if (condition) { console.log(`PASS  ${name}`); passed += 1 }
+  else { console.error(`FAIL  ${name}`); failed += 1 }
 }
 
-// Read electron/main.js
-const mainSrc = fs.readFileSync(path.join(ROOT, 'electron/main.js'), 'utf8')
+const main = read('electron/main.js')
+const preload = read('electron/preload.js')
+const helper = read('audio-service/src/main.cpp')
+const loopback = read('audio-service/src/loopback_wasapi.cpp')
+const capture = read('src/hooks/appLoopbackCapture.js')
+const screen = read('src/hooks/useScreenShare.js')
+const livekit = read('src/features/rooms/views/voice/useLiveKitRoom.js')
+const picker = read('src/features/rooms/views/voice/components/ScreenSharePicker.jsx')
+const pkg = JSON.parse(read('package.json'))
 
-// A1 — IPC audio-service:list-processes registered
-assert(
-  mainSrc.includes("ipcMain.handle('audio-service:list-processes'"),
-  "A1 — electron/main.js registers 'audio-service:list-processes' IPC"
-)
+for (const capability of [
+  'process-loopback-strict',
+  'system-loopback-exclude-process-tree',
+  'session-tagged-ipc',
+  'source-tagged-frames-v2',
+  'serialized-loopback',
+]) {
+  assert(helper.includes(capability) && main.includes(capability), `protocol capability: ${capability}`)
+}
+assert(helper.includes('kProtocolVersion = 2') && main.includes('AUDIO_PROTOCOL_VERSION = 2'), 'protocol v2 enforced on both sides')
+assert(main.includes("startNativeLoopback('system', process.pid)"), 'system loopback excludes Electron root PID')
+assert(main.includes("ipcMain.handle('audio-service:start-loopback-system'"), 'system loopback IPC registered')
+assert(main.includes('activeLoopbackSession') && main.includes('serializeLoopback'), 'loopback sessions are serialized and tagged')
+assert(main.includes('callback({ video: {} })') && !main.includes("audio: 'loopback'"), 'Chromium desktop capture is video-only')
+assert(preload.includes('startLoopbackSystem:') && preload.includes('sessionId: payload?.sessionId'), 'preload exposes system start and frame session metadata')
+assert(capture.indexOf('api.onFrame(') < capture.indexOf('await startMethod'), 'renderer subscribes before native start')
+assert(capture.includes('MIN_RMS = 0.0001') && capture.includes('MIN_PEAK = 0.001'), 'renderer validates RMS and peak thresholds')
+assert(capture.includes('startSystemLoopbackCapture') && capture.includes('await api.stopLoopback({ sessionId })'), 'renderer supports system exclusion and clean stop')
+assert(screen.includes('audio: false') && screen.includes('captured.removeTrack(track)'), 'display capture remains video-only')
+assert(loopback.includes('PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE') && loopback.includes('PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE'), 'strict include/exclude WASAPI modes used')
+assert(!loopback.includes('AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK'), 'no endpoint-loopback fallback path')
+assert(loopback.indexOf('client->Start()') < loopback.indexOf('signal_started(true)'), 'native start is acknowledged after IAudioClient start')
+assert(picker.includes('system-excluding-voice') && !picker.includes('value="system"'), 'picker exposes only safe system audio mode')
+assert(livekit.includes('startSystemLoopbackCapture') && livekit.includes('Audio-requested sharing is transactional'), 'LiveKit uses validated native audio with rollback')
+assert(livekit.includes('RoomEvent.AudioPlaybackStatusChanged') && livekit.includes('publication?.trackSid'), 'remote playback recovery and SID keys enabled')
+assert(livekit.includes("window.addEventListener('pointerdown', retryPlayback)"), 'remote playback retries after user gesture')
+assert(livekit.includes('setInterval(verifyMic, 5000)'), 'microphone health is monitored after sharing')
+assert(livekit.includes("key.startsWith(p.identity + ':')"), 'participant audio elements are cleaned on disconnect')
+assert(pkg.scripts.build.startsWith('npm run audio:validate') && pkg.scripts.release.startsWith('npm run audio:validate'), 'build and release reject stale helper binaries')
 
-// A2 — IPC audio-service:start-loopback registered and validates processId
-assert(
-  mainSrc.includes("ipcMain.handle('audio-service:start-loopback'") &&
-  mainSrc.includes("error: 'pid-not-found'"),
-  "A2 — electron/main.js registers 'audio-service:start-loopback' IPC with pid validation"
-)
-
-// A3 — IPC audio-service:stop-loopback registered
-assert(
-  mainSrc.includes("ipcMain.handle('audio-service:stop-loopback'"),
-  "A3 — electron/main.js registers 'audio-service:stop-loopback' IPC"
-)
-
-// A4 — Header audio:frame with type
-assert(
-  mainSrc.includes("wc.send('audio:frame', { type: 'mic', payload })"),
-  "A4 — electron/main.js sends audio:frame with { type, payload } header"
-)
-
-// Read electron/preload.js
-const preloadSrc = fs.readFileSync(path.join(ROOT, 'electron/preload.js'), 'utf8')
-
-// A5 — Preload exposes listProcesses, startLoopback, stopLoopback
-assert(
-  preloadSrc.includes("listProcesses: () => ipcRenderer.invoke('audio-service:list-processes')"),
-  "A5.1 — electron/preload.js exposes audioService.listProcesses()"
-)
-
-assert(
-  preloadSrc.includes("startLoopback: (payload) => ipcRenderer.invoke('audio-service:start-loopback', payload)"),
-  "A5.2 — electron/preload.js exposes audioService.startLoopback()"
-)
-
-assert(
-  preloadSrc.includes("stopLoopback: (payload) => ipcRenderer.invoke('audio-service:stop-loopback', payload)"),
-  "A5.3 — electron/preload.js exposes audioService.stopLoopback()"
-)
-
-assert(
-  preloadSrc.includes("meta = { type, floats, sampleRate: 48000, channels: 1 }"),
-  "A5.4 — electron/preload.js delivers meta with type to onFrame"
-)
-
-// C1 — useAppLoopbackAudio hook exists and is valid
-const hookPath = path.join(ROOT, 'src/hooks/useAppLoopbackAudio.js')
-assert(fs.existsSync(hookPath), "C1 — src/hooks/useAppLoopbackAudio.js exists")
-const hookSrc = fs.readFileSync(hookPath, 'utf8')
-assert(hookSrc.includes("export function useAppLoopbackAudio"), "C1.1 — exports useAppLoopbackAudio")
-assert(hookSrc.includes("startLoopback"), "C1.2 — hook invokes startLoopback")
-assert(hookSrc.includes("stopLoopback"), "C1.3 — hook invokes stopLoopback")
-
-console.log(`\n${passed} passed · ${failed} failed`)
-if (failed > 0) process.exit(1)
+console.log(`\n${passed} passed ? ${failed} failed`)
+if (failed) process.exit(1)
