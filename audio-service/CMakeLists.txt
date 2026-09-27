@@ -33,8 +33,8 @@ target_include_directories(voicecraft-audio PRIVATE
 target_compile_definitions(voicecraft-audio PRIVATE
   # miniaudio options â€” disable everything we don't need (keeps binary small)
   MA_NO_RESOURCE_MANAGEMENT=1
-  MA_NO_DEVICE_IO=0          # we DO need device I/O for mic capture
-  MA_NO_THREADING=0          # we DO need threading for the audio thread
+  # Do not define MA_NO_DEVICE_IO or MA_NO_THREADING, even as 0: miniaudio
+  # treats the presence of either macro as disabling that subsystem.
   MA_NO_LOGGING=1
   MA_NO_JSON=1               # we do JSON ourselves with simple parsing
   MA_NO_DATA_STRUCTURES=1
