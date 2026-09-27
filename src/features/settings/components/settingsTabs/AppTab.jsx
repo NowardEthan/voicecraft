@@ -19,7 +19,7 @@ function statusLabel(status, percent, version) {
     case 'downloaded':
       return version ? `Versão ${version} pronta para instalar` : 'Atualização pronta para instalar'
     case 'installing':
-      return version ? `Atualizando para ${version}… sem fechar` : 'Atualizando… sem fechar'
+      return version ? `Atualizando para ${version}\u2026 o app ser\u00e1 reiniciado` : 'Atualizando\u2026 o app ser\u00e1 reiniciado'
     case 'not-available':
       return 'Você já está na versão mais recente'
     case 'error':

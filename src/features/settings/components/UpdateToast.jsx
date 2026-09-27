@@ -131,8 +131,8 @@ export default function UpdateToast() {
                       <p className="text-[11.5px] text-muted mt-0.5 leading-snug">
                         {installing
                           ? (state.version
-                            ? `Atualizando para ${state.version}… sem fechar`
-                            : 'Atualizando… sem fechar')
+                            ? `Atualizando para ${state.version}\u2026 o app ser\u00e1 reiniciado`
+                            : 'Atualizando\u2026 o app ser\u00e1 reiniciado')
                           : ready
                             ? (state.version
                               ? `Versão ${state.version} baixada`

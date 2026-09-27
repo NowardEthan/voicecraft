@@ -126,8 +126,8 @@ let updaterWired = false
 let autoUpdaterRef = null
 /** Last status pushed to the renderer — replayed when the UI mounts late (login). */
 let lastUpdaterStatus = null
-let lastDownloadedFile = null
 let lastDownloadedVersion = null
+let updateDownloaded = false
 let isInstallingSilent = false
 
 function getAutoUpdater() {
@@ -148,71 +148,68 @@ function sendUpdater(getMainWindow, channel, payload) {
   } catch {}
 }
 
-function resolveInstallerFile(info) {
-  const candidate = info?.downloadedFile
-  if (candidate && typeof candidate === 'string' && candidate.toLowerCase().endsWith('.exe') && fs.existsSync(candidate)) {
-    return candidate
-  }
-  const tempDir = path.join(app.getPath('temp'), 'voicecraft-updater')
-  if (fs.existsSync(tempDir)) {
-    try {
-      const files = fs.readdirSync(tempDir).filter((f) => f.toLowerCase().endsWith('.exe'))
-      if (files.length > 0) {
-        const full = path.join(tempDir, files[files.length - 1])
-        if (fs.existsSync(full)) return full
-      }
-    } catch {}
-  }
-  const localAppDataDir = path.join(process.env.LOCALAPPDATA || '', 'voicecraft-updater', 'pending')
-  if (fs.existsSync(localAppDataDir)) {
-    try {
-      const files = fs.readdirSync(localAppDataDir).filter((f) => f.toLowerCase().endsWith('.exe'))
-      if (files.length > 0) {
-        const full = path.join(localAppDataDir, files[files.length - 1])
-        if (fs.existsSync(full)) return full
-      }
-    } catch {}
-  }
-  return null
+function sanitizeUpdaterLogText(value) {
+  return String(value)
+    .replace(/([?&](?:token|access_token|key|secret|signature)=)[^&\s]+/gi, '$1[REDACTED]')
+    .replace(/((?:token|secret|password|authorization|api[_-]?key)\s*[=:]\s*)[^\s,;]+/gi, '$1[REDACTED]')
 }
 
+function formatUpdaterLogArgs(args) {
+  return args.map((value) => {
+    if (value instanceof Error) return sanitizeUpdaterLogText(value.stack || value.message)
+    if (typeof value === 'string') return sanitizeUpdaterLogText(value)
+    try {
+      return sanitizeUpdaterLogText(JSON.stringify(value, (key, nested) => (
+        /token|secret|password|authorization|api[_-]?key/i.test(key) ? '[REDACTED]' : nested
+      )))
+    } catch {
+      return sanitizeUpdaterLogText(value)
+    }
+  }).join(' ')
+}
 
+function createUpdaterLogger() {
+  const write = (level) => (...args) => {
+    log(level, `[electron-updater] ` + formatUpdaterLogArgs(args))
+  }
+  return {
+    info: write('info'),
+    warn: write('warn'),
+    error: write('error'),
+    debug: write('debug'),
+  }
+}
 
+function installDownloadedUpdate(getMainWindow) {
+  if (!app.isPackaged) return { ok: false, error: 'dev' }
+  if (isInstallingSilent) return { ok: true, alreadyInstalling: true }
+  if (!updateDownloaded) {
+    log('warn', '[updater] install requested before an update was downloaded')
+    return { ok: false, error: 'Nenhuma atualiza\u00e7\u00e3o baixada.' }
+  }
 
-function runSilentInstaller(filePath, getMainWindow, version) {
-  // Back to the simple, proven approach used by Discord/Steam/etc:
-  // the user clicks "Verificar atualizações" → we call electron-updater's
-  // built-in quitAndInstall(isSilent, isForceRunAfter) which:
-  //   1. Quits Voice (no app.relaunch needed)
-  //   2. Runs the NSIS installer in silent mode
-  //   3. Restarts Voice automatically when the installer finishes
-  //
-  // This bypasses our previous hand-rolled taskkill/app.relaunch flow
-  // (which suffered from race conditions on Windows when NSIS was still
-  // copying files while we tried to restart Voice). The user must click
-  // a button to start the update — there is NO background polling or
-  // silent auto-update. They download manually from the GitHub release
-  // page or via the in-app check.
   isInstallingSilent = true
+  // Allow quitAndInstall to close the BrowserWindow instead of hiding it to tray.
+  app.isQuiting = true
   sendUpdater(getMainWindow, 'updater:status', {
     status: 'installing',
-    version: version || lastDownloadedVersion || null,
+    version: lastDownloadedVersion,
   })
+  log('info', `[updater] user requested silent install for v` + (lastDownloadedVersion || 'unknown'))
 
-  try {
-    log('info', '[updater] quitting to install v' + (version || lastDownloadedVersion))
-    setImmediate(() => {
-      getAutoUpdater().quitAndInstall(false, true)
-    })
-    return { ok: true }
-  } catch (err) {
-    isInstallingSilent = false
-    sendUpdater(getMainWindow, 'updater:status', {
-      status: 'error',
-      message: err?.message || String(err),
-    })
-    return { ok: false, error: err?.message || String(err) }
-  }
+  setImmediate(() => {
+    try {
+      // isSilent=true, isForceRunAfter=true: unattended NSIS install + forced reopen.
+      getAutoUpdater().quitAndInstall(true, true)
+    } catch (err) {
+      isInstallingSilent = false
+      app.isQuiting = false
+      const message = err?.message || String(err)
+      log('error', `[updater] quitAndInstall failed: ` + message)
+      sendUpdater(getMainWindow, 'updater:status', { status: 'error', message })
+    }
+  })
+  return { ok: true }
 }
 
 function setupUpdater(getMainWindow) {
@@ -232,40 +229,38 @@ function setupUpdater(getMainWindow) {
       return { ok: false, error: err?.message || String(err) }
     }
   })
-  ipcMain.handle('updater:install', () => {
-    if (!app.isPackaged) return { ok: false, error: 'dev' }
-    setImmediate(() => getAutoUpdater().quitAndInstall(false, true))
-    return { ok: true }
-  })
-  ipcMain.handle('updater:installSilent', () => {
-    if (!app.isPackaged) return { ok: false, error: 'dev' }
-    const installerFile = lastDownloadedFile || resolveInstallerFile()
-    return runSilentInstaller(installerFile, getMainWindow, lastDownloadedVersion)
-  })
+  const installUpdate = () => installDownloadedUpdate(getMainWindow)
+  ipcMain.handle('updater:install', installUpdate)
+  ipcMain.handle('updater:installSilent', installUpdate)
 
   if (!app.isPackaged) return
 
   const updater = getAutoUpdater()
   updater.autoDownload = true
   updater.autoInstallOnAppQuit = false
-  updater.logger = null
+  updater.logger = createUpdaterLogger()
+  log('info', '[updater] configured for background download and user-confirmed install')
 
   updater.on('checking-for-update', () => {
+    log('info', '[updater] checking for update')
     sendUpdater(getMainWindow, 'updater:status', { status: 'checking' })
   })
   updater.on('update-available', (info) => {
+    log('info', `[updater] update available: v` + (info?.version || 'unknown') + '; background download starting')
     sendUpdater(getMainWindow, 'updater:status', {
       status: 'available',
       version: info?.version || null,
     })
   })
   updater.on('update-not-available', (info) => {
+    log('info', `[updater] no update available (latest: v` + (info?.version || app.getVersion()) + ')')
     sendUpdater(getMainWindow, 'updater:status', {
       status: 'not-available',
       version: info?.version || app.getVersion(),
     })
   })
   updater.on('download-progress', (p) => {
+    log('debug', `[updater] download progress: ` + Number(p?.percent || 0).toFixed(1) + '% (' + (p?.transferred || 0) + '/' + (p?.total || 0) + ' bytes, ' + (p?.bytesPerSecond || 0) + ' B/s)')
     sendUpdater(getMainWindow, 'updater:status', {
       status: 'downloading',
       percent: typeof p?.percent === 'number' ? p.percent : 0,
@@ -273,16 +268,15 @@ function setupUpdater(getMainWindow) {
   })
   updater.on('update-downloaded', (info) => {
     lastDownloadedVersion = info?.version || null
-    lastDownloadedFile = resolveInstallerFile(info)
+    updateDownloaded = true
+    log('info', `[updater] update downloaded: v` + (lastDownloadedVersion || 'unknown') + '; waiting for user confirmation')
     sendUpdater(getMainWindow, 'updater:status', {
       status: 'downloaded',
       version: lastDownloadedVersion,
     })
-    if (lastDownloadedFile) {
-      runSilentInstaller(lastDownloadedFile, getMainWindow, lastDownloadedVersion)
-    }
   })
   updater.on('error', (err) => {
+    log('error', `[updater] error: ` + sanitizeUpdaterLogText(err?.stack || err?.message || String(err)))
     sendUpdater(getMainWindow, 'updater:status', {
       status: 'error',
       message: err?.message || String(err),

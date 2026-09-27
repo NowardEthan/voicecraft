@@ -6,8 +6,6 @@
 ;                            %LocalAppData%\Programs\Voice (no admin)
 ;   - deleteAppDataOnUninstall: false  -> preserve user data on uninstall
 ;
-; After install, our main.js self-relaunches Voice via
-; app.relaunch() 12 s after spawning the installer. We deliberately do
-; NOT pass /restartapplications to NSIS because it triggers UAC on some
-; Windows configurations even when perMachine is false. See
-; electron/main.js :: runSilentInstaller.
+; Installation is started only after explicit user confirmation.
+; electron-updater calls NSIS silently and forces VoiceCraft to reopen
+; after the installer finishes (quitAndInstall(true, true)).
