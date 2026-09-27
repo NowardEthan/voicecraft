@@ -67,7 +67,7 @@ export default function SpaceEventsView({ space, onEditSpace, isCreator, canMana
   }
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto overscroll-contain bg-canvas" style={spaceTokens(space)}>
+    <div className="vc-space-page vc-space-events h-full min-h-0 overflow-y-auto overscroll-contain bg-canvas" style={spaceTokens(space)}>
       <div className="max-w-3xl mx-auto px-4 sm:px-10 pt-12 sm:pt-8 pb-8">
         <div className="flex items-center gap-3 mb-6">
           <div className="w-11 h-11 rounded-2xl bg-accent/15 text-accent flex items-center justify-center">
@@ -82,7 +82,7 @@ export default function SpaceEventsView({ space, onEditSpace, isCreator, canMana
         {canEdit && (
           <form
             onSubmit={addEvent}
-            className="mb-6 rounded-[16px] border border-line bg-surface1/80 backdrop-blur p-4 space-y-3"
+            className="vc-space-card mb-6 rounded-[16px] border border-line bg-surface1/80 p-4 space-y-3"
           >
             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">Novo evento</p>
             <input
@@ -150,7 +150,7 @@ export default function SpaceEventsView({ space, onEditSpace, isCreator, canMana
 
 function EventRow({ ev, canEdit, onRemove, attendees, goingCount, myStatus, busy, onRsvp, onClearRsvp }) {
   return (
-    <li className="rounded-[14px] border border-line bg-surface1/80 backdrop-blur px-4 py-3">
+    <li className="vc-space-card rounded-[14px] border border-line bg-surface1/80 px-4 py-3">
       <div className="flex items-start gap-3">
         <div className="w-9 h-9 rounded-xl bg-accent/15 text-accent flex items-center justify-center shrink-0">
           <Calendar size={14} />

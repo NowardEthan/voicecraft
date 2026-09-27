@@ -6,7 +6,7 @@ const NextEventCard = memo(function NextEventCard({ events = [], onOpenEvents })
   const next = nextUpcomingEvent(events)
 
   return (
-    <section className="rounded-[18px] border border-white/[0.07] bg-[#14161c]/90 overflow-hidden">
+    <section className="vc-space-card rounded-[18px] border border-white/[0.07] bg-[#14161c]/90 overflow-hidden">
       <div className="flex items-center justify-between gap-3 px-4 sm:px-5 pt-4 pb-2">
         <div className="flex items-center gap-2 min-w-0">
           <CalendarDays size={14} className="text-accent shrink-0" strokeWidth={1.75} />

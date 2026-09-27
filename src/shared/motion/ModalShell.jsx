@@ -76,6 +76,8 @@ export function ModalShell({
     '4xl': 'max-w-4xl',
   }[maxWidth] || 'max-w-md'
 
+  const spaceOverlayClass = panelClassName.includes('vc-space-modal') ? ' vc-space-overlay' : ''
+
   const overlayStyle = variant === 'coral'
     ? { background: 'rgba(4, 5, 8, 0.68)' }
     : { background: 'rgba(0, 0, 0, 0.72)' }
@@ -85,7 +87,7 @@ export function ModalShell({
       {open && (
         <motion.div
           key="modal-overlay"
-          className="fixed inset-0 flex items-center justify-center z-50 p-4 sm:p-6"
+          className={`fixed inset-0 flex items-center justify-center z-50 p-4 sm:p-6${spaceOverlayClass}`}
           style={overlayStyle}
           onClick={closeOnBackdrop ? onClose : undefined}
           {...overlayVariants}

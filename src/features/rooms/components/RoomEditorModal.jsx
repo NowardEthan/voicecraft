@@ -33,6 +33,7 @@ export default function RoomEditorModal({
   room = null,
   space = null,
   defaultGroupId = null,
+  initialPurpose = null,
   submitting = false,
   onClose,
   onCreate,
@@ -74,8 +75,9 @@ export default function RoomEditorModal({
       setCover(room.cover || null)
       setCoverRemoved(false)
     } else {
-      setPurposeKey('conversation')
-      setName(DEFAULT_ROOM_NAMES.conversation)
+      const requestedPurpose = normalizePurposeKey(initialPurpose || 'conversation')
+      setPurposeKey(requestedPurpose)
+      setName(DEFAULT_ROOM_NAMES[requestedPurpose] || DEFAULT_ROOM_NAMES.conversation)
       setManuallyRenamed(false)
       setIcon(null)
       setEmoji(null)
@@ -89,7 +91,7 @@ export default function RoomEditorModal({
     setError(null)
     setIconOpen(false)
     setColorOpen(false)
-  }, [open, isEdit, room])
+  }, [open, isEdit, room, initialPurpose])
 
   const selected = PURPOSE_BY_KEY[purposeKey] || PURPOSE_BY_KEY.conversation
   const originalPurpose = isEdit ? purposeOf(room).key : null
@@ -184,11 +186,11 @@ export default function RoomEditorModal({
       onClose={onClose}
       labelledBy="room-editor-title"
       maxWidth="lg"
-      panelClassName="rounded-[20px] overflow-hidden"
+      panelClassName="vc-space-modal rounded-[20px] overflow-hidden"
     >
       <form
         onSubmit={handleSubmit}
-        className="flex flex-col min-w-0 max-h-[min(88vh,720px)] rounded-[20px] overflow-hidden bg-[#14161b] border border-white/[0.08]"
+        className="vc-space-modal__surface flex flex-col min-w-0 max-h-[min(88vh,720px)] rounded-[20px] overflow-hidden bg-[#14161b] border border-white/[0.08]"
       >
         <header className="shrink-0 flex items-start justify-between gap-3 px-5 pt-5 pb-3">
           <div className="min-w-0">

@@ -289,12 +289,12 @@ export default function SpaceHubModal({
       onClose={onClose}
       labelledBy="space-hub-title"
       maxWidth="2xl"
-      panelClassName="!max-w-[920px] rounded-[22px]"
+      panelClassName="vc-space-modal !max-w-[920px] rounded-[22px]"
       variant="coral"
     >
       <div
         className="
-          rounded-[22px] overflow-hidden flex flex-col
+          vc-space-modal__surface rounded-[22px] overflow-hidden flex flex-col
           max-h-[min(90vh,780px)]
           bg-[#0b0c10] border border-[#ff3f6c]/25
           shadow-[0_0_0_1px_rgba(255,63,108,0.08),0_24px_64px_rgba(0,0,0,0.55)]

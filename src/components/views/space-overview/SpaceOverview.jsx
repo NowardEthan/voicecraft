@@ -59,7 +59,7 @@ const SpaceOverview = memo(function SpaceOverview({
   const handleJoinActive = () => {
     if (activeRoom?.id === '__optimistic__') return
     if (activeRoom) onSelectRoom?.(activeRoom)
-    else onCreateRoom?.('voice')
+    else onCreateRoom?.({ initialPurpose: 'voice' })
   }
 
   const handleSelectRoom = (room) => {
@@ -79,7 +79,7 @@ const SpaceOverview = memo(function SpaceOverview({
   return (
     <AppearGroup
       key={space.id}
-      className="@container space-y-4 sm:space-y-5"
+      className="vc-space-overview @container space-y-4 sm:space-y-5"
       stagger={0.055}
       delayChildren={0.04}
     >
@@ -101,7 +101,7 @@ const SpaceOverview = memo(function SpaceOverview({
             icon={MessageCircle}
             title="Crie sua primeira sala"
             body="Adicione uma sala de conversa ou voz para o Space ganhar vida."
-            action={canCreateRoom ? { label: 'Criar sala', onClick: () => onCreateRoom?.('conversation') } : undefined}
+            action={canCreateRoom ? { label: 'Criar sala', onClick: () => onCreateRoom?.({ initialPurpose: 'conversation' }) } : undefined}
             accent
           />
         </AppearItem>
@@ -130,7 +130,7 @@ const SpaceOverview = memo(function SpaceOverview({
                 rooms={rooms}
                 members={members}
                 onSelectRoom={handleSelectRoom}
-                onBrowseRooms={() => onCreateRoom?.('voice')}
+                onBrowseRooms={() => onCreateRoom?.({ initialPurpose: 'voice' })}
               />
               <NextEventCard
                 events={space.events}

@@ -219,6 +219,26 @@ export function useLiveKitRoom({
   isMutedRef.current = isMuted
   isDeafenedRef.current = isDeafened
 
+  // Keep update installation from interrupting an active room or screen share.
+  useEffect(() => {
+    const updater = typeof window !== 'undefined' ? window.electronAPI?.updater : null
+    if (typeof updater?.setSessionActive !== 'function') return
+    const voiceActive = !!(room?.id && currentUserId)
+    const screenShareActive = screenSharing || !!screenShare.stream
+    void updater.setSessionActive({
+      active: voiceActive || screenShareActive,
+      voiceActive,
+      screenShareActive,
+    }).catch(() => {})
+  }, [room?.id, currentUserId, screenSharing, screenShare.stream])
+
+  useEffect(() => () => {
+    const updater = typeof window !== 'undefined' ? window.electronAPI?.updater : null
+    if (typeof updater?.setSessionActive === 'function') {
+      void updater.setSessionActive({ active: false }).catch(() => {})
+    }
+  }, [])
+
   // Firestore peers collection — survives presence `online` flicker.
   useEffect(() => {
     const offJoined = sig.onPeerJoined?.((msg) => {

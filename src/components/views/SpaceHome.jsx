@@ -56,7 +56,7 @@ export default function SpaceHome({
   }
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto overscroll-contain bg-canvas" style={spaceTokens(space)}>
+    <div className="vc-space-page h-full min-h-0 overflow-y-auto overscroll-contain bg-canvas" style={spaceTokens(space)}>
       <div className="max-w-6xl mx-auto w-full px-3 sm:px-6 md:px-10 pt-12 sm:pt-6 md:pt-8 pb-6 sm:pb-8">
         <SpaceOverview
           space={space}

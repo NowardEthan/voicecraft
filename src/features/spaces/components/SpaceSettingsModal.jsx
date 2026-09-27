@@ -268,11 +268,11 @@ export default function SpaceSettingsModal({ open, space, onSave, onClose, isCre
       labelledBy="space-settings-title"
       maxWidth="2xl"
       closeOnEscape={!iconOpen && !colorOpen && !iconCrop}
-      panelClassName="rounded-[20px] overflow-hidden"
+      panelClassName="vc-space-modal rounded-[20px] overflow-hidden"
     >
       <form
         onSubmit={handleSubmit}
-        className="flex flex-col min-w-0 max-h-[min(780px,calc(100vh-40px))] rounded-[20px] overflow-hidden"
+        className="vc-space-modal__surface flex flex-col min-w-0 max-h-[min(780px,calc(100vh-40px))] rounded-[20px] overflow-hidden"
         style={{
           ...spaceTokens({ color }),
           background: '#14161b',

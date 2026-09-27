@@ -122,10 +122,10 @@ export default function ProfilePopover({
       onClose={onClose}
       labelledBy="profile-name"
       maxWidth="sm"
-      panelClassName="rounded-[28px]"
+      panelClassName="vc-space-modal rounded-[28px]"
     >
       <div
-        className="relative w-full max-w-[380px] flex flex-col rounded-[28px] overflow-hidden shadow-2xl vc-card-shell"
+        className="vc-space-profile vc-space-modal__surface relative w-full max-w-[380px] flex flex-col rounded-[28px] overflow-hidden shadow-2xl vc-card-shell"
         style={{
           maxHeight: 'min(720px, calc(100vh - 48px))',
           background: bodyBg,

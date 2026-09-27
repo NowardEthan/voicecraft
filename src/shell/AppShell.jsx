@@ -543,7 +543,7 @@ export default function AppShell({ account }) {
       currentSpaceId={currentSpace?.id || null}
       currentRoomId={selectedRoom?.id || currentRoom?.id || null}
     >
-    <div className="flex h-full min-h-0 bg-canvas overflow-hidden text-strong" style={rootTokens}>
+    <div className="vc-space-shell flex h-full min-h-0 bg-canvas overflow-hidden text-strong" style={rootTokens}>
       {/* Panel 1: Spaces rail */}
       <SpacesRail
         compact={compactRail}
@@ -594,7 +594,11 @@ export default function AppShell({ account }) {
               openRoomFocus(room)
               if (overlayNav) setPanelCollapsed(true)
             }}
-            onCreateRoom={(groupId) => setRoomEditor({ mode: 'create', groupId: groupId || null })}
+            onCreateRoom={(request) => setRoomEditor({
+              mode: 'create',
+              groupId: typeof request === 'string' ? request : request?.groupId || null,
+              initialPurpose: typeof request === 'object' ? request?.initialPurpose || null : null,
+            })}
             onEditRoom={(room) => setRoomEditor({ mode: 'edit', room })}
             onDeleteRoom={deleteRoom}
             members={membersWithTags}
@@ -815,7 +819,11 @@ export default function AppShell({ account }) {
                   homeTab={homeTab}
                   onSelectRoom={openRoomFocus}
                   onSelectSpace={handleSelectSpace}
-                  onCreateRoom={(groupId) => setRoomEditor({ mode: 'create', groupId: groupId || null })}
+                  onCreateRoom={(request) => setRoomEditor({
+                    mode: 'create',
+                    groupId: typeof request === 'string' ? request : request?.groupId || null,
+                    initialPurpose: typeof request === 'object' ? request?.initialPurpose || null : null,
+                  })}
                   onCreateSpace={() => setShowSpaceCreator(true)}
                   onOpenHub={() => setShowSpaceHub(true)}
                   onJoinPublic={handleHubJoined}
@@ -952,6 +960,7 @@ export default function AppShell({ account }) {
           room={roomEditor?.room || null}
           space={currentSpace}
           defaultGroupId={roomEditor?.groupId || null}
+          initialPurpose={roomEditor?.initialPurpose || null}
           submitting={creatingRoom}
           onClose={() => setRoomEditor(null)}
           onCreate={createRoom}

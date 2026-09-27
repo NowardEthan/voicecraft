@@ -1,5 +1,5 @@
 import { memo, useMemo } from 'react'
-import { Activity, ChevronRight, Radio, UserPlus } from 'lucide-react'
+import { Activity, ChevronRight, Circle, Radio } from 'lucide-react'
 import { PersonAvatar } from '../../../features/people/components/PersonAvatar'
 import { memberDisplayName, membersInRoom } from './overviewHelpers'
 
@@ -30,15 +30,15 @@ const SpaceActivity = memo(function SpaceActivity({
         id: `online-${m.userId}`,
         kind: 'online',
         member: m,
-        title: `${memberDisplayName(m)} entrou no ${space?.name || 'Space'}`,
-        detail: 'Online agora',
+        title: `${memberDisplayName(m)} est\u00e1 online em ${space?.name || 'Space'}`,
+        detail: 'Dispon\u00edvel agora',
       })
     }
     return out.slice(0, 6)
   }, [members, rooms, space?.name])
 
   return (
-    <section className="rounded-[18px] border border-white/[0.07] bg-[#14161c]/90 overflow-hidden">
+    <section className="vc-space-card rounded-[18px] border border-white/[0.07] bg-[#14161c]/90 overflow-hidden">
       <div className="flex items-center justify-between gap-3 px-4 sm:px-5 pt-4 pb-3">
         <div className="flex items-center gap-2 min-w-0">
           <Activity size={15} className="text-accent shrink-0" strokeWidth={1.75} />
@@ -51,7 +51,7 @@ const SpaceActivity = memo(function SpaceActivity({
           <div className="rounded-[14px] border border-dashed border-white/[0.08] bg-[#0e1016]/55 px-4 py-8 text-center">
             <p className="text-[13.5px] font-semibold text-strong">Ainda quieto por aqui</p>
             <p className="text-[12.5px] text-muted mt-1 leading-snug max-w-md mx-auto">
-              A atividade do Space aparece aqui quando pessoas entram em salas ou ficam online.
+              O estado atual do Space aparece aqui quando houver pessoas em salas ou online.
             </p>
           </div>
         </div>
@@ -69,7 +69,7 @@ const SpaceActivity = memo(function SpaceActivity({
                     item.kind === 'in-room' ? 'bg-accent/15 text-accent' : 'bg-emerald-500/15 text-emerald-400'
                   }`}
                 >
-                  {item.kind === 'in-room' ? <Radio size={14} /> : <UserPlus size={14} />}
+                  {item.kind === 'in-room' ? <Radio size={14} /> : <Circle size={12} fill="currentColor" />}
                 </span>
                 <PersonAvatar
                   src={item.member?.photoURL}

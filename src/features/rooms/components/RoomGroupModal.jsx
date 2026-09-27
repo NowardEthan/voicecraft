@@ -92,11 +92,11 @@ export function RoomGroupModal({
         maxWidth="lg"
         closeOnEscape={!iconOpen && !colorOpen && !busy}
         closeOnBackdrop={!iconOpen && !colorOpen && !busy}
-        panelClassName="rounded-[20px] overflow-hidden"
+        panelClassName="vc-space-modal rounded-[20px] overflow-hidden"
       >
         <form
           onSubmit={submit}
-          className="bg-[#14161b] border border-white/[0.08] rounded-[20px] overflow-hidden max-h-[min(720px,calc(100vh-40px))] flex flex-col"
+          className="vc-space-modal__surface bg-[#14161b] border border-white/[0.08] rounded-[20px] overflow-hidden max-h-[min(720px,calc(100vh-40px))] flex flex-col"
         >
           <header className="shrink-0 flex items-start justify-between gap-3 px-5 pt-4 pb-3 border-b border-white/[0.06]">
             <div>

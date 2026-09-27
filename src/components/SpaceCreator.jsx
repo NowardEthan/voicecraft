@@ -301,7 +301,7 @@ export default function SpaceCreator({ onCreate, onClose }) {
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.18, ease: EASE_OUT }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-8 sm:p-10"
+      className="vc-space-overlay fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-8"
       style={{ background: 'rgba(4, 5, 8, 0.68)', backdropFilter: 'blur(2px)' }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
@@ -311,7 +311,7 @@ export default function SpaceCreator({ onCreate, onClose }) {
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.97, y: 2 }}
         transition={{ duration: 0.26, ease: EASE_OUT }}
-        className="relative w-full max-w-[940px] bg-[#1a1a1e] rounded-2xl border border-accent/25 shadow-[0_24px_80px_-20px_var(--space-accent-glow-24),0_8px_24px_-8px_rgba(0,0,0,0.5)] overflow-hidden flex flex-col max-h-[92vh]"
+        className="vc-space-modal vc-space-modal__surface relative w-full max-w-[940px] bg-[#1a1a1e] rounded-2xl border border-accent/25 shadow-[0_24px_80px_-20px_var(--space-accent-glow-24),0_8px_24px_-8px_rgba(0,0,0,0.5)] overflow-hidden flex flex-col max-h-[92vh]"
         style={spaceTokens({ color: theme.css })}
       >
         {/* Modal header — title left, stepper centered, close right */}

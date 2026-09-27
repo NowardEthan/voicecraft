@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer, Tray, Menu, nativeImage, shell, session } = require('electron')
+const { app, BrowserWindow, ipcMain, desktopCapturer, Tray, Menu, nativeImage, shell, session, powerMonitor } = require('electron')
 const path = require('path')
 const os = require('os')
 const fs = require('fs')
@@ -122,13 +122,28 @@ async function mintLiveKitToken({ spaceId, roomId, identity, displayName }) {
 // ---------- Auto-update (electron-updater + GitHub Releases) ----------
 // Inlined so Vite's single-file main bundle does not `require('./updater')`
 // at runtime (that path does not exist under dist-electron/).
+const UPDATE_INITIAL_DELAY_MS = 6_000
+const UPDATE_INTERVAL_MS = 30 * 60_000
+const UPDATE_THROTTLE_MS = 60_000
+const UPDATE_RETRY_DELAY_MS = 5 * 60_000
+const UPDATE_AUTO_INSTALL_DELAY_MS = 8_000
+
 let updaterWired = false
 let autoUpdaterRef = null
-/** Last status pushed to the renderer â€” replayed when the UI mounts late (login). */
+/** Last status pushed to the renderer — replayed when the UI mounts late (login). */
 let lastUpdaterStatus = null
 let lastDownloadedVersion = null
 let updateDownloaded = false
 let isInstallingSilent = false
+let updaterCheckPromise = null
+let updaterLastCheckStartedAt = 0
+let updaterInitialTimer = null
+let updaterIntervalTimer = null
+let updaterRetryTimer = null
+let updaterAutoInstallTimer = null
+let updaterGetMainWindow = null
+let updaterSessionActive = false
+const updaterLifecycleCleanups = new Set()
 
 function getAutoUpdater() {
   if (!autoUpdaterRef) {
@@ -180,6 +195,21 @@ function createUpdaterLogger() {
   }
 }
 
+function cleanupUpdaterLifecycle() {
+  if (updaterInitialTimer) clearTimeout(updaterInitialTimer)
+  if (updaterIntervalTimer) clearInterval(updaterIntervalTimer)
+  if (updaterRetryTimer) clearTimeout(updaterRetryTimer)
+  if (updaterAutoInstallTimer) clearTimeout(updaterAutoInstallTimer)
+  updaterInitialTimer = null
+  updaterIntervalTimer = null
+  updaterRetryTimer = null
+  updaterAutoInstallTimer = null
+  for (const cleanup of updaterLifecycleCleanups) {
+    try { cleanup() } catch {}
+  }
+  updaterLifecycleCleanups.clear()
+}
+
 function teardownApp({ destroyWindows = false } = {}) {
   stopAudioService()
   stopOAuthServer()
@@ -187,6 +217,7 @@ function teardownApp({ destroyWindows = false } = {}) {
     try { tray.destroy() } catch { /* already destroyed */ }
     tray = null
   }
+
   if (!destroyWindows) return
 
   for (const window of BrowserWindow.getAllWindows()) {
@@ -205,7 +236,7 @@ function installDownloadedUpdate(getMainWindow) {
   if (isInstallingSilent) return { ok: true, alreadyInstalling: true }
   if (!updateDownloaded) {
     log('warn', '[updater] install requested before an update was downloaded')
-    return { ok: false, error: 'Nenhuma atualiza\u00e7\u00e3o baixada.' }
+    return { ok: false, error: 'Nenhuma atualização baixada.' }
   }
 
   let updater
@@ -213,7 +244,7 @@ function installDownloadedUpdate(getMainWindow) {
     updater = getAutoUpdater()
   } catch (err) {
     const message = err?.message || String(err)
-    log('error', `[updater] failed to prepare install: ` + message)
+    log('error', `[updater] failed to prepare install: ` + sanitizeUpdaterLogText(message))
     sendUpdater(getMainWindow, 'updater:status', { status: 'error', message })
     return { ok: false, error: message }
   }
@@ -224,7 +255,7 @@ function installDownloadedUpdate(getMainWindow) {
     status: 'installing',
     version: lastDownloadedVersion,
   })
-  log('info', `[updater] user requested silent install for v` + (lastDownloadedVersion || 'unknown'))
+  log('info', `[updater] installing downloaded v` + (lastDownloadedVersion || 'unknown') + ' after app exit')
 
   const installOnQuit = () => {
     try {
@@ -232,7 +263,7 @@ function installDownloadedUpdate(getMainWindow) {
       updater.install(true, true)
     } catch (err) {
       // The app has already quit, so only durable logging is still available.
-      log('error', `[updater] install after quit failed: ` + (err?.message || String(err)))
+      log('error', `[updater] install after quit failed: ` + sanitizeUpdaterLogText(err?.message || String(err)))
     }
   }
 
@@ -247,31 +278,151 @@ function installDownloadedUpdate(getMainWindow) {
     isInstallingSilent = false
     app.isQuiting = false
     const message = err?.message || String(err)
-    log('error', `[updater] failed to quit for install: ` + message)
+    log('error', `[updater] failed to quit for install: ` + sanitizeUpdaterLogText(message))
     sendUpdater(getMainWindow, 'updater:status', { status: 'error', message })
     return { ok: false, error: message }
   }
   return { ok: true }
 }
 
+function scheduleUpdaterRetry(reason) {
+  if (updaterRetryTimer || updateDownloaded || isInstallingSilent || app.isQuiting) {
+    if (updaterRetryTimer) log('debug', `[updater] retry already scheduled; skip duplicate (${reason})`)
+    return
+  }
+  log('warn', `[updater] scheduling retry in ${UPDATE_RETRY_DELAY_MS}ms after ${reason}`)
+  updaterRetryTimer = setTimeout(() => {
+    updaterRetryTimer = null
+    void requestUpdaterCheck('retry')
+  }, UPDATE_RETRY_DELAY_MS)
+}
+
+function requestUpdaterCheck(reason, { force = false } = {}) {
+  if (!app.isPackaged) return Promise.resolve({ ok: false, error: 'dev' })
+  if (isInstallingSilent) {
+    log('debug', `[updater] check skipped (${reason}): installation in progress`)
+    return Promise.resolve({ ok: false, skipped: 'installing' })
+  }
+  if (updateDownloaded) {
+    log('debug', `[updater] check skipped (${reason}): update already downloaded`)
+    return Promise.resolve({ ok: false, skipped: 'downloaded' })
+  }
+  if (updaterCheckPromise) {
+    log('debug', `[updater] check skipped (${reason}): another check is in flight`)
+    return Promise.resolve({ ok: false, skipped: 'in-flight' })
+  }
+
+  const elapsed = Date.now() - updaterLastCheckStartedAt
+  if (!force && updaterLastCheckStartedAt && elapsed < UPDATE_THROTTLE_MS) {
+    log('debug', `[updater] check throttled (${reason}); last check started ${elapsed}ms ago`)
+    return Promise.resolve({ ok: false, skipped: 'throttled' })
+  }
+
+  if (updaterRetryTimer) {
+    clearTimeout(updaterRetryTimer)
+    updaterRetryTimer = null
+  }
+  updaterLastCheckStartedAt = Date.now()
+  log('info', `[updater] starting update check (${reason}${force ? ', forced' : ''})`)
+  updaterCheckPromise = getAutoUpdater().checkForUpdates()
+    .then(async (result) => {
+      // With autoDownload enabled, checkForUpdates may resolve before the download.
+      // Keep the coordinator locked until that background download settles.
+      if (result?.downloadPromise) await result.downloadPromise
+      return { ok: true, updateInfo: result?.updateInfo || null }
+    })
+    .catch((err) => {
+      const message = sanitizeUpdaterLogText(err?.message || String(err))
+      log('warn', `[updater] update check failed (${reason}): ` + message)
+      scheduleUpdaterRetry('check failure')
+      return { ok: false, error: message }
+    })
+    .finally(() => {
+      updaterCheckPromise = null
+    })
+  return updaterCheckPromise
+}
+
+function scheduleDownloadedUpdateInstall(reason, delayMs = UPDATE_AUTO_INSTALL_DELAY_MS) {
+  if (!updateDownloaded || isInstallingSilent || app.isQuiting) return { ok: false, skipped: 'not-ready' }
+  if (updaterSessionActive) {
+    if (updaterAutoInstallTimer) {
+      clearTimeout(updaterAutoInstallTimer)
+      updaterAutoInstallTimer = null
+    }
+    log('info', `[updater] automatic install deferred (${reason}): voice or screen-share session active`)
+    return { ok: true, deferred: true }
+  }
+  if (updaterAutoInstallTimer) {
+    log('debug', `[updater] automatic install already scheduled; skip duplicate (${reason})`)
+    return { ok: true, scheduled: true }
+  }
+
+  log('info', `[updater] automatic install scheduled in ${delayMs}ms (${reason})`)
+  updaterAutoInstallTimer = setTimeout(() => {
+    updaterAutoInstallTimer = null
+    if (updaterSessionActive) {
+      log('info', '[updater] automatic install paused: session became active during stabilization')
+      return
+    }
+    installDownloadedUpdate(updaterGetMainWindow)
+  }, delayMs)
+  return { ok: true, scheduled: true }
+}
+
+function setUpdaterSessionActive(payload = {}) {
+  const active = !!(payload.active || payload.voiceActive || payload.screenShareActive)
+  if (active === updaterSessionActive) return { ok: true, active }
+  updaterSessionActive = active
+  log('info', `[updater] media session is now ${active ? 'active; installs will wait' : 'idle'}`)
+  if (active && updaterAutoInstallTimer) {
+    clearTimeout(updaterAutoInstallTimer)
+    updaterAutoInstallTimer = null
+  } else if (!active && updateDownloaded) {
+    scheduleDownloadedUpdateInstall('media session ended')
+  }
+  return { ok: true, active }
+}
+
+function wireUpdaterWindow(win) {
+  if (!win || win.isDestroyed()) return
+  const onShow = () => { void requestUpdaterCheck('window shown') }
+  const onLoad = () => {
+    if (lastUpdaterStatus) sendUpdater(updaterGetMainWindow, 'updater:status', lastUpdaterStatus)
+    void requestUpdaterCheck('window loaded')
+  }
+  win.on('show', onShow)
+  win.webContents.on('did-finish-load', onLoad)
+  const cleanup = () => {
+    try { win.removeListener('show', onShow) } catch {}
+    try { win.webContents.removeListener('did-finish-load', onLoad) } catch {}
+    updaterLifecycleCleanups.delete(cleanup)
+  }
+  updaterLifecycleCleanups.add(cleanup)
+  win.once('closed', cleanup)
+}
+
 function setupUpdater(getMainWindow) {
   if (updaterWired) return
   updaterWired = true
+  updaterGetMainWindow = getMainWindow
 
   ipcMain.handle('updater:get-version', () => app.getVersion())
   ipcMain.handle('updater:get-status', () => lastUpdaterStatus)
-  ipcMain.handle('updater:check', async () => {
+  ipcMain.handle('updater:check', () => {
     if (!app.isPackaged) {
-      return { ok: false, error: 'AtualizaÃ§Ãµes sÃ³ funcionam no app instalado.' }
+      return { ok: false, error: 'Atualizações só funcionam no app instalado.' }
     }
-    try {
-      const result = await getAutoUpdater().checkForUpdates()
-      return { ok: true, updateInfo: result?.updateInfo || null }
-    } catch (err) {
-      return { ok: false, error: err?.message || String(err) }
-    }
+    return requestUpdaterCheck('manual IPC', { force: true })
   })
-  const installUpdate = () => installDownloadedUpdate(getMainWindow)
+  ipcMain.handle('updater:set-session-active', (_event, payload) => setUpdaterSessionActive(payload))
+  const installUpdate = () => {
+    if (updaterSessionActive) {
+      log('info', '[updater] manual install deferred until the media session ends')
+      return { ok: true, deferred: true }
+    }
+    return installDownloadedUpdate(getMainWindow)
+  }
   ipcMain.handle('updater:install', installUpdate)
   ipcMain.handle('updater:installSilent', installUpdate)
 
@@ -281,74 +432,86 @@ function setupUpdater(getMainWindow) {
   updater.autoDownload = true
   updater.autoInstallOnAppQuit = false
   updater.logger = createUpdaterLogger()
-  log('info', '[updater] configured for background download and user-confirmed install')
+  log('info', '[updater] configured for continuous background checks, download, and idle auto-install')
 
-  updater.on('checking-for-update', () => {
+  const onChecking = () => {
     log('info', '[updater] checking for update')
     sendUpdater(getMainWindow, 'updater:status', { status: 'checking' })
-  })
-  updater.on('update-available', (info) => {
+  }
+  const onAvailable = (info) => {
     log('info', `[updater] update available: v` + (info?.version || 'unknown') + '; background download starting')
     sendUpdater(getMainWindow, 'updater:status', {
       status: 'available',
       version: info?.version || null,
     })
-  })
-  updater.on('update-not-available', (info) => {
+  }
+  const onNotAvailable = (info) => {
     log('info', `[updater] no update available (latest: v` + (info?.version || app.getVersion()) + ')')
     sendUpdater(getMainWindow, 'updater:status', {
       status: 'not-available',
       version: info?.version || app.getVersion(),
     })
-  })
-  updater.on('download-progress', (p) => {
-    log('debug', `[updater] download progress: ` + Number(p?.percent || 0).toFixed(1) + '% (' + (p?.transferred || 0) + '/' + (p?.total || 0) + ' bytes, ' + (p?.bytesPerSecond || 0) + ' B/s)')
+  }
+  const onDownloadProgress = (progress) => {
+    log('debug', `[updater] download progress: ` + Number(progress?.percent || 0).toFixed(1) + '%')
     sendUpdater(getMainWindow, 'updater:status', {
       status: 'downloading',
-      percent: typeof p?.percent === 'number' ? p.percent : 0,
+      percent: typeof progress?.percent === 'number' ? progress.percent : 0,
     })
-  })
-  updater.on('update-downloaded', (info) => {
+  }
+  const onDownloaded = (info) => {
     lastDownloadedVersion = info?.version || null
     updateDownloaded = true
-    log('info', `[updater] update downloaded: v` + (lastDownloadedVersion || 'unknown') + '; waiting for user confirmation')
+    if (updaterRetryTimer) {
+      clearTimeout(updaterRetryTimer)
+      updaterRetryTimer = null
+    }
+    log('info', `[updater] update downloaded: v` + (lastDownloadedVersion || 'unknown') + '; waiting for an idle install window')
     sendUpdater(getMainWindow, 'updater:status', {
       status: 'downloaded',
       version: lastDownloadedVersion,
     })
-  })
-  updater.on('error', (err) => {
-    log('error', `[updater] error: ` + sanitizeUpdaterLogText(err?.stack || err?.message || String(err)))
-    sendUpdater(getMainWindow, 'updater:status', {
-      status: 'error',
-      message: err?.message || String(err),
-    })
+    scheduleDownloadedUpdateInstall('download completed')
+  }
+  const onError = (err) => {
+    const message = sanitizeUpdaterLogText(err?.message || String(err))
+    log('error', `[updater] error: ` + sanitizeUpdaterLogText(err?.stack || message))
+    sendUpdater(getMainWindow, 'updater:status', { status: 'error', message })
+    scheduleUpdaterRetry('updater error event')
+  }
+
+  const updaterListeners = [
+    ['checking-for-update', onChecking],
+    ['update-available', onAvailable],
+    ['update-not-available', onNotAvailable],
+    ['download-progress', onDownloadProgress],
+    ['update-downloaded', onDownloaded],
+    ['error', onError],
+  ]
+  for (const [event, listener] of updaterListeners) updater.on(event, listener)
+  updaterLifecycleCleanups.add(() => {
+    for (const [event, listener] of updaterListeners) updater.removeListener(event, listener)
   })
 
-  const runCheck = () => {
-    updater.checkForUpdates().catch(() => {})
-  }
-  // Early + late: UI may still be on login when the first check finishes.
-  setTimeout(runCheck, 6_000)
-  setTimeout(runCheck, 45_000)
+  const onResume = () => { void requestUpdaterCheck('system resume') }
+  const onUnlock = () => { void requestUpdaterCheck('unlock-screen') }
+  powerMonitor.on('resume', onResume)
+  powerMonitor.on('unlock-screen', onUnlock)
+  updaterLifecycleCleanups.add(() => {
+    powerMonitor.removeListener('resume', onResume)
+    powerMonitor.removeListener('unlock-screen', onUnlock)
+  })
 
-  // When the window finally loads (or user finishes login), re-push last status.
-  const replay = () => {
-    if (!lastUpdaterStatus) return
-    const s = lastUpdaterStatus.status
-    if (s === 'available' || s === 'downloading' || s === 'downloaded' || s === 'installing') {
-      sendUpdater(getMainWindow, 'updater:status', lastUpdaterStatus)
-    }
-  }
-  const win = typeof getMainWindow === 'function' ? getMainWindow() : null
-  if (win && !win.isDestroyed()) {
-    win.webContents.on('did-finish-load', () => {
-      setTimeout(replay, 800)
-      setTimeout(runCheck, 2_500)
-    })
-  }
+  updaterInitialTimer = setTimeout(() => {
+    updaterInitialTimer = null
+    void requestUpdaterCheck('initial startup')
+  }, UPDATE_INITIAL_DELAY_MS)
+  updaterIntervalTimer = setInterval(() => {
+    void requestUpdaterCheck('periodic interval')
+  }, UPDATE_INTERVAL_MS)
+
+  wireUpdaterWindow(typeof getMainWindow === 'function' ? getMainWindow() : null)
 }
-
 // Dev and the installed app must not share Cache/GPUCache â€” a leftover
 // tray instance + `npm run dev` both lock AppData\Roaming\voicecraft and
 // Chromium then prints "Unable to move the cache: Acesso negado (0x5)"
@@ -1328,6 +1491,7 @@ function createWindow() {
     autoHideMenuBar: true,
     ...(appIcon ? { icon: appIcon } : {}),
   })
+  if (updaterWired) wireUpdaterWindow(mainWindow)
 
   // Telemetria: marca o instante em que a BrowserWindow foi instanciada.
   try {
@@ -1537,6 +1701,7 @@ app.on('activate', () => {
 // Keep all shutdown paths idempotent and release process/file handles before exit.
 app.on('before-quit', () => {
   app.isQuiting = true
+  cleanupUpdaterLifecycle()
   teardownApp()
 })
 

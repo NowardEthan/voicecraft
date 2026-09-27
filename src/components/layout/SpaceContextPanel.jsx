@@ -446,7 +446,7 @@ const SettingsPopover = forwardRef(function SettingsPopover(
   return (
     <div
       ref={ref}
-      className="fixed z-50 w-48 py-1 rounded-modal bg-surface1 border border-line shadow-2xl vc-anim-fade-in-up"
+      className="vc-space-floating fixed z-50 w-48 py-1 rounded-modal bg-surface1 border border-line shadow-2xl vc-anim-fade-in-up"
       style={{
         top: position?.top ?? 0,
         right: position?.right ?? 0,

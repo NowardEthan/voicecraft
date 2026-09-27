@@ -127,7 +127,7 @@ export function SpaceRolesPanel({ spaceId, enabled = true }) {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="vc-space-admin-panel space-y-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <SectionLabel>Cargos deste Space</SectionLabel>

@@ -24,15 +24,14 @@ const SpaceHero = memo(function SpaceHero({
   const visibility = getVisibility(space.id)
   const tag = visibility === 'private' ? 'Privado' : 'Comunidade'
   const description = (space.description || '').trim()
-    || 'Aquele lugar pra jogar, conversar e compartilhar. Boa gameplay, melhores pessoas.'
-  const slogan = (space.slogan || space.tagline || '').trim() || 'Good Games\nBetter People.'
+  const slogan = (space.slogan || space.tagline || '').trim()
   const nameFont = fieldFontStyle(space, 'name')
   const descFont = fieldFontStyle(space, 'description')
   const sloganFont = fieldFontStyle(space, 'slogan')
 
   return (
     <div
-      className="relative overflow-hidden rounded-[20px] border border-white/[0.07] min-h-[200px] sm:min-h-[220px]"
+      className="vc-space-hero relative overflow-hidden rounded-[20px] border border-white/[0.07] min-h-[200px] sm:min-h-[220px]"
       style={{ boxShadow: '0 28px 70px -28px rgba(0,0,0,0.8)' }}
     >
       {cover ? (
@@ -84,12 +83,14 @@ const SpaceHero = memo(function SpaceHero({
               >
                 {space.name}
               </h1>
-              <p
-                className="text-[13px] sm:text-[14px] text-white/75 mt-2 leading-relaxed max-w-xl"
-                style={descFont}
-              >
-                {description}
-              </p>
+              {description ? (
+                <p
+                  className="text-[13px] sm:text-[14px] text-white/75 mt-2 leading-relaxed max-w-xl"
+                  style={descFont}
+                >
+                  {description}
+                </p>
+              ) : null}
             </div>
           </div>
 
@@ -152,6 +153,7 @@ const SpaceHero = memo(function SpaceHero({
           </div>
         </div>
 
+        {slogan ? (
         <div className="hidden lg:flex items-center justify-end pr-1">
           <p
             className="text-right text-[28px] xl:text-[34px] leading-[1.15] font-semibold text-accent/90 max-w-[220px] select-none"
@@ -164,6 +166,7 @@ const SpaceHero = memo(function SpaceHero({
             {slogan}
           </p>
         </div>
+        ) : null}
       </div>
     </div>
   )

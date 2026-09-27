@@ -350,7 +350,7 @@ function IconPickerPanel({
       animate={{ opacity: 1, scale: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.97, y: -2 }}
       transition={{ duration: 0.2, ease: EASE_OUT }}
-      className="fixed z-[80] w-[580px] h-[520px] rounded-2xl border border-accent/20 bg-[#1a1a1e] shadow-[0_24px_60px_-16px_rgba(0,0,0,0.6),0_0_24px_-4px_rgba(255,63,108,0.15)] flex flex-col overflow-hidden"
+      className="vc-space-floating fixed z-[80] w-[min(580px,calc(100vw-24px))] h-[min(520px,calc(100vh-24px))] rounded-2xl border border-accent/20 bg-[#1a1a1e] shadow-[0_24px_60px_-16px_rgba(0,0,0,0.6),0_0_24px_-4px_rgba(255,63,108,0.15)] flex flex-col overflow-hidden"
       style={{ top: pos.top, left: pos.left }}
     >
       <div className="flex items-center justify-between px-5 pt-4 pb-2">

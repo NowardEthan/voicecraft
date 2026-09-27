@@ -36,6 +36,8 @@ export function RoleAssignPanel({
     setSelected(new Set(member?.roleIds || []))
   }, [member?.userId, member?.roleIds])
 
+  const panelClass = compact ? 'vc-space-admin-panel mt-3' : 'vc-space-admin-panel mt-4'
+
   const caps = useMemo(() => roleAssignCapabilities({
     space,
     actorUid: currentUserId,
@@ -48,7 +50,7 @@ export function RoleAssignPanel({
   if (!space?.id || !member?.userId) return null
   if (space.createdBy === member.userId) {
     return (
-      <div className={compact ? 'mt-3' : 'mt-4'}>
+      <div className={panelClass}>
         <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted mb-1.5">
           Cargo neste Space
         </p>
@@ -61,7 +63,7 @@ export function RoleAssignPanel({
 
   if (roles.length === 0) {
     return (
-      <div className={compact ? 'mt-3' : 'mt-4'}>
+      <div className={panelClass}>
         <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted mb-1.5">
           Cargo neste Space
         </p>
@@ -99,7 +101,7 @@ export function RoleAssignPanel({
   }
 
   return (
-    <div className={compact ? 'mt-3' : 'mt-4'}>
+    <div className={panelClass}>
       <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted mb-1">
         Cargo neste Space
       </p>

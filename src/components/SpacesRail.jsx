@@ -87,7 +87,7 @@ export default function GlobalRail({
 
   return (
     <aside
-      className={`${compact ? 'w-14' : 'w-[72px]'} shrink-0 h-full min-h-0 flex flex-col items-center py-2 sm:py-3 gap-1.5 sm:gap-2 bg-rail border-r border-line overflow-visible pb-[max(0.5rem,env(safe-area-inset-bottom))]`}
+      className={`vc-spaces-rail ${compact ? 'w-14' : 'w-[72px]'} shrink-0 h-full min-h-0 flex flex-col items-center py-2 sm:py-3 gap-1.5 sm:gap-2 bg-rail border-r border-line overflow-visible pb-[max(0.5rem,env(safe-area-inset-bottom))]`}
       aria-label="Spaces"
     >
       <Appear delay={0.02} y={6}>
@@ -212,7 +212,7 @@ export default function GlobalRail({
         <div
           ref={menuRef}
           role="menu"
-          className="fixed z-[80] w-[220px] rounded-2xl border border-white/[0.08] bg-[#12141a] shadow-2xl p-1.5 animate-fade-in"
+          className="vc-space-floating fixed z-[80] w-[220px] rounded-2xl border border-white/[0.08] bg-[#12141a] shadow-2xl p-1.5 animate-fade-in"
           style={{ top: menuPos.top, left: menuPos.left }}
         >
           <p className="px-2.5 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">

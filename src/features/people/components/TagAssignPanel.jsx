@@ -127,7 +127,7 @@ export function TagAssignPanel({
     }
   }
 
-  const sectionPad = compact ? 'mt-3' : 'mt-4'
+  const sectionPad = compact ? 'vc-space-admin-panel mt-3' : 'vc-space-admin-panel mt-4'
 
   if (!ready || claiming) {
     return (
@@ -302,7 +302,7 @@ export function TagAssignPanel({
 
           {menuOpen && (
             <div
-              className="absolute right-0 top-[calc(100%+6px)] z-30 w-[240px] rounded-xl border border-white/[0.1] bg-[#12141a] shadow-2xl shadow-black/50 overflow-hidden"
+              className="vc-space-floating absolute right-0 top-[calc(100%+6px)] z-30 w-[240px] rounded-xl border border-white/[0.1] bg-[#12141a] shadow-2xl shadow-black/50 overflow-hidden"
               role="dialog"
               aria-label="Gerenciar tags"
             >

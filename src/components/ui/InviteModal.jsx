@@ -123,9 +123,9 @@ export default function InviteModal({
       onClose={onClose}
       labelledBy="invite-title"
       maxWidth="md"
-      panelClassName="rounded-[20px]"
+      panelClassName="vc-space-modal rounded-[20px]"
     >
-      <div className="rounded-[20px] overflow-hidden bg-[#15171c] border border-white/[0.1] shadow-2xl">
+      <div className="vc-space-modal__surface rounded-[20px] overflow-hidden bg-[#15171c] border border-white/[0.1] shadow-2xl">
         <div className="flex items-start justify-between gap-3 px-6 pt-5 pb-4 border-b border-white/[0.08]">
           <div className="flex items-start gap-3 min-w-0">
             <SpaceAvatar space={space} size={44} rounded="xl" />

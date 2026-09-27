@@ -2893,3 +2893,162 @@ body.vc-app-bg-decor {
   -webkit-backdrop-filter: none !important;
 }
 
+
+
+/* ==========================================================================
+   SPACES ECOSYSTEM - DISCORD + APPLE
+   Additive, scoped visual foundation for Spaces chrome, views and overlays.
+   ========================================================================== */
+.vc-space-shell {
+  --vc-space-canvas: #090b10;
+  --vc-space-rail: #0c0f14;
+  --vc-space-panel: #11151c;
+  --vc-space-panel-strong: #0e1218;
+  --vc-space-card: #141922;
+  --vc-space-card-hover: #181e28;
+  --vc-space-hairline: rgba(255, 255, 255, 0.075);
+  --vc-space-hairline-strong: rgba(255, 255, 255, 0.12);
+  --vc-space-shadow: 0 18px 48px -30px rgba(0, 0, 0, 0.9);
+  --vc-space-radius-sm: 10px;
+  --vc-space-radius-md: 14px;
+  --vc-space-radius-lg: 18px;
+  --vc-space-control-h: 38px;
+  background: var(--vc-space-canvas);
+  color: var(--vc-text);
+}
+
+.vc-space-shell .vc-spaces-rail {
+  background: var(--vc-space-rail);
+  border-color: var(--vc-space-hairline);
+  box-shadow: inset -1px 0 rgba(255, 255, 255, 0.018);
+}
+.vc-space-shell .vc-spaces-rail .vc-rail-tile {
+  will-change: transform;
+}
+.vc-space-shell .vc-spaces-rail .vc-rail-tile[aria-pressed="true"]::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 50%;
+  width: 3px;
+  height: 22px;
+  border-radius: 0 4px 4px 0;
+  background: var(--vc-text-strong);
+  transform: translateY(-50%);
+}
+
+.vc-space-shell .vc-side-panel {
+  background: var(--vc-space-panel);
+  border-color: var(--vc-space-hairline);
+  box-shadow: inset -1px 0 rgba(255, 255, 255, 0.015);
+}
+.vc-space-shell .vc-people-panel {
+  background: var(--vc-space-panel-strong);
+  border-color: var(--vc-space-hairline);
+  box-shadow: inset 1px 0 rgba(255, 255, 255, 0.015);
+}
+.vc-space-shell .vc-side-nav-item,
+.vc-space-shell .vc-room-row,
+.vc-space-shell .vc-people-row {
+  border-radius: var(--vc-space-radius-sm);
+}
+.vc-space-shell .vc-room-row { min-height: 36px; }
+.vc-space-shell .vc-side-nav-item:focus-visible,
+.vc-space-shell .vc-room-row:focus-visible,
+.vc-space-shell .vc-people-row:focus-visible {
+  outline-color: color-mix(in srgb, var(--space-accent) 82%, white);
+  outline-offset: -1px;
+}
+.vc-space-shell .vc-people-row:not([style]) {
+  height: auto;
+  min-height: 62px;
+  background: transparent;
+}
+.vc-space-shell .vc-people-row:not([style]):hover {
+  background: rgba(255, 255, 255, 0.045) !important;
+}
+
+.vc-space-page {
+  background:
+    radial-gradient(900px 540px at 18% -12%, var(--space-accent-glow-08, rgba(91, 158, 255, 0.08)), transparent 62%),
+    var(--vc-space-canvas, #090b10) !important;
+}
+.vc-space-overview {
+  --vc-overview-gap: clamp(14px, 1.6vw, 20px);
+}
+.vc-space-hero {
+  border-radius: 22px;
+  border-color: var(--vc-space-hairline-strong, rgba(255,255,255,.12));
+  box-shadow: 0 30px 80px -38px rgba(0,0,0,.95), inset 0 1px rgba(255,255,255,.055) !important;
+}
+.vc-space-card {
+  background: linear-gradient(180deg, rgba(22, 27, 36, 0.98), rgba(17, 21, 29, 0.98)) !important;
+  border-color: var(--vc-space-hairline, rgba(255,255,255,.075)) !important;
+  border-radius: var(--vc-space-radius-lg, 18px);
+  box-shadow: var(--vc-space-shadow, 0 18px 48px -30px rgba(0,0,0,.9)), inset 0 1px rgba(255,255,255,.025);
+}
+.vc-space-card button {
+  transition: color 160ms ease, background-color 160ms ease, border-color 160ms ease, transform 160ms cubic-bezier(.2,.8,.2,1);
+}
+.vc-space-card button:active { transform: scale(.985); }
+.vc-space-spotlight {
+  border-color: color-mix(in srgb, var(--space-accent) 24%, var(--vc-space-hairline)) !important;
+}
+.vc-live-now-card {
+  box-shadow: 0 22px 56px -38px var(--space-accent-glow-32), inset 0 1px rgba(255,255,255,.035);
+}
+
+.vc-space-events input,
+.vc-space-events textarea,
+.vc-space-modal__surface input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+.vc-space-modal__surface textarea,
+.vc-space-modal__surface select {
+  min-height: 40px;
+  border-color: rgba(255,255,255,.09) !important;
+  background-color: rgba(5, 7, 11, .48) !important;
+}
+.vc-space-events input:focus-visible,
+.vc-space-events textarea:focus-visible,
+.vc-space-modal__surface input:focus-visible,
+.vc-space-modal__surface textarea:focus-visible,
+.vc-space-modal__surface select:focus-visible {
+  border-color: color-mix(in srgb, var(--space-accent) 58%, transparent) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--space-accent) 13%, transparent);
+}
+
+.vc-space-overlay {
+  background: rgba(3, 5, 8, .72) !important;
+  backdrop-filter: blur(18px) saturate(125%) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(125%) !important;
+}
+.vc-space-modal {
+  filter: drop-shadow(0 28px 64px rgba(0,0,0,.52));
+}
+.vc-space-modal__surface {
+  background-color: rgba(18, 22, 29, .985) !important;
+  border-color: rgba(255,255,255,.105) !important;
+  box-shadow: inset 0 1px rgba(255,255,255,.045), 0 0 0 1px rgba(0,0,0,.2);
+}
+.vc-space-floating {
+  background: rgba(19, 23, 31, .94) !important;
+  border-color: rgba(255,255,255,.12) !important;
+  backdrop-filter: blur(22px) saturate(135%);
+  -webkit-backdrop-filter: blur(22px) saturate(135%);
+  box-shadow: 0 26px 72px -24px rgba(0,0,0,.9), inset 0 1px rgba(255,255,255,.045) !important;
+}
+.vc-space-admin-panel > ul > li {
+  background: rgba(255,255,255,.025);
+  border-color: rgba(255,255,255,.075);
+  border-radius: 14px;
+}
+
+@media (max-width: 720px) {
+  .vc-space-hero { border-radius: 18px; }
+  .vc-space-card { border-radius: 15px; }
+  .vc-space-overview { padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+  .vc-space-modal__surface { max-height: calc(100dvh - 24px) !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vc-space-shell .vc-spaces-rail .vc-rail-tile { will-change: auto; }
+}

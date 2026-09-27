@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     check: () => ipcRenderer.invoke('updater:check'),
     install: () => ipcRenderer.invoke('updater:install'),
     installSilent: () => ipcRenderer.invoke('updater:installSilent'),
+    setSessionActive: (payload) => ipcRenderer.invoke('updater:set-session-active', payload || {}),
     onStatus: (cb) => {
       const handler = (_e, payload) => cb(payload)
       ipcRenderer.on('updater:status', handler)

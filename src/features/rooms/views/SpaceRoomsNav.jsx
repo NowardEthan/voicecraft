@@ -554,7 +554,7 @@ function MoveToGroupButton({ groups, currentGroupId, onPick }) {
           ref={popRef}
           role="menu"
           data-move-to-group-menu
-          className="fixed z-[80] w-48 py-1 rounded-xl bg-surface1 border border-line shadow-2xl animate-fade-in-up"
+          className="vc-space-floating fixed z-[80] w-48 py-1 rounded-xl bg-surface1 border border-line shadow-2xl animate-fade-in-up"
           style={{ top: pos.top, left: pos.left }}
           onClick={(e) => e.stopPropagation()}
         >

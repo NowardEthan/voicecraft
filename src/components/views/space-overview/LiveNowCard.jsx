@@ -28,7 +28,7 @@ const LiveNowCard = memo(function LiveNowCard({
 
   return (
     <section
-      className={`rounded-[18px] overflow-hidden ${
+      className={`vc-space-card vc-live-now-card rounded-[18px] overflow-hidden ${
         isLive
           ? 'border border-accent/35 bg-[#14161c]/95 shadow-[0_0_0_1px_rgba(255,63,108,0.12),0_18px_40px_-24px_var(--space-accent-glow-32)]'
           : 'border border-white/[0.07] bg-[#14161c]/90'
@@ -102,16 +102,11 @@ const LiveNowCard = memo(function LiveNowCard({
           </div>
 
           <ul className="flex flex-wrap justify-center sm:justify-start gap-x-4 gap-y-3 mb-4">
-            {livePeople.slice(0, 6).map((m, idx) => {
-              const speaking = idx === 0
+            {livePeople.slice(0, 6).map((m) => {
               return (
                 <li key={m.userId} className="flex flex-col items-center text-center gap-1.5 w-[64px]">
                   <span
-                    className={`rounded-full p-[2px] ${
-                      speaking
-                        ? 'bg-gradient-to-br from-accent to-accent/40 shadow-[0_0_18px_var(--space-accent-glow-32)]'
-                        : 'bg-transparent'
-                    }`}
+                    className="rounded-full p-[2px] bg-white/[0.06]"
                   >
                     <PersonAvatar
                       src={m.photoURL}
@@ -125,12 +120,10 @@ const LiveNowCard = memo(function LiveNowCard({
                     {memberDisplayName(m)}
                   </p>
                   <span
-                    className={`inline-flex items-center gap-0.5 text-[10px] font-semibold ${
-                      speaking ? 'text-accent' : 'text-muted'
-                    }`}
+                    className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-muted"
                   >
-                    {speaking ? <Mic size={10} /> : <Headphones size={10} />}
-                    {speaking ? 'Falando' : 'Ouvindo'}
+                    <Headphones size={10} />
+                    Na sala
                   </span>
                 </li>
               )
