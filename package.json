@@ -1,6 +1,6 @@
 {
   "name": "voicecraft",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "description": "P2P voice/video chat for LAN",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -15,7 +15,8 @@
     "all": "vite",
     "audio:build": "audio-service\\build.bat",
     "audio:validate": "node scripts/validate-audio-helper.mjs",
-    "test:audio": "node scripts/tests/test_audio_discord_ipc.mjs"
+    "test:audio": "node scripts/tests/test_audio_discord_ipc.mjs",
+    "test:updater": "node --test scripts/tests/test_updater_install_flow.mjs"
   },
   "keywords": [
     "webrtc",

@@ -180,6 +180,26 @@ function createUpdaterLogger() {
   }
 }
 
+function teardownApp({ destroyWindows = false } = {}) {
+  stopAudioService()
+  stopOAuthServer()
+  if (tray) {
+    try { tray.destroy() } catch { /* already destroyed */ }
+    tray = null
+  }
+  if (!destroyWindows) return
+
+  for (const window of BrowserWindow.getAllWindows()) {
+    try {
+      // destroy() bypasses renderer beforeunload handlers that can block update shutdown.
+      if (!window.isDestroyed()) window.destroy()
+    } catch (err) {
+      log('warn', `[app] failed to destroy window during teardown: ` + (err?.message || String(err)))
+    }
+  }
+  mainWindow = null
+}
+
 function installDownloadedUpdate(getMainWindow) {
   if (!app.isPackaged) return { ok: false, error: 'dev' }
   if (isInstallingSilent) return { ok: true, alreadyInstalling: true }
@@ -188,8 +208,17 @@ function installDownloadedUpdate(getMainWindow) {
     return { ok: false, error: 'Nenhuma atualiza\u00e7\u00e3o baixada.' }
   }
 
+  let updater
+  try {
+    updater = getAutoUpdater()
+  } catch (err) {
+    const message = err?.message || String(err)
+    log('error', `[updater] failed to prepare install: ` + message)
+    sendUpdater(getMainWindow, 'updater:status', { status: 'error', message })
+    return { ok: false, error: message }
+  }
+
   isInstallingSilent = true
-  // Allow quitAndInstall to close the BrowserWindow instead of hiding it to tray.
   app.isQuiting = true
   sendUpdater(getMainWindow, 'updater:status', {
     status: 'installing',
@@ -197,18 +226,31 @@ function installDownloadedUpdate(getMainWindow) {
   })
   log('info', `[updater] user requested silent install for v` + (lastDownloadedVersion || 'unknown'))
 
-  setImmediate(() => {
+  const installOnQuit = () => {
     try {
-      // isSilent=true, isForceRunAfter=true: unattended NSIS install + forced reopen.
-      getAutoUpdater().quitAndInstall(true, true)
+      // Match autoInstallOnAppQuit: launch NSIS only after Electron has fully exited.
+      updater.install(true, true)
     } catch (err) {
-      isInstallingSilent = false
-      app.isQuiting = false
-      const message = err?.message || String(err)
-      log('error', `[updater] quitAndInstall failed: ` + message)
-      sendUpdater(getMainWindow, 'updater:status', { status: 'error', message })
+      // The app has already quit, so only durable logging is still available.
+      log('error', `[updater] install after quit failed: ` + (err?.message || String(err)))
     }
-  })
+  }
+
+  try {
+    // Arm this before destroying windows; destroying the last window emits
+    // window-all-closed and must never race the final quit.
+    app.once('quit', installOnQuit)
+    teardownApp({ destroyWindows: true })
+    app.quit()
+  } catch (err) {
+    app.removeListener('quit', installOnQuit)
+    isInstallingSilent = false
+    app.isQuiting = false
+    const message = err?.message || String(err)
+    log('error', `[updater] failed to quit for install: ` + message)
+    sendUpdater(getMainWindow, 'updater:status', { status: 'error', message })
+    return { ok: false, error: message }
+  }
   return { ok: true }
 }
 
@@ -990,8 +1032,6 @@ ipcMain.handle('audio-service:stop-loopback', (_e, payload = {}) => serializeLoo
     : { ok: false, error: msg.message || 'loopback-stop-failed' }
 }))
 
-app.on('before-quit', () => stopAudioService())
-
 // ---------- Google OAuth via the system browser ----------
 const OAUTH_MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -1481,22 +1521,23 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
+  if (isInstallingSilent) return
   if (process.platform !== 'darwin') {
     app.quit()
   }
 })
 
 app.on('activate', () => {
+  if (isInstallingSilent || app.isQuiting) return
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow()
   }
 })
 
-// On quit, drop the tray icon so it doesn't linger in the system tray.
+// Keep all shutdown paths idempotent and release process/file handles before exit.
 app.on('before-quit', () => {
   app.isQuiting = true
-  stopOAuthServer()
-  if (tray) { tray.destroy(); tray = null }
+  teardownApp()
 })
 
 log('info', `[app] Voice started (userData=${app.getPath('userData')})`)
