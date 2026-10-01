@@ -1,603 +1,287 @@
-import { SoftImage } from '../../shared/media/SoftImage'
-
-/**
- * MessageBubble — bubble-style layout (Telegram/Discord hybrid).
- *
- *   - Todas as mensagens ficam à ESQUERDA (estilo Slack), com avatar.
- *   - "Minhas" mensagens (isMine=true) usam bolha filled com a cor do autor.
- *   - Mensagens dos outros (isMine=false) usam bolha mais sutil (surface-2).
- *   - Continuação do grupo: só o texto, grudado embaixo.
- *   - Action bar (Copy / Reply / Pin / Delete) no hover, alinhada ao
- *     header da mensagem (lado direito do timestamp).
- *
- * Estrutura:
- *   <MessageRow>
- *     <AvatarColumn />          — 36px (ou placeholder de hora, em continuação)
- *     <MessageBody>
- *       <MessageHeader />       — nome + pinned + timestamp + action bar
- *       <Bubble />              — a mensagem em si
- *     </MessageBody>
- *   </MessageRow>
- *
- * Mantém compatibilidade com o pipeline existente (MessageList passa
- * `isMine`, `showHeader`, `isLast`, `pinned`, callbacks etc.). A cor do
- * autor chega via `authorColor` (string HSL/hex) — opcional; cai num
- * fallback neutro se ausente.
- */
-import { useState, useEffect, useRef } from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect, useRef, useState } from 'react'
 import {
-  Pin, PinOff, CornerUpLeft, Copy, Check, XCircle, Trash2, Star, SmilePlus,
-  FileText, RotateCcw,
+  BellDot, Bookmark, Check, Copy, CornerUpLeft, FileText, Hash, MoreHorizontal,
+  Pencil, Pin, PinOff, RotateCcw, Trash2, XCircle,
 } from 'lucide-react'
-import { motion, AnimatePresence } from 'framer-motion'
 import { PersonAvatar } from '../../features/people'
 import Markdown from '../../features/chat/markdown'
 import { resolveChatDensity } from './chatDensity'
 import AnnouncementCard from '../../features/chat/AnnouncementCard'
+import ChatFeatureCardFrame from '../../features/chat/cards/ChatFeatureCardFrame.jsx'
+import { createSystemCardViewModel } from '../../features/chat/cards/featureCardViewModels.js'
 import { LobbyWelcomeCard, LobbyEventCard } from '../../features/chat/LobbyCards'
 import { isLobbyEventMessage, isLobbyWelcomeMessage } from '../../features/chat/lobbySchema'
-import EmojiPicker from '../ui/EmojiPicker'
-import EmojiReactions from '../ui/EmojiReactions'
-
-const AVATAR = 36
+import EmojiReactions, { EngagementTray } from '../ui/EmojiReactions'
+import { actionIdOf } from '../../features/chat/messageIdentity.js'
+import { AnchoredOverlay } from '../../shared/motion/AnchoredOverlay.jsx'
 
 function formatMessageTime(ts) {
   if (!ts) return ''
-  const d = new Date(ts)
-  return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+  return new Date(ts).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
 }
 
-function formatClock(ts) {
-  if (!ts) return ''
-  const d = new Date(ts)
-  return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+function isImageAttachment(attachment) {
+  return !!attachment && (attachment.kind === 'image' || String(attachment.type || '').startsWith('image/'))
 }
 
-/* Converte qualquer cor (hex ou hsl(...)) num par (rgba, lum) para que a
- * bolha filled do autor possa usar opacidade sem virar rosa chapado.
- * Para hsl() simples, abreviamos a 12% via color-mix no CSS; para hex,
- * caímos em hexToRgba direto.                                          */
-function bubbleFill(authorColor, isMine) {
-  if (!isMine) {
-    return 'var(--vc-surface-2)'
-  }
-  const c = authorColor || 'hsl(220, 14%, 52%)'
-  /* Mantém a tonalidade do autor mas a 12% — flat, premium.
-   * color-mix funciona com qualquer CSS color, incluindo hsl().        */
-  return `color-mix(in srgb, ${c} 14%, transparent)`
+function attachmentSrc(attachment) {
+  return attachment?.url || attachment?.dataUrl || attachment?.previewUrl || null
 }
 
-function bubbleRing(authorColor, isMine) {
-  if (!isMine) return '1px solid rgba(255,255,255,0.04)'
-  const c = authorColor || 'hsl(220, 14%, 52%)'
-  return `1px solid color-mix(in srgb, ${c} 22%, transparent)`
+function formatBytes(value) {
+  const size = Number(value)
+  if (!Number.isFinite(size)) return ''
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function bubbleShape(isMine, hasHeader) {
-  /* Telegram-like: canto que aponta para o autor levemente menor.
-   *  - mine + header : top-right menor (chat head)
-   *  - mine + cont   : all four equal (compact wrap)
-   *  - peer + header : top-left menor
-   *  - peer + cont   : all four equal                                */
-  if (hasHeader) {
-    return isMine
-      ? 'rounded-[18px] rounded-tr-md'
-      : 'rounded-[18px] rounded-tl-md'
-  }
-  return 'rounded-[18px]'
-}
-
-/* === Sub-componentes ============================================== */
-
-/** Coluna do avatar — tamanho segue a densidade do chat. */
-function AvatarColumn({ showHeader, photoURL, label, userId, compactTime, size = AVATAR }) {
-  const handleOpenProfile = () => {
-    if (!userId) return
-    if (typeof window !== 'undefined' && typeof window.__vcOpenProfile === 'function') {
-      window.__vcOpenProfile(userId)
+async function writeClipboard(value) {
+  const text = String(value || '')
+  if (!text) return false
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    try {
+      const input = document.createElement('textarea')
+      input.value = text
+      input.style.cssText = 'position:fixed;top:-9999px;opacity:0'
+      document.body.appendChild(input)
+      input.select()
+      const result = document.execCommand('copy')
+      input.remove()
+      return result
+    } catch {
+      return false
     }
   }
-
-  const colW = Math.max(28, size + 2)
-
-  return (
-    <div
-      className="shrink-0 flex justify-center self-start mr-2 pt-0.5"
-      style={{ width: colW }}
-    >
-      {showHeader ? (
-        <button
-          type="button"
-          onClick={handleOpenProfile}
-          title={`Ver perfil de ${label}`}
-          aria-label={`Abrir perfil de ${label}`}
-          className={
-            'group/avatar relative rounded-full ' +
-            'transition-transform duration-150 ' +
-            'hover:scale-110 hover:ring-2 hover:ring-accent/60 ' +
-            'focus-visible:scale-110 focus-visible:ring-2 focus-visible:ring-accent ' +
-            'focus-visible:outline-none cursor-pointer'
-          }
-        >
-          <PersonAvatar
-            src={photoURL}
-            name={label}
-            userId={userId}
-            size={size}
-          />
-        </button>
-      ) : (
-        <span className="text-[10px] text-transparent hover:text-muted transition-colors tabular-nums leading-5 mb-1 select-none">
-          {compactTime}
-        </span>
-      )}
-    </div>
-  )
 }
 
-/** Action bar — Copy / React / Reply / Pin / Delete. Shared by header
- *  rows and follow-up bubbles (grouped messages without a header).   */
-function MessageActionBar({
-  msg,
-  copyState,
-  onCopy,
-  onReply,
-  onTogglePin,
-  onToggleReaction,
-  quickReactions,
-  onDelete,
-  showPinButton,
-  canDelete,
-  pinned,
-  className = '',
-}) {
-  if (msg.deleted) return null
-  return (
-    <div
-      className={
-        'inline-flex items-center gap-0.5 p-0.5 rounded-lg shrink-0 ' +
-        'bg-surface1/95 border border-white/[0.08] shadow-md ' +
-        'opacity-0 group-hover:opacity-100 focus-within:opacity-100 ' +
-        'transition-opacity ' +
-        className
-      }
-    >
-      <button
-        type="button"
-        onClick={onCopy}
-        className={
-          'w-6 h-6 rounded-md flex items-center justify-center ' +
-          'transition-all duration-200 ' +
-          (copyState === 'copied'
-            ? 'text-positive bg-positive/15 scale-110'
-            : copyState === 'error'
-              ? 'text-danger bg-danger/15'
-              : 'text-muted hover:text-strong hover:bg-white/[0.06]')
-        }
-        title={
-          copyState === 'copied'
-            ? 'Copiado!'
-            : copyState === 'error'
-              ? 'Falha ao copiar'
-              : 'Copiar texto'
-        }
-        aria-label={
-          copyState === 'copied'
-            ? 'Mensagem copiada'
-            : copyState === 'error'
-              ? 'Falha ao copiar'
-              : 'Copiar texto'
-        }
-        aria-live="polite"
-      >
-        {copyState === 'copied' ? (
-          <Check size={12} strokeWidth={2.4} className="animate-scale-in" />
-        ) : copyState === 'error' ? (
-          <XCircle size={12} strokeWidth={2.4} />
-        ) : (
-          <Copy size={12} strokeWidth={1.8} />
-        )}
-      </button>
-      {onToggleReaction && quickReactions && quickReactions.map((emoji) => {
-        const mine = !!msg.reactions?.[emoji]?.mine
-        return (
-          <button
-            key={`qr-${emoji}`}
-            type="button"
-            onClick={() => onToggleReaction(msg.id, emoji)}
-            aria-pressed={mine}
-            aria-label={`Reagir ${emoji}`}
-            title={mine ? `Remover ${emoji}` : `Reagir ${emoji}`}
-            className={
-              'w-6 h-6 rounded-md flex items-center justify-center text-[13px] leading-none transition-all duration-150 ' +
-              (mine
-                ? 'bg-warning/20 ring-1 ring-warning/40 scale-105 hover:bg-warning/25'
-                : 'hover:bg-white/[0.06] hover:scale-110')
-            }
-          >
-            {emoji}
-          </button>
-        )
-      })}
-      {onToggleReaction && (
-        <ReactionPickerButton msg={msg} onToggleReaction={onToggleReaction} />
-      )}
-      {onReply && (
-        <button
-          type="button"
-          onClick={() => onReply(msg)}
-          className="w-6 h-6 rounded-md flex items-center justify-center text-muted hover:text-strong hover:bg-white/[0.06] transition-colors"
-          title="Responder"
-          aria-label="Responder"
-        >
-          <CornerUpLeft size={12} strokeWidth={1.8} />
-        </button>
-      )}
-      {showPinButton && (
-        <button
-          type="button"
-          onClick={() => onTogglePin(msg.id)}
-          className="w-6 h-6 rounded-md flex items-center justify-center text-muted hover:text-warning hover:bg-white/[0.06] transition-colors"
-          title={pinned ? 'Desafixar' : 'Fixar'}
-          aria-label={pinned ? 'Desafixar mensagem' : 'Fixar mensagem'}
-        >
-          {pinned ? <PinOff size={12} strokeWidth={1.8} /> : <Pin size={12} strokeWidth={1.8} />}
-        </button>
-      )}
-      {canDelete && onDelete && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.preventDefault()
-            e.stopPropagation()
-            onDelete(msg.id)
-          }}
-          className="w-6 h-6 rounded-md flex items-center justify-center text-muted hover:text-danger hover:bg-white/[0.06] transition-colors"
-          title="Excluir"
-          aria-label="Excluir mensagem"
-        >
-          <Trash2 size={12} strokeWidth={1.8} />
-        </button>
-      )}
-    </div>
-  )
-}
-
-/** Header da mensagem — nome + (badge fixada) + timestamp à
- *  esquerda; action bar à direita. Some em mensagens apagadas.       */
-function MessageHeader({
-  label,
-  pinned,
-  time,
-  msg,
-  copyState,
-  onCopy,
-  onReply,
-  onTogglePin,
-  onToggleReaction,
-  quickReactions,
-  onDelete,
-  canPin,
-  showPinButton,
-  canDelete,
-  headerText = 'text-[13px]',
-  timeText = 'text-[11px]',
-}) {
-  return (
-    <div className="flex items-center gap-2 min-w-0 mb-1 leading-snug">
-      <div className="flex items-baseline gap-2 min-w-0">
-        <span className={`${headerText} font-semibold truncate ${msg.deleted ? 'text-strong/60' : 'text-strong'}`}>
-          {label}
-        </span>
-        {pinned && !msg.deleted && (
-          <span
-            className="inline-flex items-center gap-0.5 text-[10px] text-warning font-semibold shrink-0"
-            title="Mensagem fixada"
-          >
-            <Pin size={10} strokeWidth={2.4} className="fill-warning/30" />
-            FIXADA
-          </span>
-        )}
-        <span className={`${timeText} text-muted tabular-nums shrink-0`}>
-          {time}
-        </span>
-      </div>
-
-      <MessageActionBar
-        className="ml-auto"
-        msg={msg}
-        copyState={copyState}
-        onCopy={onCopy}
-        onReply={onReply}
-        onTogglePin={onTogglePin}
-        onToggleReaction={onToggleReaction}
-        quickReactions={quickReactions}
-        onDelete={onDelete}
-        showPinButton={showPinButton}
-        canDelete={canDelete}
-        pinned={pinned}
-      />
-    </div>
-  )
-}
-
-/** Bolha — cresce com o texto (uma linha) até o max-width; só quebra
- *  em newline do usuário ou quando atinge o teto da coluna.         */
-function Bubble({ shape, fill, ring, showHeader, children, interactive = false, likeContent = null }) {
-  return (
-    <div
-      className={
-        'relative align-top ' +
-        shape + (interactive ? ' select-none' : '')
-      }
-      style={{
-        backgroundColor: fill,
-        boxShadow: ring,
-        padding: showHeader ? '8px 12px' : '6px 12px',
-        color: 'var(--vc-text-strong)',
-        /* Prefer content width, but allow gallery min-width to expand the bubble. */
-        width: 'max-content',
-        maxWidth: '100%',
-        minWidth: 0,
-        overflowWrap: 'break-word',
-        wordBreak: 'normal',
-      }}
-    >
-      {children}
-      {likeContent}
-    </div>
-  )
-}
-
-/** ReactionPickerButton — "+" na action bar que abre o EmojiPicker
- *  ancorado a si mesmo. Portal pro body pra nunca ser cortado pelo
- *  scroller. Fecha em outside-click e Escape.                          */
-function ReactionPickerButton({ msg, onToggleReaction }) {
-  const [open, setOpen] = useState(false)
-  const [pos, setPos] = useState(null)
-  const btnRef = useRef(null)
-  const pickerRef = useRef(null)
-
-  const place = () => {
-    const rect = btnRef.current?.getBoundingClientRect?.()
-    if (!rect) return
-    const W = 300
-    const H = 264
-    const spaceAbove = rect.top
-    const spaceBelow = window.innerHeight - rect.bottom
-    const openUp = spaceAbove > H + 12 || spaceAbove > spaceBelow
-    const top = openUp ? rect.top - H - 8 : rect.bottom + 8
-    const left = Math.max(8, Math.min(rect.left, window.innerWidth - W - 8))
-    setPos({ top, left })
+function AvatarColumn({ showHeader, photoURL, label, userId, compactTime, size }) {
+  if (!showHeader) {
+    return <span className="vc-conversation-message__continuation-time" aria-hidden>{compactTime}</span>
   }
+  const avatar = <PersonAvatar src={photoURL} name={label} userId={userId} size={size} />
+  if (!userId) return <span className="vc-conversation-message__avatar" aria-hidden>{avatar}</span>
+  return (
+    <button
+      type="button"
+      className="vc-conversation-message__avatar is-actionable"
+      onClick={() => window.__vcOpenProfile?.(userId)}
+      aria-label={`Abrir perfil de ${label}`}
+      title={`Ver perfil de ${label}`}
+    >
+      {avatar}
+    </button>
+  )
+}
 
-  const handleToggle = () => {
-    if (open) { setOpen(false); return }
-    place()
+
+function MessageMoreMenu({
+  message, roomKey, onCopyText, onEdit, onTogglePin, onMarkUnread, onDelete,
+  onOpenThread, pinned, replyCount,
+}) {
+  const [open, setOpen] = useState(false)
+  const [position, setPosition] = useState(null)
+  const [bookmarked, setBookmarked] = useState(false)
+  const buttonRef = useRef(null)
+  const menuRef = useRef(null)
+  const actionId = actionIdOf(message)
+  const storageKey = `voicecraft:bookmarks:${roomKey || 'global'}`
+
+  useEffect(() => {
+    try {
+      setBookmarked(JSON.parse(localStorage.getItem(storageKey) || '[]').map(String).includes(String(actionId)))
+    } catch {
+      setBookmarked(false)
+    }
+  }, [storageKey, actionId])
+
+
+  const toggle = () => {
+    if (open) return setOpen(false)
+    const rect = buttonRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const width = Math.min(232, window.innerWidth - 16)
+    const estimatedHeight = 360
+    const top = rect.bottom + estimatedHeight <= window.innerHeight - 8
+      ? rect.bottom + 6
+      : Math.max(8, rect.top - estimatedHeight - 6)
+    setPosition({ width, left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)), top })
     setOpen(true)
   }
 
-  useEffect(() => {
-    if (!open) return undefined
-    const onDown = (e) => {
-      if (
-        pickerRef.current && !pickerRef.current.contains(e.target) &&
-        btnRef.current && !btnRef.current.contains(e.target)
-      ) setOpen(false)
+  const act = (callback) => {
+    setOpen(false)
+    callback?.()
+    requestAnimationFrame(() => buttonRef.current?.focus())
+  }
+
+  const handleMenuKey = (event) => {
+    const items = [...(menuRef.current?.querySelectorAll('[role="menuitem"]') || [])]
+    const current = items.indexOf(document.activeElement)
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      const delta = event.key === 'ArrowDown' ? 1 : -1
+      items[(current + delta + items.length) % items.length]?.focus()
+    } else if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault()
+      items[event.key === 'Home' ? 0 : items.length - 1]?.focus()
     }
-    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
-    const onReposition = () => place()
-    window.addEventListener('mousedown', onDown)
-    window.addEventListener('keydown', onKey)
-    window.addEventListener('resize', onReposition)
-    return () => {
-      window.removeEventListener('mousedown', onDown)
-      window.removeEventListener('keydown', onKey)
-      window.removeEventListener('resize', onReposition)
+  }
+
+  const toggleBookmark = () => {
+    try {
+      const current = new Set(JSON.parse(localStorage.getItem(storageKey) || '[]').map(String))
+      if (bookmarked) current.delete(String(actionId))
+      else current.add(String(actionId))
+      localStorage.setItem(storageKey, JSON.stringify([...current]))
+      setBookmarked(!bookmarked)
+    } catch {
+      // Local bookmarks are optional; storage failures do not affect chat.
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
+  }
+
+  const item = (label, Icon, callback, danger = false) => (
+    <button type="button" role="menuitem" className={danger ? 'is-danger' : ''} onClick={() => act(callback)}>
+      <Icon size={15} aria-hidden /><span>{label}</span>
+    </button>
+  )
 
   return (
     <>
       <button
-        ref={btnRef}
+        ref={buttonRef}
         type="button"
-        onClick={handleToggle}
-        title="Mais reações"
-        aria-label="Abrir seletor de reações"
+        onClick={toggle}
+        aria-label="Mais ações da mensagem"
+        aria-haspopup="menu"
         aria-expanded={open}
-        className="w-6 h-6 rounded-md flex items-center justify-center text-muted hover:text-warning hover:bg-white/[0.06] transition-colors"
+        title="Mais ações"
       >
-        <SmilePlus size={12} strokeWidth={1.8} />
+        <MoreHorizontal size={17} aria-hidden />
       </button>
-      {open && pos && typeof document !== 'undefined' && createPortal(
-        <div
-          ref={pickerRef}
-          className="fixed z-[80] animate-fade-in-up"
-          style={{ top: pos.top, left: pos.left, width: 300 }}
-          onWheel={(e) => e.stopPropagation()}
-        >
-          <EmojiPicker
-            compact
-            onPick={(em) => {
-              onToggleReaction(msg.id, em)
-              setOpen(false)
-            }}
-          />
-        </div>,
-        document.body,
-      )}
+      <AnchoredOverlay
+        open={open && !!position}
+        ref={menuRef}
+        anchorRef={buttonRef}
+        onClose={() => setOpen(false)}
+        placement="top"
+        initialFocus
+        role="menu"
+        aria-label="Ações da mensagem"
+        className="vc-message-menu vc-conversation-popover"
+        style={position || undefined}
+        onKeyDown={handleMenuKey}
+      >
+          {onEdit && item('Editar mensagem', Pencil, () => onEdit(actionId))}
+          {onTogglePin && item(pinned ? 'Desafixar mensagem' : 'Fixar mensagem', pinned ? PinOff : Pin, () => onTogglePin(actionId))}
+          {onOpenThread && item(replyCount > 0 ? `Abrir respostas (${replyCount})` : 'Abrir thread', CornerUpLeft, () => onOpenThread(message))}
+          {item('Copiar texto', Copy, onCopyText)}
+          {actionId && item('Copiar ID', Hash, () => writeClipboard(actionId))}
+          {actionId && item(bookmarked ? 'Remover dos salvos' : 'Salvar mensagem', Bookmark, toggleBookmark)}
+          {onMarkUnread && item('Marcar como não lida daqui', BellDot, () => onMarkUnread(message))}
+          {onDelete && item('Excluir mensagem', Trash2, () => onDelete(actionId), true)}
+      </AnchoredOverlay>
     </>
   )
 }
 
-function isImageAttachment(att) {
-  if (!att) return false
-  return att.kind === 'image' || String(att.type || '').startsWith('image/')
+function MessageActionBar({
+  message, currentUserId, quickReactions, onToggleReaction, onToggleLike, onReply, menuProps,
+  inline = false,
+}) {
+  if (message.deleted) return null
+  const actionId = actionIdOf(message)
+  return (
+    <EngagementTray
+      className={inline ? 'vc-message-engagement-inline' : 'vc-conversation-message__actions'}
+      label={inline ? 'Engagement da mensagem' : 'A\u00e7\u00f5es r\u00e1pidas da mensagem'}
+      reactions={message.reactions || {}}
+      likes={message.likes || []}
+      currentUserId={currentUserId}
+      quickReactions={inline ? [] : quickReactions}
+      onToggleLike={onToggleLike ? () => onToggleLike(actionId) : null}
+      onToggleReaction={onToggleReaction ? (emoji) => onToggleReaction(actionId, emoji) : null}
+    >
+      {onReply && (
+        <button type="button" onClick={() => onReply(message)} aria-label={'Responder \u00e0 mensagem'} title="Responder">
+          <CornerUpLeft size={16} aria-hidden />
+        </button>
+      )}
+      <MessageMoreMenu message={message} {...menuProps} />
+    </EngagementTray>
+  )
 }
 
-function attachmentSrc(att) {
-  if (!att) return null
-  return att.url || att.dataUrl || att.previewUrl || null
+function MessageText({ message, resolveRoom, onRoomMention, searchQuery }) {
+  if (message.deleted) return <span className="vc-conversation-message__deleted">Mensagem apagada</span>
+  if (!message.text) return null
+  return <Markdown text={message.text} resolveRoom={resolveRoom} onRoomMention={onRoomMention} mentions={message.mentions} searchQuery={searchQuery} />
 }
 
-function formatBytes(n) {
-  if (!Number.isFinite(n)) return ''
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`
-}
-
-/** Render do texto — markdown ou placeholder de "apagada".          */
-function MessageText({ msg, resolveRoom }) {
-  if (msg.deleted) {
-    return <span className="text-muted italic text-[14px]">mensagem apagada</span>
+function MediaImage({ src, alt, className = '', onClick, overlay = null }) {
+  const [failed, setFailed] = useState(false)
+  if (!src || failed) {
+    return (
+      <div className={`vc-conversation-media-fallback ${className}`} role="img" aria-label={`${alt || 'Imagem'} indisponível`}>
+        <FileText size={19} aria-hidden /><span>Imagem indisponível</span>
+      </div>
+    )
   }
-  if (!msg.text) return null
-  return <Markdown text={msg.text} resolveRoom={resolveRoom} />
+  return (
+    <button type="button" className={`vc-conversation-media ${className}`} onClick={onClick} aria-label={`Ampliar ${alt || 'imagem'}`}>
+      <img src={src} alt={alt || 'Imagem enviada'} loading="lazy" decoding="async" onError={() => setFailed(true)} />
+      {overlay}
+    </button>
+  )
 }
 
-function AttachmentBlock({ attachment, attachments, onImageClick, hasText = false }) {
-  const list = Array.isArray(attachments) && attachments.length
-    ? attachments
-    : (attachment ? [attachment] : [])
+function AttachmentBlock({ attachment, attachments, onImageClick, hasText }) {
+  const list = Array.isArray(attachments) && attachments.length ? attachments : (attachment ? [attachment] : [])
   if (!list.length) return null
-
   const images = list.filter(isImageAttachment)
-  const files = list.filter((a) => !isImageAttachment(a))
-  const gap = hasText ? 'mt-1.5' : ''
-  const imageSrcs = images.map(attachmentSrc).filter(Boolean)
-
-  const openGallery = (startIdx) => {
-    if (!imageSrcs.length) return
-    // Prefer full list order (including any still-uploading slots that have src).
-    const srcs = images.map(attachmentSrc).filter(Boolean)
-    const mapped = Math.min(startIdx, Math.max(0, srcs.length - 1))
-    onImageClick?.(srcs.length ? srcs : imageSrcs, mapped)
+  const files = list.filter((item) => !isImageAttachment(item))
+  const imageSources = images.map(attachmentSrc).filter(Boolean)
+  const openGallery = (index) => {
+    if (!imageSources.length) return
+    const source = attachmentSrc(images[index])
+    const mappedIndex = Math.max(0, imageSources.indexOf(source))
+    onImageClick?.(imageSources, mappedIndex)
   }
 
   return (
-    <div className={`${gap} flex flex-col gap-1.5`} style={{ minWidth: images.length > 1 ? 260 : undefined, width: images.length > 1 ? 'min(100%, 340px)' : undefined }}>
+    <div className={`vc-conversation-attachments ${hasText ? 'has-text' : ''}`}>
       {images.length === 1 && (
-        attachmentSrc(images[0]) ? (() => {
-          const imgObj = images[0]
-          const w = imgObj.width || imgObj.w
-          const h = imgObj.height || imgObj.h
-          const ratio = (w && h && Number(w) > 0 && Number(h) > 0)
-            ? `${w} / ${h}`
-            : '16 / 9'
-
-          return (
-            <button
-              type="button"
-              onClick={() => openGallery(0)}
-              className={
-                'block rounded-xl overflow-hidden max-w-[min(100%,560px)] focus:outline-none ' +
-                'focus-visible:ring-2 focus-visible:ring-accent/60 cursor-zoom-in ' +
-                (imgObj.sticker ? 'bg-transparent' : '')
-              }
-              style={imgObj.sticker ? undefined : { aspectRatio: ratio }}
-              title={imgObj.sticker ? 'Ampliar sticker' : 'Ampliar imagem'}
-              aria-label={imgObj.sticker ? 'Ampliar sticker' : 'Ampliar imagem'}
-            >
-              <SoftImage
-                src={attachmentSrc(imgObj)}
-                alt={imgObj.name || (imgObj.sticker ? 'sticker' : 'imagem')}
-                imgStyle={imgObj.sticker
-                  ? { objectFit: 'contain', maxHeight: 'min(50vh,280px)', width: 'auto', maxWidth: 'min(100%,280px)' }
-                  : { objectFit: 'contain', maxHeight: 'min(70vh,520px)', width: 'auto', maxWidth: '100%' }
-                }
-                placeholderColor={imgObj.sticker ? 'transparent' : 'rgba(0,0,0,0.25)'}
-                className="w-full h-full"
-              />
-            </button>
-          )
-        })() : (
-          <div className="text-[12px] text-muted italic">enviando imagem…</div>
-        )
+        <MediaImage src={attachmentSrc(images[0])} alt={images[0].name || (images[0].sticker ? 'Sticker' : 'Imagem')} className={images[0].sticker ? 'is-sticker' : 'is-single'} onClick={() => openGallery(0)} />
       )}
-
       {images.length > 1 && (
-        <div
-          className="vc-msg-gallery grid gap-1 rounded-xl overflow-hidden bg-black/20"
-          style={{
-            width: '100%',
-            gridTemplateColumns: '1fr 1fr',
-            gridAutoRows: images.length === 2 ? '160px' : '120px',
-            ...(images.length === 3 ? { gridTemplateRows: '120px 120px' } : null),
-          }}
-        >
-          {images.slice(0, 4).map((img, i) => {
-            const src = attachmentSrc(img)
-            const extra = images.length > 4 && i === 3 ? images.length - 4 : 0
-            const isTall = images.length === 3 && i === 0
+        <div className={`vc-conversation-gallery count-${Math.min(images.length, 4)}`}>
+          {images.slice(0, 4).map((image, index) => {
+            const extra = images.length > 4 && index === 3 ? images.length - 4 : 0
             return (
-              <button
-                key={i}
-                type="button"
-                onClick={() => src && openGallery(i)}
-                className="relative overflow-hidden bg-black/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 cursor-zoom-in"
-                style={{
-                  gridRow: isTall ? 'span 2' : undefined,
-                  minHeight: isTall ? 248 : 120,
-                }}
-                aria-label={`Ampliar imagem ${i + 1}`}
-              >
-                {src ? (
-                  <SoftImage
-                    src={src}
-                    alt={img.name || `imagem ${i + 1}`}
-                    imgStyle={{ objectFit: 'cover' }}
-                    placeholderColor="rgba(0,0,0,0.30)"
-                    className="absolute inset-0 w-full h-full"
-                  />
-                ) : (
-                  <span className="absolute inset-0 flex items-center justify-center text-[11px] text-muted italic">
-                    …
-                  </span>
-                )}
-                {extra > 0 && (
-                  <span className="absolute inset-0 bg-black/55 flex items-center justify-center text-white text-[18px] font-semibold">
-                    +{extra}
-                  </span>
-                )}
-              </button>
+              <MediaImage
+                key={`${attachmentSrc(image) || image.name || 'image'}-${index}`}
+                src={attachmentSrc(image)}
+                alt={image.name || `Imagem ${index + 1}`}
+                className={images.length === 3 && index === 0 ? 'is-tall' : ''}
+                onClick={() => openGallery(index)}
+                overlay={extra > 0 ? <span className="vc-conversation-media__overlay">+{extra}</span> : null}
+              />
             )
           })}
         </div>
       )}
-
-      {files.map((file, i) => {
-        const src = attachmentSrc(file)
-        if (!src) {
-          return (
-            <div key={`f-${i}`} className="text-[12px] text-muted italic">enviando anexo…</div>
-          )
+      {files.map((file, index) => {
+        const source = attachmentSrc(file)
+        if (!source) {
+          return <div key={`pending-${index}`} className="vc-conversation-file is-pending"><FileText size={18} aria-hidden /><span>Anexo sendo preparado…</span></div>
         }
         return (
-          <a
-            key={`f-${i}`}
-            href={src}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={
-              'flex items-center gap-2 rounded-lg px-2.5 py-2 ' +
-              'bg-black/20 border border-white/[0.08] hover:bg-black/30 transition-colors ' +
-              'max-w-[min(100%,280px)] no-underline'
-            }
-            title="Abrir anexo"
-          >
-            <FileText size={16} strokeWidth={1.8} className="text-accent shrink-0" />
-            <span className="min-w-0">
-              <span className="block text-[12px] font-medium text-strong truncate">
-                {file.name || 'arquivo'}
-              </span>
-              {file.size ? (
-                <span className="block text-[10px] text-muted">{formatBytes(file.size)}</span>
-              ) : null}
-            </span>
+          <a key={`${source}-${index}`} href={source} target="_blank" rel="noopener noreferrer" className="vc-conversation-file">
+            <span className="vc-conversation-file__icon"><FileText size={18} aria-hidden /></span>
+            <span className="vc-conversation-file__copy"><strong>{file.name || 'Arquivo'}</strong>{file.size ? <small>{formatBytes(file.size)}</small> : null}</span>
           </a>
         )
       })}
@@ -607,526 +291,186 @@ function AttachmentBlock({ attachment, attachments, onImageClick, hasText = fals
 
 function ReplyQuote({ replyTo, replyAuthor, onJumpToReply }) {
   if (!replyTo) return null
-  const label = replyTo.missing
-    ? 'mensagem original'
-    : (replyAuthor?.displayName || replyTo.author || 'mensagem')
-  const src = attachmentSrc(replyTo.attachment)
+  const actionId = actionIdOf(replyTo)
+  const missing = !!replyTo.missing
+  const attachments = Array.isArray(replyTo.attachments) ? replyTo.attachments : (replyTo.attachment ? [replyTo.attachment] : [])
   const preview = replyTo.deleted
-    ? 'mensagem apagada'
-    : (replyTo.missing
-      ? 'mensagem original indisponível'
-      : (replyTo.text
-        || (isImageAttachment(replyTo.attachment) ? 'imagem' : replyTo.attachment?.name)
-        || 'mensagem'))
+    ? 'Mensagem apagada'
+    : missing
+      ? 'Mensagem original fora do histórico disponível'
+      : replyTo.text || (attachments.some(isImageAttachment) ? 'Imagem' : attachments[0]?.name) || 'Mensagem'
   return (
     <button
       type="button"
-      onClick={() => {
-        if (replyTo.missing || !replyTo.id) return
-        onJumpToReply?.(replyTo.id)
-      }}
-      className={
-        'mb-1.5 w-full text-left rounded-md border-l-2 border-accent/70 ' +
-        'bg-black/15 pl-2 pr-1.5 py-1 hover:bg-black/25 transition-colors ' +
-        (replyTo.missing ? 'opacity-70 cursor-default' : '')
-      }
-      title={replyTo.missing ? 'Original fora do histórico carregado' : 'Ir para mensagem'}
+      className="vc-conversation-reply"
+      disabled={missing || !actionId}
+      onClick={() => onJumpToReply?.(actionId)}
+      title={missing ? 'Original indisponível' : 'Ir para a mensagem original'}
     >
-      <div className="text-[10px] font-semibold text-accent truncate">{label}</div>
-      <div className="flex items-center gap-2 min-w-0">
-        {!replyTo.deleted && !replyTo.missing && isImageAttachment(replyTo.attachment) && src ? (
-          <img
-            src={src}
-            alt=""
-            className="h-7 w-7 rounded object-cover shrink-0 bg-black/30"
-          />
-        ) : null}
-        <span className="text-[11px] text-muted truncate">{preview}</span>
-      </div>
+      <span>{replyAuthor?.displayName || replyTo.author || 'Mensagem original'}</span>
+      <small>{preview}</small>
     </button>
   )
 }
 
-/** LikeButton — Star com fundo = cor da bolha, abaixo da bolha,
- *  alinhado à esquerda. Ao curtir: "super like" animation com
- *  partículas voando, bounce + wobble + flash de luz.
- *
- *  Cor padrão do like = amarelo (--vc-like), sempre que houver
- *  curtidas (suas ou de outros). Só o estado vazio (0 likes) fica
- *  neutro e aparece no hover.
- *  Click → onToggleLike(msg.id).                                       */
-function LikeButton({ msg, currentUserId, onToggleLike, bubbleFill = null }) {
-  const likes = Array.isArray(msg.likes) ? msg.likes : []
-  const count = likes.length
-  const mine = currentUserId ? likes.includes(currentUserId) : false
-  const lit = mine || count > 0
 
-  /* Key pra remontar a árvore de partículas a cada curtida — força
-   * o AnimatePresence a disparar a animação toda de novo.           */
-  const [burstKey, setBurstKey] = useState(0)
-  /* Flag que libera o "super like" animation. Só fica true no
-   * instante da transição false→true. Em remounts (chat trocado,
-   * message retornou já curtida), começa false e a animação não
-   * dispara, mesmo com mine=true.                                   */
-  const [animating, setAnimating] = useState(false)
-  const wasMine = usePrevious(mine)
-  useEffect(() => {
-    if (mine && !wasMine) {
-      setBurstKey((k) => k + 1)
-      setAnimating(true)
-      const t = setTimeout(() => setAnimating(false), 700)
-      return () => clearTimeout(t)
-    }
-  }, [mine, wasMine])
-
-  const handle = () => { onToggleLike?.(msg.id) }
-
-  /* 8 partículas em direções aleatórias (determinísticas por key). */
-  const particles = makeBurstParticles(burstKey)
-
+function DeliveryState({ message, onRetry, onCopy, onCancel }) {
+  const actionId = actionIdOf(message)
+  if (message.status === 'sending') return <div className="vc-conversation-delivery" role="status">Enviando…</div>
+  if (message.status !== 'failed' && message.status !== 'permanent-failed') return null
   return (
-    <motion.button
-      type="button"
-      onClick={handle}
-      aria-pressed={mine}
-      aria-label={mine ? 'Remover curtida' : 'Curtir mensagem'}
-      title={mine ? 'Remover curtida' : 'Curtir'}
-      animate={
-        animating
-          ? { scale: [1, 1.45, 0.9, 1.12, 1], rotate: [0, -10, 12, -6, 0] }
-          : { scale: 1, rotate: 0 }
-      }
-      transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-      /* Fundo sólido. Com likes = borda/ícone/contador dourados
-       * (padrão do like). Sem likes = neutro, só no hover. */
-      className={
-        'absolute -bottom-2.5 -right-2.5 z-10 ' +
-        'inline-flex items-center gap-1 px-2 h-7 rounded-full ' +
-        'overflow-visible ' +
-        'transition-all duration-200 border-2 ' +
-        (lit
-          ? 'text-like shadow-lg hover:brightness-110'
-          : 'shadow-md border-white/15 text-muted hover:text-like hover:border-[var(--vc-like)] opacity-0 group-hover:opacity-100 focus-visible:opacity-100')
-      }
-      style={{
-        backgroundColor: 'var(--vc-surface-1)',
-        borderColor: lit ? 'var(--vc-like)' : 'rgba(255,255,255,0.15)',
-      }}
-    >
-      <Star
-        size={13}
-        strokeWidth={mine ? 1.5 : 2}
-        className={mine ? 'fill-like' : ''}
-      />
-      {count > 0 && (
-        <span className="tabular-nums text-[11px] font-bold leading-none text-like">
-          {count}
-        </span>
-      )}
-
-      {/* Flash de luz pulsando atrás do botão quando curtido */}
-      {animating && (
-        <motion.span
-          aria-hidden
-          className="absolute inset-0 rounded-full pointer-events-none"
-          style={{
-            background: 'radial-gradient(circle, var(--vc-like-glow) 0%, rgba(251,191,36,0) 70%)',
-          }}
-          initial={{ opacity: 0, scale: 0.6 }}
-          animate={{ opacity: [0, 1, 0], scale: [0.6, 1.9, 2.6] }}
-          transition={{ duration: 0.75, ease: 'easeOut' }}
-          key={`flash-${burstKey}`}
-        />
-      )}
-
-      {/* Partículas — voam pra fora ao curtir. Renderizadas como
-          filhas do botão pra herdar position: relative.              */}
-      <AnimatePresence>
-        {animating && particles.map((p, i) => (
-          <motion.span
-            key={`${burstKey}-${i}`}
-            aria-hidden
-            className="absolute left-1/2 top-1/2 w-1.5 h-1.5 rounded-full pointer-events-none"
-            style={{
-              background: i % 2 === 0 ? '#fbbf24' : '#fde047',
-              boxShadow: '0 0 6px currentColor',
-              marginLeft: -3,
-              marginTop: -3,
-              color: i % 2 === 0 ? '#fbbf24' : '#fde047',
-            }}
-            initial={{ x: 0, y: 0, opacity: 1, scale: 1 }}
-            animate={{
-              x: Math.cos(p.angle) * p.distance,
-              y: Math.sin(p.angle) * p.distance,
-              opacity: [1, 1, 0],
-              scale: [0.4, 1, 0.2],
-            }}
-            exit={{ opacity: 0 }}
-            transition={{
-              duration: p.duration,
-              delay: p.delay,
-              ease: [0.16, 1, 0.3, 1],
-            }}
-          />
-        ))}
-      </AnimatePresence>
-    </motion.button>
+    <div className="vc-conversation-failure" role="alert">
+      <span><XCircle size={14} aria-hidden />Falha no envio</span>
+      {onRetry && <button type="button" onClick={() => onRetry(actionId)}><RotateCcw size={14} aria-hidden />Tentar novamente</button>}
+      {onCopy && <button type="button" onClick={() => onCopy(actionId)}><Copy size={14} aria-hidden />Copiar</button>}
+      {onCancel && <button type="button" onClick={() => onCancel(actionId)}><Trash2 size={14} aria-hidden />Excluir</button>}
+    </div>
   )
 }
 
-/** Gera 8 partículas com ângulos uniformemente distribuídos mas com
- *  pequena variação aleatória (determinística pela key — mesmo key
- *  gera mesmo burst pra evitar animação pulando em re-renders).    */
-function makeBurstParticles(key) {
-  const N = 8
-  const base = (key * 137) % 360  // ângulo inicial pseudo-aleatório
-  return Array.from({ length: N }, (_, i) => {
-    const angle = ((base + (360 / N) * i) * Math.PI) / 180
-    return {
-      angle,
-      distance: 28 + ((i * 7 + key * 3) % 12),
-      duration: 0.55 + ((i * 13) % 8) / 20,
-      delay: (i % 3) * 0.02,
-    }
-  })
-}
-
-/** Hook pra guardar valor anterior (sem deps extras). */
-function usePrevious(value) {
-  const [pair, setPair] = useState({ prev: value, current: value })
-  if (pair.current !== value) {
-    setPair({ prev: pair.current, current: value })
-  }
-  return pair.prev
-}
-
-/* === Componente principal ========================================= */
-
 export default function MessageBubble({
-  msg,
-  isMine,
-  showHeader,
-  isLast = false,
-  author,
-  authorColor = null,
-  resolveRoom = null,
-  pinned = false,
-  canPin = false,
-  canModerate = false,
-  onReply = null,
-  onTogglePin = null,
-  onToggleLike = null,
-  onToggleReaction = null,
-  quickReactions = ['👍', '❤️', '🔥'],
-  onDelete = null,
-  onImageClick = null,
-  onRetry = null,
-  replyTo = null,
-  replyAuthor = null,
-  onJumpToReply = null,
-  currentUserId = null,
-  density = 'confortavel',
-  highlighted = false,
-  highlightTick = 0,
+  msg, isMine, showHeader, author, authorColor = null, resolveRoom = null,
+  pinned = false, canPin = false, canModerate = false, onReply = null, onEdit = null,
+  onTogglePin = null, onToggleLike = null, onToggleReaction = null,
+  quickReactions = ['👍', '❤️', '🔥'], onDelete = null, onImageClick = null,
+  onRetry = null, onCopy = null, onCancel = null, replyTo = null, replyAuthor = null,
+  onJumpToReply = null, currentUserId = null, density = 'confortavel', highlighted = false,
+  highlightTick = 0, mentionsMe = false, isReply = false, roomKey = null,
+  onMarkUnread = null, threadRootId = null, replyCount = 0, onOpenThread = null,
+  onRoomMention = null, searchQuery = '',
 }) {
   const dens = resolveChatDensity(density)
-  const [copyState, setCopyState] = useState('idle') // 'idle' | 'copied' | 'error'
+  const [copyState, setCopyState] = useState('idle')
   const rootRef = useRef(null)
 
-  // Restart jump-highlight animation whenever we land on this message again.
   useEffect(() => {
     if (!highlighted || !rootRef.current) return undefined
-    const el = rootRef.current
-    el.classList.remove('vc-msg-highlight')
-    // Force reflow so the same class can re-trigger the keyframes.
-    void el.offsetWidth
-    el.classList.add('vc-msg-highlight')
-    return () => {
-      el.classList.remove('vc-msg-highlight')
-    }
+    const element = rootRef.current
+    element.classList.remove('vc-msg-highlight')
+    void element.offsetWidth
+    element.classList.add('vc-msg-highlight')
+    return () => element.classList.remove('vc-msg-highlight')
   }, [highlighted, highlightTick])
 
-  // Rich announce card (new) + upgrade long legacy sys posts that were
-  // published before kind:"announce" existed.
-  if (isLobbyWelcomeMessage(msg)) {
-    return (
-      <LobbyWelcomeCard
-        lobby={msg.lobby || msg.announce}
-        roomName={msg.roomName}
-      />
-    )
-  }
-
+  if (isLobbyWelcomeMessage(msg)) return <LobbyWelcomeCard lobby={msg.lobby || msg.announce} roomName={msg.roomName} />
   if (isLobbyEventMessage(msg)) {
-    return (
-      <LobbyEventCard
-        msg={msg}
-        accent={msg.lobbyAccent || msg.lobbyEvent?.accent || '#38bdf8'}
-        resolveRoom={resolveRoom}
-        spaceName={msg.lobbyEvent?.spaceName || ''}
-        memberCount={msg.lobbyEvent?.memberCount}
-      />
-    )
+    return <LobbyEventCard msg={msg} accent={msg.lobbyAccent || msg.lobbyEvent?.accent || '#38bdf8'} resolveRoom={resolveRoom} spaceName={msg.lobbyEvent?.spaceName || ''} memberCount={msg.lobbyEvent?.memberCount} />
   }
-
   if (msg.kind === 'announce' || msg.announce) {
-    return (
-      <AnnouncementCard
-        msg={msg}
-        resolveRoom={resolveRoom}
-        currentUserId={currentUserId}
-        onToggleLike={onToggleLike}
-        onToggleReaction={onToggleReaction}
-        quickReactions={quickReactions}
-      />
-    )
+    return <AnnouncementCard msg={msg} resolveRoom={resolveRoom} currentUserId={currentUserId} onToggleLike={onToggleLike} onToggleReaction={onToggleReaction} quickReactions={quickReactions} />
   }
-
   if (msg.kind === 'sys') {
-    const text = String(msg.text || '')
-    const looksLikeAnnounce = text.length > 60 || text.includes('\n')
-    if (looksLikeAnnounce) {
-      return (
-        <AnnouncementCard
-          msg={{
-            ...msg,
-            kind: 'announce',
-            announce: {
-              title: '',
-              body: text,
-              icon: '📣',
-              badge: 'Anúncio',
-              authorName: msg.author || 'Equipe',
-              authorPhoto: msg.authorPhoto || '',
-              accent: '#f5b942',
-              bodySize: 'md',
-            },
-          }}
-          resolveRoom={resolveRoom}
-          currentUserId={currentUserId}
-          onToggleLike={onToggleLike}
-          onToggleReaction={onToggleReaction}
-          quickReactions={quickReactions}
-        />
-      )
-    }
+    const system = createSystemCardViewModel(msg)
     return (
-      <div className="flex justify-center my-2">
-        <span className="text-[11px] text-muted">{msg.text}</span>
+      <div className="w-full px-3 sm:px-6 my-1">
+        <ChatFeatureCardFrame
+          compact
+          className="vc-system-card"
+          accent={system.accent || 'var(--vc-text-muted)'}
+          badge={<span>Sistema</span>}
+          title={<span>{system.title}</span>}
+          body={system.snippet && system.snippet !== system.title ? <Markdown text={system.snippet} resolveRoom={resolveRoom} /> : null}
+          status={system.time?.label ? <time dateTime={system.time.iso}>{system.time.label}</time> : null}
+          role="note"
+          aria-label="Atualização do sistema"
+        />
       </div>
     )
   }
 
+  const actionId = actionIdOf(msg)
   const authorLabel = author?.displayName || msg.author || (isMine ? 'você' : 'convidado')
   const authorPhoto = author?.photoURL || msg.authorPhoto || ''
   const authorId = author?.userId || msg.authorId || null
-  const time = formatMessageTime(msg.ts)
-  const compactTime = formatClock(msg.ts)
   const canDelete = !!onDelete && (isMine || canModerate)
-  const showPinButton = canPin && !!onTogglePin
+  const canEdit = !!onEdit && isMine && msg.status !== 'sending' && !msg.deleted
   const hasText = !msg.deleted && !!String(msg.text || '').trim()
   const hasAttachment = !msg.deleted && (!!msg.attachment || (Array.isArray(msg.attachments) && msg.attachments.length > 0))
-
   const handleCopy = async () => {
-    const text = msg.text
-      || attachmentSrc(msg.attachment)
-      || (isImageAttachment(msg.attachment) ? 'imagem' : msg.attachment?.name)
-      || ''
-    /* Tenta o caminho moderno (Clipboard API). Se falhar, cai pra
-     * fallback via textarea + execCommand('copy') — funciona em
-     * contextos sem permissão (ex: http, iframe).                    */
-    let ok = false
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text)
-        ok = true
-      } else {
-        throw new Error('Clipboard API indisponível')
-      }
-    } catch {
-      try {
-        const ta = document.createElement('textarea')
-        ta.value = text
-        ta.style.position = 'fixed'
-        ta.style.top = '-9999px'
-        ta.style.opacity = '0'
-        document.body.appendChild(ta)
-        ta.focus()
-        ta.select()
-        ok = document.execCommand('copy')
-        document.body.removeChild(ta)
-      } catch {
-        ok = false
-      }
-    }
-    setCopyState(ok ? 'copied' : 'error')
-    setTimeout(() => setCopyState('idle'), 1500)
+    const attachments = Array.isArray(msg.attachments) ? msg.attachments : []
+    const value = msg.text || attachmentSrc(msg.attachment) || msg.attachment?.name || attachmentSrc(attachments[0]) || attachments[0]?.name || ''
+    const copied = await writeClipboard(value)
+    setCopyState(copied ? 'copied' : 'error')
+    window.setTimeout(() => setCopyState('idle'), 1500)
   }
-
-  const fill = bubbleFill(authorColor, isMine)
-  const ring = bubbleRing(authorColor, isMine)
-  const shape = bubbleShape(isMine, showHeader)
-
-  const actionBarProps = {
-    msg,
-    copyState,
-    onCopy: handleCopy,
-    onReply,
-    onTogglePin,
-    onToggleReaction,
-    quickReactions,
-    onDelete,
-    showPinButton,
-    canDelete,
+  const menuProps = {
+    roomKey,
+    onCopyText: handleCopy,
+    onEdit: canEdit ? onEdit : null,
+    onTogglePin: canPin && onTogglePin ? onTogglePin : null,
+    onMarkUnread,
+    onDelete: canDelete ? onDelete : null,
+    onOpenThread,
     pinned,
+    replyCount: Number(replyCount || msg.replyCount) || 0,
   }
 
   return (
-    <div
+    <article
       ref={rootRef}
-      data-msg-id={msg.id}
+      id={actionId ? `message-${actionId}` : undefined}
+      data-msg-id={actionId || ''}
       data-msg-fs={msg.firestoreId || ''}
       data-msg-author={authorId || ''}
       data-msg-mine={isMine ? '1' : '0'}
       data-msg-color={authorColor || ''}
+      data-thread-root={threadRootId || msg.threadRootId || ''}
+      data-reply-count={Number(replyCount || msg.replyCount) || 0}
       data-chat-density={dens.key}
-      className={
-        'group relative flex w-full min-w-0 justify-start rounded-xl ' +
-        (showHeader ? dens.msgHeaderMt : dens.msgFollowMt) + ' ' +
-        'px-2 sm:px-3'
-      }
-      onDoubleClick={
-        onToggleLike && !msg.deleted
-          ? (e) => {
-              /* Evita acionar quando o double-click foi em controles
-               * interativos (botões do action bar, like button).    */
-              const tgt = e.target
-              if (tgt && tgt.closest && tgt.closest('button, a, [role="button"]')) return
-              e.preventDefault()
-              onToggleLike(msg.id)
-            }
-          : undefined
-      }
+      className={`vc-conversation-message group ${showHeader ? 'has-header' : 'is-followup'} ${mentionsMe ? 'is-mentioned' : ''} ${isReply ? 'is-reply' : ''}`}
+      style={{ '--vc-message-author': authorColor || 'var(--space-accent)' }}
+      aria-label={`${authorLabel}, ${formatMessageTime(msg.ts)}`}
     >
-      <AvatarColumn
-        showHeader={showHeader}
-        photoURL={authorPhoto}
-        label={authorLabel}
-        userId={authorId}
-        compactTime={compactTime}
-        size={dens.avatar}
-      />
-
-      <div className="relative flex flex-col max-w-[min(78%,640px)] items-start min-w-0">
+      <AvatarColumn showHeader={showHeader} photoURL={authorPhoto} label={authorLabel} userId={authorId} compactTime={formatMessageTime(msg.ts)} size={dens.avatar} />
+      <div className="vc-conversation-message__main">
         {showHeader && (
-          <MessageHeader
-            label={authorLabel}
-            pinned={pinned}
-            time={time}
-            canPin={canPin}
-            headerText={dens.headerText}
-            timeText={dens.timeText}
-            {...actionBarProps}
-          />
+          <header className="vc-conversation-message__header">
+            <strong>{authorLabel}</strong>
+            {pinned && !msg.deleted && <span className="vc-conversation-message__pinned"><Pin size={11} aria-hidden />Fixada</span>}
+            <time dateTime={msg.ts ? new Date(msg.ts).toISOString() : undefined}>{formatMessageTime(msg.ts)}</time>
+          </header>
         )}
-
-        {/* Follow-up messages in a group have no header — still need
-            the same hover actions (delete/reply/react/copy).         */}
-        {!showHeader && !msg.deleted && (
-          <MessageActionBar
-            {...actionBarProps}
-            className="absolute left-full top-0 ml-2 z-20"
-          />
-        )}
-
-        <div className="flex flex-col items-start gap-1.5 max-w-full">
-          <Bubble
-            shape={shape}
-            fill={fill}
-            ring={ring}
-            showHeader={showHeader}
-            interactive={!!onToggleLike && !msg.deleted}
-            likeContent={
-              onToggleLike ? (
-                <LikeButton
-                  msg={msg}
-                  currentUserId={currentUserId}
-                  onToggleLike={onToggleLike}
-                  bubbleFill={msg.deleted ? null : fill}
-                />
-              ) : null
-            }
-          >
-            <div className={`${dens.bubbleText} text-strong/90`}>
-              {!msg.deleted && (
-                <ReplyQuote
-                  replyTo={replyTo}
-                  replyAuthor={replyAuthor}
-                  onJumpToReply={onJumpToReply}
-                />
-              )}
-              <MessageText msg={msg} resolveRoom={resolveRoom} />
-              {hasAttachment && (
-                <AttachmentBlock
-                  attachment={msg.attachment}
-                  attachments={msg.attachments}
-                  onImageClick={onImageClick}
-                  hasText={hasText}
-                />
-              )}
-              {!msg.deleted && msg.edited && (
-                <span className="ml-1 text-[10px] text-muted italic">(editada)</span>
-              )}
-            </div>
-          </Bubble>
-          {(isMine && (msg.status === 'failed' || msg.status === 'permanent-failed') && !msg.deleted) && (
-            <div className="flex items-center gap-2 text-[11px] text-danger">
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-danger/15 border border-danger/30">
-                Falha no envio
-              </span>
-              {onRetry && (
-                <button
-                  type="button"
-                  onClick={() => onRetry(msg.id)}
-                  className="inline-flex items-center gap-1 hover:text-danger/90"
-                  title="Tentar enviar de novo"
-                >
-                  <RotateCcw size={11} strokeWidth={2} />
-                  Tentar novamente
-                </button>
-              )}
-              {onCopy && (
-                <button
-                  type="button"
-                  onClick={() => onCopy(msg.id)}
-                  className="inline-flex items-center gap-1 hover:text-danger/90"
-                  title="Copiar texto para área de transferência"
-                >
-                  Copiar texto
-                </button>
-              )}
-              {onCancel && (
-                <button
-                  type="button"
-                  onClick={() => onCancel(msg.id)}
-                  className="inline-flex items-center gap-1 hover:text-danger/90"
-                  title="Excluir mensagem pendente"
-                >
-                  Excluir
-                </button>
-              )}
-            </div>
-          )}
-          {onToggleReaction && !msg.deleted && (
-            <EmojiReactions
-              reactions={msg.reactions || {}}
-              hideAdd
-              onToggle={(emoji) => onToggleReaction(msg.id, emoji)}
-              onPick={(emoji) => onToggleReaction(msg.id, emoji)}
-            />
-          )}
+        <MessageActionBar
+          message={msg}
+          currentUserId={currentUserId}
+          quickReactions={quickReactions}
+          onToggleReaction={onToggleReaction}
+          onToggleLike={onToggleLike}
+          onReply={onReply}
+          menuProps={menuProps}
+        />
+        <div className="vc-conversation-message__surface">
+          {!msg.deleted && <ReplyQuote replyTo={replyTo} replyAuthor={replyAuthor} onJumpToReply={onJumpToReply} />}
+          <div className={`vc-conversation-message__body ${dens.bubbleText}`}>
+            <MessageText message={msg} resolveRoom={resolveRoom} onRoomMention={onRoomMention} searchQuery={searchQuery} />
+            {hasAttachment && <AttachmentBlock attachment={msg.attachment} attachments={msg.attachments} onImageClick={onImageClick} hasText={hasText} />}
+            {!msg.deleted && msg.edited && <span className="vc-conversation-message__edited">editada</span>}
+          </div>
+          {copyState !== 'idle' && <span className={`vc-conversation-copy-state is-${copyState}`} role="status">{copyState === 'copied' ? <><Check size={12} />Copiado</> : <><XCircle size={12} />Falha ao copiar</>}</span>}
         </div>
+        {!msg.deleted && (
+          <MessageActionBar
+            inline
+            message={msg}
+            currentUserId={currentUserId}
+            onToggleReaction={onToggleReaction}
+            onToggleLike={onToggleLike}
+            onReply={onReply}
+            menuProps={menuProps}
+          />
+        )}
+        {isMine && !msg.deleted && <DeliveryState message={msg} onRetry={onRetry} onCopy={onCopy} onCancel={onCancel} />}
+        {!msg.deleted && (onToggleReaction || onToggleLike) && (
+          <EmojiReactions
+            reactions={msg.reactions || {}}
+            likes={msg.likes || []}
+            currentUserId={currentUserId}
+            hideAdd
+            onToggle={onToggleReaction ? (emoji) => onToggleReaction(actionId, emoji) : null}
+            onToggleLike={onToggleLike ? () => onToggleLike(actionId) : null}
+          />
+        )}
       </div>
-    </div>
+    </article>
   )
 }

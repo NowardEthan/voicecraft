@@ -149,7 +149,7 @@ export function ProfileAppearance({ profile, saving, onSave, onCover }) {
                 onClick={() => selectTheme(t.id)}
                 disabled={saving}
                 className={[
-                  'relative overflow-hidden rounded-xl border text-left transition-all',
+                  'relative overflow-hidden rounded-xl border text-left transition-[color,background-color,border-color,box-shadow,opacity,transform,filter]',
                   active
                     ? 'ring-2 ring-white/80 border-transparent scale-[1.02]'
                     : 'border-white/[0.08] hover:border-white/20 hover:scale-[1.01]',
@@ -262,7 +262,7 @@ export function ProfileAppearance({ profile, saving, onSave, onCover }) {
           onClick={saveAppearance}
           disabled={saving || !dirty}
           className={[
-            'h-11 px-5 rounded-xl text-[13px] font-semibold inline-flex items-center gap-2 transition-all',
+            'h-11 px-5 rounded-xl text-[13px] font-semibold inline-flex items-center gap-2 transition-[color,background-color,border-color,box-shadow,opacity,transform,filter]',
             dirty && !saving
               ? 'text-strong hover:opacity-90 active:scale-[0.99]'
               : 'bg-white/[0.06] text-muted cursor-not-allowed',

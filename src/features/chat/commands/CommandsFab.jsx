@@ -10,7 +10,7 @@ export default function CommandsFab({ open, onClick }) {
       className={[
         'absolute z-20 bottom-3 right-3',
         'w-11 h-11 rounded-full flex items-center justify-center',
-        'border border-line shadow-lg transition-all duration-200',
+        'border border-line shadow-lg transition-[color,background-color,border-color,box-shadow,opacity,transform,filter] duration-200',
         open
           ? 'bg-surface2 text-strong scale-95'
           : 'bg-surface1 text-ink hover:text-strong hover:bg-surface2 hover:scale-105',

@@ -25,3 +25,9 @@ build-output.txt
 packages/
 Documentação/
 Mockups/
+
+# Local-only release validation outputs (never commit)
+.tmp-docs/
+release-audio-validation/
+release-audio-validation-win/
+

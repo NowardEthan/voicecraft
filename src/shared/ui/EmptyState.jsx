@@ -11,10 +11,11 @@
  *   accent:   boolean — when true, uses --space-accent for icon bg
  */
 import { ArrowRight } from 'lucide-react'
+import { Appear } from '../motion/Appear.jsx'
 
 export default function EmptyState({ icon: Icon, title, body, action, accent = false }) {
   return (
-    <div className="flex flex-col items-center justify-center text-center px-6 py-10 rounded-2xl border border-dashed border-line bg-canvas/50">
+    <Appear y={4} className="flex flex-col items-center justify-center text-center px-6 py-10 rounded-2xl border border-dashed border-line bg-canvas/50">
       <div
         className={
           'w-12 h-12 rounded-2xl flex items-center justify-center mb-4 ' +
@@ -36,12 +37,12 @@ export default function EmptyState({ icon: Icon, title, body, action, accent = f
       {action && (
         <button
           onClick={action.onClick}
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-[12.5px] font-medium bg-accent hover:opacity-90 text-strong transition-all active:scale-[0.98] shadow-lg shadow-accent/20"
+          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-[12.5px] font-medium bg-accent hover:opacity-90 text-strong transition-[color,background-color,border-color,box-shadow,opacity,transform,filter] active:scale-[0.98] shadow-lg shadow-accent/20"
         >
           {action.label}
           <ArrowRight size={13} strokeWidth={2.25} />
         </button>
       )}
-    </div>
+    </Appear>
   )
 }

@@ -4,13 +4,11 @@
  * Todos: full catalog for current style / all emojis.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
-import { motion, AnimatePresence } from 'framer-motion'
+import { AnchoredOverlay, TooltipOverlay } from '../../../shared/motion/AnchoredOverlay.jsx'
 import {
   BookOpen, Briefcase, Check, Clock, Coffee, Cpu, Gamepad2, Globe,
   Grid3X3, Home, Mic, Music, Paintbrush, Search, Smile, Sparkles, Star, Trophy, Users, X, Upload,
 } from 'lucide-react'
-import { EASE_OUT } from '../../../shared/motion/presets.js'
 import {
   SpaceIcon,
   searchSpaceIcons,
@@ -70,26 +68,22 @@ export function SpaceIconPicker({
   onUploadImage = null,
 }) {
   return (
-    <AnimatePresence>
-      {open && (
-        <IconPickerPanel
-          key="icon-picker"
-          current={current}
-          currentEmoji={currentEmoji}
-          recents={recents}
-          onPick={onPick}
-          onPickEmoji={onPickEmoji}
-          onClose={onClose}
-          anchorRef={anchorRef}
-          enableEmojis={enableEmojis}
-          onUploadImage={onUploadImage}
-        />
-      )}
-    </AnimatePresence>
+    <IconPickerPanel
+      open={open}
+      current={current}
+      currentEmoji={currentEmoji}
+      recents={recents}
+      onPick={onPick}
+      onPickEmoji={onPickEmoji}
+      onClose={onClose}
+      anchorRef={anchorRef}
+      enableEmojis={enableEmojis}
+      onUploadImage={onUploadImage}
+    />
   )
 }
-
 function IconPickerPanel({
+  open,
   current,
   currentEmoji,
   recents: recentsProp,
@@ -172,30 +166,6 @@ function IconPickerPanel({
       window.removeEventListener('scroll', compute, true)
     }
   }, [anchorRef])
-
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation()
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  }, [onClose])
-
-  useEffect(() => {
-    const onClick = (e) => {
-      if (panelRef.current && panelRef.current.contains(e.target)) return
-      if (anchorRef?.current && anchorRef.current.contains(e.target)) return
-      onClose()
-    }
-    const t = setTimeout(() => window.addEventListener('mousedown', onClick), 0)
-    return () => {
-      clearTimeout(t)
-      window.removeEventListener('mousedown', onClick)
-    }
-  }, [onClose, anchorRef])
 
   useEffect(() => {
     const t = setTimeout(() => searchRef.current?.focus(), 0)
@@ -341,18 +311,21 @@ function IconPickerPanel({
     return CATEGORY_META[activeCategory]?.label || activeCategory
   })()
 
-  const panel = (
-    <motion.div
-      ref={panelRef}
-      role="dialog"
-      aria-label="Escolha um ícone"
-      initial={{ opacity: 0, scale: 0.96, y: -4 }}
-      animate={{ opacity: 1, scale: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.97, y: -2 }}
-      transition={{ duration: 0.2, ease: EASE_OUT }}
-      className="vc-space-floating fixed z-[80] w-[min(580px,calc(100vw-24px))] h-[min(520px,calc(100vh-24px))] rounded-2xl border border-accent/20 bg-[#1a1a1e] shadow-[0_24px_60px_-16px_rgba(0,0,0,0.6),0_0_24px_-4px_rgba(255,63,108,0.15)] flex flex-col overflow-hidden"
-      style={{ top: pos.top, left: pos.left }}
-    >
+  return (
+    <>
+      <AnchoredOverlay
+        open={open}
+        ref={panelRef}
+        anchorRef={anchorRef}
+        onClose={onClose}
+        placement={pos.placement}
+        restoreFocus={!!anchorRef}
+        initialFocus={() => searchRef.current}
+        role="dialog"
+        aria-label="Escolha um ?cone"
+        className="vc-space-floating fixed w-[min(580px,calc(100vw-24px))] h-[min(520px,calc(100vh-24px))] rounded-2xl border border-accent/20 bg-[#1a1a1e] shadow-[0_24px_60px_-16px_rgba(0,0,0,0.6),0_0_24px_-4px_rgba(255,63,108,0.15)] flex flex-col overflow-hidden"
+        style={{ top: pos.top, left: pos.left }}
+      >
       <div className="flex items-center justify-between px-5 pt-4 pb-2">
         <div className="flex items-center gap-3">
           <h2 className="text-[16px] font-semibold text-strong tracking-tight">
@@ -365,7 +338,7 @@ function IconPickerPanel({
                 onClose?.()
                 onUploadImage?.()
               }}
-              className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg text-[11.5px] font-medium bg-accent/15 text-accent hover:bg-accent/25 border border-accent/25 transition-all active:scale-95"
+              className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg text-[11.5px] font-medium bg-accent/15 text-accent hover:bg-accent/25 border border-accent/25 transition-[color,background-color,border-color,box-shadow,opacity,transform,filter] active:scale-95"
               title="Fazer upload de foto do computador"
             >
               <Upload size={12} strokeWidth={2.2} />
@@ -518,7 +491,7 @@ function IconPickerPanel({
                     aria-label={emoji}
                     aria-pressed={active}
                     className={
-                      'relative flex items-center justify-center rounded-[10px] transition-all duration-150 ' +
+                      'relative flex items-center justify-center rounded-[10px] transition-[color,background-color,border-color,box-shadow,opacity,transform,filter] duration-150 ' +
                       'h-[44px] w-full border text-[22px] leading-none ' +
                       (active
                         ? 'bg-accent/15 border-accent'
@@ -554,7 +527,7 @@ function IconPickerPanel({
                     aria-label={entry.label}
                     aria-pressed={active}
                     className={
-                      'relative flex items-center justify-center rounded-[10px] transition-all duration-150 ' +
+                      'relative flex items-center justify-center rounded-[10px] transition-[color,background-color,border-color,box-shadow,opacity,transform,filter] duration-150 ' +
                       'h-[54px] w-full border ' +
                       (active
                         ? 'bg-accent/15 text-accent border-accent shadow-[0_0_14px_-2px_var(--space-accent-glow-24)]'
@@ -584,14 +557,15 @@ function IconPickerPanel({
         </div>
       </div>
 
-      {hoveredIcon && mode === 'icons' && (
-        <div className="absolute -top-9 left-1/2 -translate-x-1/2 px-2.5 py-1.5 rounded-md bg-[#0a0a0c] border border-line text-[12px] text-strong shadow-lg pointer-events-none whitespace-nowrap z-10">
-          <span className="font-medium">{hoveredIcon.label}</span>
-          <span className="text-muted ml-1.5">· {hoveredIcon.style}</span>
-        </div>
-      )}
-    </motion.div>
+      <TooltipOverlay
+        open={!!hoveredIcon && mode === 'icons'}
+        placement="top"
+        className="fixed left-1/2 top-3 -translate-x-1/2 px-2.5 py-1.5 rounded-md bg-[#0a0a0c] border border-line text-[12px] text-strong shadow-lg whitespace-nowrap"
+      >
+        <span className="font-medium">{hoveredIcon?.label}</span>
+        <span className="text-muted ml-1.5">? {hoveredIcon?.style}</span>
+      </TooltipOverlay>
+      </AnchoredOverlay>
+    </>
   )
-
-  return createPortal(panel, document.body)
 }

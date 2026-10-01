@@ -26,6 +26,7 @@
  *   - files:              array of in-flight and completed transfers
  *   - ready:              true when the channel is open
  *   - connectionState:    'connecting' | 'open' | 'closing' | 'closed'
+ *   - historyReady:       true when cached/Firestore history can be rendered
  *   - sendMessage({ text, attachment? })
  *   - sendFile(file)
  *   - clear()
@@ -36,7 +37,7 @@
  * to the most recent MAX_PERSISTED messages. Dedup is id-based so the
  * server's hello/redelivery won't double our history.
  */
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import {
   listenRoomLikes, likeMessageKeys, unlikeMessageKeys,
 } from '../shared/firebase/likes'
@@ -47,15 +48,17 @@ import {
   bumpReaction as bumpFrequent, unbumpReaction as unbumpFrequent,
 } from '../shared/firebase/frequentReactions'
 import {
-  enqueueMessage as outboxEnqueue, markSent as outboxMarkSent,
-  markPermanentFailed as outboxMarkPermanentFailed,
-  resetForRetry as outboxResetForRetry,
-  getAll as outboxGetAll, deleteItem as outboxDelete,
+  enqueueMessage as outboxEnqueue,
+  getAll as outboxGetAll, subscribe as outboxSubscribe,
+  updateMessagePayload as outboxUpdatePayload,
 } from '../shared/chat/chatOutbox'
 import {
   setSender as dispatcherSetSender, setActiveUid as dispatcherSetActiveUid,
   start as dispatcherStart, flush as dispatcherFlush, retryNow as dispatcherRetryNow,
+  cancel as dispatcherCancel, isCanceled as dispatcherIsCanceled,
 } from '../shared/chat/outboxDispatcher'
+import { flashToast } from '../shared/utils/toast'
+import { resolveMessageIdentity } from '../features/chat/messageIdentity.js'
 
 const CHUNK_SIZE = 16 * 1024  // 16 KiB
 const CHAT_STORAGE_PREFIX = 'voicecraft:chat:'
@@ -79,6 +82,20 @@ function genMessageId() {
 
 function storageKey(roomKey) {
   return roomKey ? `${CHAT_STORAGE_PREFIX}${roomKey}` : null
+}
+
+function historyRoomIds(roomKey) {
+  const raw = String(roomKey || '')
+  const separator = raw.indexOf(':')
+  if (separator <= 0 || separator === raw.length - 1) return null
+  const spaceId = raw.slice(0, separator)
+  const roomId = raw.slice(separator + 1)
+  if (!spaceId || spaceId === 'nospace' || !roomId) return null
+  return { spaceId, roomId }
+}
+
+function canListenToHistory(signaling, roomKey) {
+  return !!historyRoomIds(roomKey) && typeof signaling?.listenChat === 'function'
 }
 
 function loadHistory(roomKey) {
@@ -125,6 +142,10 @@ function persistableAttachment(attachment) {
     next.dataUrl = attachment.dataUrl
   }
   if (attachment.sticker) next.sticker = true
+  for (const key of ['width', 'height', 'w', 'h']) {
+    const value = Number(attachment[key])
+    if (Number.isFinite(value) && value > 0) next[key] = value
+  }
   return next
 }
 
@@ -163,7 +184,17 @@ function persistableMessage(msg) {
     // already set attachment
   }
   if (msg.replyToId) out.replyToId = msg.replyToId
+  if (msg.threadRootId) out.threadRootId = String(msg.threadRootId)
+  if (Number.isFinite(Number(msg.replyCount))) out.replyCount = Math.max(0, Number(msg.replyCount))
+  if (Array.isArray(msg.mentions) && msg.mentions.length) out.mentions = msg.mentions
+  if (msg.editedAt) { out.edited = true; out.editedAt = msg.editedAt }
   return out
+}
+
+function outboxMessageStatus(item) {
+  if (item?.status === 'permanent-failed') return 'permanent-failed'
+  if (item?.status === 'pending' && Number(item?.attempts) > 0) return 'failed'
+  return 'sending'
 }
 
 function toStoredAtt(attachment) {
@@ -182,6 +213,10 @@ function toStoredAtt(attachment) {
     file: attachment.file || null,
   }
   if (attachment.sticker) out.sticker = true
+  for (const key of ['width', 'height', 'w', 'h']) {
+    const value = Number(attachment[key])
+    if (Number.isFinite(value) && value > 0) out[key] = value
+  }
   return out
 }
 
@@ -204,6 +239,13 @@ export function useChat({
   const [connectionState, setConnectionState] = useState(
     channel ? (channel.readyState || 'connecting') : 'connecting'
   )
+  const [historyStatus, setHistoryStatus] = useState(() => ({
+    roomKey: roomKey || null,
+    // A parsed array (including []) is usable cache. If history cannot be
+    // listened to, render local state instead of leaving the timeline blocked.
+    ready: loadHistory(roomKey) !== null || !canListenToHistory(signaling, roomKey),
+  }))
+  const historyReady = historyStatus.roomKey === (roomKey || null) && historyStatus.ready
 
   /* Fonte da verdade dos likes: Map<msgId, likes[]>. Persiste entre
    * renders do React e sobrevive ao re-seed de history quando trocamos
@@ -215,6 +257,8 @@ export function useChat({
    * Mesma estratégia dos likes — autoritativo, atualizado pelo
    * listener RTDB e re-aplicado em qualquer mutação de messages. */
   const reactionsFromServerRef = useRef(new Map())
+  const reactionMutationRef = useRef(new Map())
+  const chanMutationRef = useRef(null)
 
   /* Outbox integration — Fase 3:
    *   - Register sender with the dispatcher on mount/uid change.
@@ -224,12 +268,50 @@ export function useChat({
   useEffect(() => {
     if (!userId) return
     dispatcherSetActiveUid(userId)
-    dispatcherSetSender(async (item) => {
+    const unregisterSender = dispatcherSetSender(async (item) => {
+      if (dispatcherIsCanceled(item.id)) return
       // Reconstruct the wire message from the outbox payload.
       const rawKey = item.roomKey
       const sep = rawKey.indexOf(':')
+      const chatSpaceId = sep >= 0 ? rawKey.slice(0, sep) : null
       const chatRoomId = sep >= 0 ? rawKey.slice(sep + 1) : rawKey
-      const persisted = (item.payload?.attachments || []).filter((a) => !a.blob)
+      const sourceAttachments = item.payload?.attachments || []
+      const persisted = new Array(sourceAttachments.length)
+      for (let index = 0; index < sourceAttachments.length; index += 1) {
+        if (dispatcherIsCanceled(item.id)) return
+        const source = sourceAttachments[index]
+        const uploadBody = source.blob || source.file || null
+        let url = source.url || null
+        if (!url && uploadBody) {
+          if (typeof signaling?.uploadChatFile !== 'function') {
+            throw new Error('Upload de anexo indisponivel')
+          }
+          url = await signaling.uploadChatFile(uploadBody, chatRoomId, chatSpaceId)
+          if (dispatcherIsCanceled(item.id)) return
+          if (!url) throw new Error('Upload sem URL')
+        }
+        if (!url && !source.dataUrl) throw new Error('Anexo incompleto - envie de novo')
+        const { blob, file, previewUrl, ...metadata } = source
+        persisted[index] = {
+          ...metadata,
+          kind: source.kind || ((source.type || '').startsWith('image/') ? 'image' : 'file'),
+          name: source.name || 'arquivo',
+          type: source.type || 'application/octet-stream',
+          size: Number(source.size) || 0,
+          url,
+          dataUrl: source.dataUrl || null,
+        }
+        if (uploadBody) {
+          // Save every completed URL immediately. If the process stops between
+          // attachments, already-uploaded files are not uploaded or lost again.
+          await outboxUpdatePayload(item.id, {
+            ...item.payload,
+            attachments: sourceAttachments.map((entry, entryIndex) => (
+              persisted[entryIndex] || entry
+            )),
+          })
+        }
+      }
       const wire = persistableMessage({
         kind: 'msg',
         id: item.id,
@@ -240,26 +322,44 @@ export function useChat({
         authorPhoto: item.payload?.author?.photo || '',
         text: item.payload?.text || '',
         replyToId: item.payload?.replyToId || null,
+        threadRootId: item.payload?.threadRootId || null,
+        mentions: item.payload?.mentions || [],
         attachment: persisted[0] || undefined,
         attachments: persisted.length > 1 ? persisted : undefined,
       })
+      const isCurrentRoom = item.roomKey === roomKey
+      if (isCurrentRoom) {
+        replaceMessage(item.id, {
+          attachment: persisted[0] || undefined,
+          attachments: persisted.length > 1 ? persisted : undefined,
+        })
+      }
+      if (dispatcherIsCanceled(item.id)) return
       const dc = channelRef?.current
-      if (dc?.readyState === 'open') {
+      if (isCurrentRoom && dc?.readyState === 'open') {
         try { dc.send(JSON.stringify(wire)) } catch (err) {
           console.warn('[outbox] p2p send failed:', err)
         }
       }
-      await signaling?.sendChatMessage?.(wire, chatRoomId)
+      if (typeof signaling?.sendChatMessage !== 'function') {
+        throw new Error('Persistencia do chat indisponivel')
+      }
+      if (dispatcherIsCanceled(item.id)) return
+      await signaling.sendChatMessage(wire, chatRoomId, chatSpaceId)
+      if (dispatcherIsCanceled(item.id)) return
       // Reflect success in local state if still pending.
-      setMessages((prev) => {
-        if (!prev.find((m) => m.id === item.id)) return prev
-        const next = prev.map((m) => (m.id === item.id ? { ...m, status: 'sent' } : m))
-        saveHistory(roomKey, next)
-        return next
-      })
+      if (isCurrentRoom) {
+        setMessages((prev) => {
+          if (!prev.find((m) => m.id === item.id)) return prev
+          const next = prev.map((m) => (m.id === item.id ? { ...m, status: 'sent' } : m))
+          saveHistory(roomKey, next)
+          return next
+        })
+      }
     })
     dispatcherStart()
     void dispatcherFlush(userId)
+    return unregisterSender
   }, [userId, signaling, roomKey])
 
   // Channel ref so the dispatcher sender can access the latest channel
@@ -280,7 +380,22 @@ export function useChat({
           const byId = new Map(prev.map((m) => [m.id, m]))
           let changed = false
           for (const item of mine) {
-            if (byId.has(item.id)) continue
+            const existing = byId.get(item.id)
+            const outboxAttachments = item.payload?.attachments || []
+            if (existing) {
+              byId.set(item.id, {
+                ...existing,
+                text: item.payload?.text ?? existing.text,
+                attachment: outboxAttachments[0] || existing.attachment,
+                attachments: outboxAttachments.length > 1 ? outboxAttachments : existing.attachments,
+                replyToId: item.payload?.replyToId || existing.replyToId || null,
+                threadRootId: item.payload?.threadRootId || existing.threadRootId || null,
+                mentions: item.payload?.mentions || existing.mentions || [],
+                status: outboxMessageStatus(item),
+              })
+              changed = true
+              continue
+            }
             byId.set(item.id, {
               id: item.id,
               kind: 'msg',
@@ -289,14 +404,14 @@ export function useChat({
               attachment: (item.payload?.attachments || [])[0] || undefined,
               attachments: (item.payload?.attachments || []).length > 1 ? item.payload.attachments : undefined,
               replyToId: item.payload?.replyToId || null,
+              threadRootId: item.payload?.threadRootId || null,
+              mentions: item.payload?.mentions || [],
               author: item.payload?.author?.name || 'você',
               authorId: item.payload?.author?.id || userId,
               authorHandle: item.payload?.author?.handle || '',
               authorPhoto: item.payload?.author?.photo || '',
               direction: 'out',
-              status: item.status === 'permanent-failed'
-                ? 'permanent-failed'
-                : (item.status === 'in-flight' ? 'sending' : 'sending'),
+              status: outboxMessageStatus(item),
             })
             changed = true
           }
@@ -310,6 +425,33 @@ export function useChat({
       }
     })()
     return () => { cancelled = true }
+  }, [userId, roomKey])
+
+  useEffect(() => {
+    if (!userId || !roomKey) return undefined
+    return outboxSubscribe((event) => {
+      const item = event.item
+      if (item && (item.uid !== userId || item.roomKey !== roomKey)) return
+      const id = event.id || item?.id
+      if (!id) return
+      setMessages((prev) => {
+        const matches = (message) => message.id === id || message.firestoreId === id
+        if (event.type === 'canceled') {
+          if (!prev.some(matches)) return prev
+          const next = prev.filter((message) => !matches(message))
+          saveHistory(roomKey, next)
+          return next
+        }
+        const status = event.type === 'sent'
+          ? 'sent'
+          : (event.type === 'permanent-failed' ? 'permanent-failed'
+            : (event.type === 'failed' ? 'failed' : 'sending'))
+        if (!prev.some(matches)) return prev
+        const next = prev.map((message) => matches(message) ? { ...message, status } : message)
+        saveHistory(roomKey, next)
+        return next
+      })
+    })
   }, [userId, roomKey])
 
   /** Resolve likes for a message — prefer exact id, then firestoreId. */
@@ -355,8 +497,11 @@ export function useChat({
     if (!list || list.length === 0) return list
     let changed = false
     const next = list.map((m) => {
-      if (!m || !m.id) return m
-      const fromServer = reactionsFromServerRef.current.get(m.id)
+      if (!m || (!m.id && !m.firestoreId)) return m
+      const store = reactionsFromServerRef.current
+      const fromServer = (m.id != null && store.has(m.id))
+        ? store.get(m.id)
+        : (m.firestoreId != null ? store.get(m.firestoreId) : undefined)
       if (!fromServer) return m
       const local = m.reactions || {}
       /* Compara profundamente por chaves/valores. */
@@ -385,8 +530,13 @@ export function useChat({
 
   // Re-seed history when roomKey changes (different Sala). Re-apply
   // whatever likes are already in the Map (listener may have fired).
-  useEffect(() => {
-    const seeded = loadHistory(roomKey) || []
+  useLayoutEffect(() => {
+    const cached = loadHistory(roomKey)
+    const seeded = cached || []
+    setHistoryStatus({
+      roomKey: roomKey || null,
+      ready: cached !== null || !canListenToHistory(signaling, roomKey),
+    })
     setMessages(applyLikes(seeded))
     setFiles([])
     // Don't reset `ready` here — it makes the Composer flash "Reconnecting…"
@@ -440,11 +590,19 @@ export function useChat({
   }, [spaceId, roomId, roomKey, applyReactions])
 
   useEffect(() => {
-    if (!roomKey || !signaling?.listenChat) return undefined
-    const [spaceId, roomId] = String(roomKey).split(':')
-    if (!spaceId || spaceId === 'nospace' || !roomId) return undefined
-    return signaling.listenChat(spaceId, roomId, (list) => {
-      if (!Array.isArray(list)) return
+    const activeRoomKey = roomKey || null
+    const ids = historyRoomIds(roomKey)
+    const finishWithoutRemoteHistory = (err) => {
+      if (err) console.warn('[chat] history listener:', err)
+      setHistoryStatus({ roomKey: activeRoomKey, ready: true })
+    }
+    if (!ids || typeof signaling?.listenChat !== 'function') {
+      finishWithoutRemoteHistory()
+      return undefined
+    }
+    let active = true
+    const onHistory = (list) => {
+      if (!active || !Array.isArray(list)) return
       const remote = list.map((m) => ({
         ...m,
         kind: m.kind || 'msg',
@@ -456,18 +614,43 @@ export function useChat({
           ? undefined
           : (Array.isArray(m.attachments) && m.attachments.length ? m.attachments : undefined),
         replyToId: m.replyToId || null,
+        threadRootId: m.threadRootId || null,
+        replyCount: Math.max(0, Number(m.replyCount) || 0),
+        mentions: Array.isArray(m.mentions) ? m.mentions : [],
+        edited: !!m.editedAt || !!m.edited,
+        editedAt: m.editedAt || null,
         direction: m.authorId && userId && m.authorId === userId ? 'out' : (m.direction || 'in'),
         status: m.authorId && userId && m.authorId === userId ? 'sent' : m.status,
       }))
       setMessages((prev) => {
-        const ids = new Set(remote.map((m) => m.id).filter(Boolean))
-        const pending = prev.filter((m) => m.direction === 'out' && m.status === 'sending' && m.id && !ids.has(m.id))
+        const ids = new Set(remote.flatMap((m) => [m.id, m.firestoreId]).filter(Boolean))
+        const pending = prev.filter((m) => (
+          m.direction === 'out'
+          && ['sending', 'failed', 'permanent-failed'].includes(m.status)
+          && m.id
+          && !ids.has(m.id)
+          && !dispatcherIsCanceled(m.id)
+        ))
         let next = applyLikes([...remote, ...pending].sort((a, b) => (a.ts || 0) - (b.ts || 0)))
         next = applyReactions(next)
         saveHistory(roomKey, next)
         return next
       })
-    })
+      setHistoryStatus({ roomKey: activeRoomKey, ready: true })
+    }
+    const onHistoryError = (err) => {
+      if (active) finishWithoutRemoteHistory(err)
+    }
+    let unsubscribe
+    try {
+      unsubscribe = signaling.listenChat(ids.spaceId, ids.roomId, onHistory, onHistoryError)
+    } catch (err) {
+      finishWithoutRemoteHistory(err)
+    }
+    return () => {
+      active = false
+      if (typeof unsubscribe === 'function') unsubscribe()
+    }
   }, [roomKey, signaling, userId, applyLikes, applyReactions])
 
   // ----- Helpers that update state ------------------------------------------
@@ -543,6 +726,9 @@ export function useChat({
             type: a.type || 'application/octet-stream',
             name: a.name || 'arquivo',
             size: a.size || 0,
+            sticker: !!a.sticker,
+            width: a.width || a.w || null,
+            height: a.height || a.h || null,
           })).filter((a) => a.url || a.dataUrl)
           appendMessage({
             id: msg.id || uid(),
@@ -557,6 +743,11 @@ export function useChat({
             attachment: list[0] || null,
             attachments: list.length > 1 ? list : undefined,
             replyToId: msg.replyToId || null,
+            threadRootId: msg.threadRootId || null,
+            replyCount: Math.max(0, Number(msg.replyCount) || 0),
+            mentions: Array.isArray(msg.mentions) ? msg.mentions : [],
+            edited: !!msg.editedAt || !!msg.edited,
+            editedAt: msg.editedAt || null,
           })
           break
         }
@@ -577,6 +768,19 @@ export function useChat({
               for (const id of keyIds) likesFromServerRef.current.set(id, likes)
               return { ...m, likes }
             })
+            saveHistory(roomKey, next)
+            return next
+          })
+          break
+        }
+        case 'edit': {
+          if (!msg.msgId || !msg.authorId) break
+          setMessages((prev) => {
+            const next = prev.map((m) => (
+              (m.id === msg.msgId || m.firestoreId === msg.msgId) && m.authorId === msg.authorId
+                ? { ...m, text: String(msg.text || ''), mentions: msg.mentions || [], edited: true, editedAt: msg.editedAt || Date.now() }
+                : m
+            ))
             saveHistory(roomKey, next)
             return next
           })
@@ -717,7 +921,7 @@ export function useChat({
   }, [signaling, postSystem])
 
   // ----- Outbound actions ---------------------------------------------------
-  const sendMessage = useCallback(async ({ text, attachment, attachments, replyToId } = {}) => {
+  const sendMessage = useCallback(async ({ text, attachment, attachments, replyToId, threadRootId = null, mentions = [] } = {}) => {
     const trimmed = String(text || '').trim()
     const rawList = Array.isArray(attachments) && attachments.length
       ? attachments
@@ -744,6 +948,8 @@ export function useChat({
       text: trimmed,
     }
     if (replyToId) msg.replyToId = String(replyToId)
+    if (threadRootId) msg.threadRootId = String(threadRootId)
+    if (Array.isArray(mentions) && mentions.length) msg.mentions = mentions
 
     appendMessage({
       ...msg,
@@ -767,10 +973,16 @@ export function useChat({
             size: a.size,
             blob: a.file || null,
             url: a.url || null,
+            dataUrl: a.dataUrl || null,
             previewUrl: a.previewUrl || null,
             kind: a.kind,
+            sticker: !!a.sticker,
+            width: a.width || a.w || null,
+            height: a.height || a.h || null,
           })),
           replyToId: replyToId ? String(replyToId) : null,
+          threadRootId: threadRootId ? String(threadRootId) : null,
+          mentions: Array.isArray(mentions) ? mentions : [],
           author: {
             id: userId,
             name: msg.author,
@@ -780,100 +992,22 @@ export function useChat({
         })
       }
     } catch (err) {
-      console.warn('[outbox] enqueue failed (continuing):', err)
-    }
-
-    try {
-      const needsUpload = storedList.some((a) => a.file)
-      if (needsUpload && !signaling?.uploadChatFile) {
-        throw new Error('Upload de anexo indisponível')
-      }
-
-      for (let i = 0; i < storedList.length; i++) {
-        const att = storedList[i]
-        if (!att?.file) continue
-        const url = await signaling.uploadChatFile(att.file, chatRoomId)
-        if (!url) throw new Error('Upload sem URL')
-        if (att.previewUrl) {
-          try { URL.revokeObjectURL(att.previewUrl) } catch {}
-        }
-        storedList[i] = {
-          kind: att.kind,
-          name: att.name,
-          type: att.type,
-          size: att.size,
-          url,
-          dataUrl: null,
-          previewUrl: null,
-          ...(att.sticker ? { sticker: true } : null),
-        }
-        replaceMessage(id, {
-          attachment: storedList[0],
-          attachments: storedList.length > 1 ? storedList : undefined,
-        })
-      }
-
-      // Strip File handles before persist
-      storedList = storedList.map(({ file, ...rest }) => rest)
-
-      const persistList = storedList.map(persistableAttachment).filter(Boolean)
-      if (inputList.length && persistList.length === 0) {
-        throw new Error('Anexo incompleto — envie de novo')
-      }
-      if (persistList.some((a) => !a.url && !a.dataUrl)) {
-        throw new Error('Anexo incompleto — envie de novo')
-      }
-
-      const wire = persistableMessage({
-        ...msg,
-        attachment: persistList[0],
-        attachments: persistList.length > 1 ? persistList : undefined,
+      console.warn('[outbox] enqueue failed:', err)
+      setMessages((prev) => {
+        const next = prev.filter((m) => m.id !== id)
+        saveHistory(roomKey, next)
+        return next
       })
-      // Note: we DO NOT call signaling.sendChatMessage here.
-      // The outbox dispatcher (sender registered via setSender) is the
-      // single authority for transport — this prevents duplicate sends
-      // when the dispatcher also flushes the message in parallel.
-      const dc = channel
-      if (dc?.readyState === 'open') {
-        try { dc.send(JSON.stringify(wire)) } catch (err) {
-          console.warn('[chat] p2p send failed:', err)
-        }
-      }
-      // Force an immediate dispatch via the outbox dispatcher so the
-      // user gets fast feedback; backoff retries still apply on failure.
-      try {
-        if (userId) {
-          const { dispatcherFlush } = await import('../shared/chat/outboxDispatcher')
-          await dispatcherFlush(userId)
-        }
-      } catch (err) {
-        console.warn('[outbox] immediate flush:', err)
-      }
-      // NOTE: do NOT mark as 'sent' here or call outboxMarkSent here.
-      // The dispatcher's sender (registered via setSender) is the
-      // single source of truth for transport. It will:
-      //  - on success: setMessages to 'sent' + outboxMarkSent.
-      //  - on failure: outboxMarkFailedAttempt (with backoff) or
-      //    outboxMarkPermanentFailed after MAX_ATTEMPTS (5).
-      return true
-    } catch (err) {
-      console.warn('[chat] send failed:', err)
-      const retryable = inputList.length === 0 || persistableAttachment(storedList[0])?.url
-        || persistableAttachment(storedList[0])?.dataUrl
-      if (!retryable) {
-        // Anexo com File não persistido em URL — outbox marca falha permanente.
-        try { await outboxMarkPermanentFailed(id, err) } catch {}
-        setMessages((prev) => {
-          const next = prev.filter((m) => m.id !== id)
-          saveHistory(roomKey, next)
-          return next
-        })
-      } else {
-        replaceMessage(id, { status: 'failed' })
-      }
       return false
     }
-  }, [username, userId, authorProfile, appendMessage, replaceMessage, channel, signaling, roomKey])
+
+    // Acceptance means the durable enqueue succeeded. Do not hold the composer
+    // open while Firebase delivery runs; dispatcher events own later UI state.
+    void dispatcherFlush(userId).catch((err) => {
+      console.warn('[chat] immediate dispatch deferred:', err)
+    })
+    return true
+  }, [username, userId, authorProfile, appendMessage, replaceMessage, roomKey])
 
   const sendFile = useCallback((file) => {
     if (!file) return false
@@ -964,38 +1098,54 @@ export function useChat({
   }, [username, addTransfer, updateTransfer, channel])
 
   const retry = useCallback(async (msgId) => {
-    let target = null
-    setMessages((prev) => {
-      const found = prev.find((m) => m.id === msgId)
-      if (!found) return prev
-      if (found.status !== 'failed' && found.status !== 'permanent-failed') return prev
-      target = found
-      return prev.map((m) => (m.id === msgId ? { ...m, status: 'sending' } : m))
-    })
-    if (!target) return
+    const target = messages.find((message) => message.id === msgId || message.firestoreId === msgId)
+    if (!target || (target.status !== 'failed' && target.status !== 'permanent-failed')) return false
+    const outboxId = target.id || msgId
+    replaceMessage(target.id, { status: 'sending' })
     try {
-      await outboxResetForRetry(msgId)
-      await dispatcherRetryNow(msgId)
-      replaceMessage(msgId, { status: 'sending' })
+      await dispatcherRetryNow(outboxId)
+      return true
     } catch (err) {
       console.warn('[chat] retry failed:', err)
-      replaceMessage(msgId, { status: 'permanent-failed' })
+      replaceMessage(target.id, { status: 'permanent-failed' })
+      return false
     }
-  }, [roomKey, replaceMessage, channel, signaling])
+  }, [messages, replaceMessage])
 
   const cancelOutbox = useCallback(async (msgId) => {
-    try { await outboxDelete(msgId) } catch (err) { console.warn('[outbox] cancel:', err) }
+    const target = messages.find((message) => message.id === msgId || message.firestoreId === msgId)
+    const { outboxId, persistenceId: persistId } = resolveMessageIdentity(target, msgId)
     setMessages((prev) => {
-      const next = prev.filter((m) => m.id !== msgId)
+      const next = prev.filter((message) => message.id !== outboxId && message.firestoreId !== msgId)
       saveHistory(roomKey, next)
       return next
     })
-  }, [roomKey])
+    try {
+      await dispatcherCancel(outboxId)
+      const rawKey = String(roomKey || '')
+      const sep = rawKey.indexOf(':')
+      const chatRoomId = sep >= 0 ? rawKey.slice(sep + 1) : (rawKey || null)
+      if (target && typeof signaling?.deleteChatMessage === 'function') {
+        await signaling.deleteChatMessage(persistId, chatRoomId)
+      }
+      if (channel?.readyState === 'open') {
+        channel.send(JSON.stringify({
+          kind: 'delete', msgId: persistId,
+          userId: userId || signaling?.userId || null, ts: Date.now(),
+        }))
+      }
+      return true
+    } catch (err) {
+      console.warn('[outbox] cancel:', err)
+      flashToast('A mensagem foi cancelada, mas a exclusao remota nao foi confirmada.')
+      return false
+    }
+  }, [messages, roomKey, signaling, channel, userId])
 
   const copyMessageText = useCallback(async (msgId) => {
     let text = ''
     setMessages((prev) => {
-      const found = prev.find((m) => m.id === msgId)
+      const found = prev.find((m) => m.id === msgId || m.firestoreId === msgId)
       text = found?.text || ''
       return prev
     })
@@ -1024,161 +1174,182 @@ export function useChat({
   // Também bump na frequência local pra reordenar a quick bar.
   const toggleReaction = useCallback((msgId, emoji) => {
     if (!msgId || !emoji || !userId) return
+    const target = messages.find((message) => message?.id === msgId || message?.firestoreId === msgId)
+    if (!target) return
     const myId = userId
+    const reactionId = target.id || target.firestoreId
+    const keyIds = [...new Set([target.id, target.firestoreId].filter(Boolean))]
+    const currentUsers = Array.isArray(target.reactions?.[emoji]?.users)
+      ? [...target.reactions[emoji].users]
+      : []
+    const willReact = !currentUsers.includes(myId)
+    const mutationKey = `${reactionId}:${emoji}:${myId}`
+    const mutation = (reactionMutationRef.current.get(mutationKey) || 0) + 1
+    reactionMutationRef.current.set(mutationKey, mutation)
 
-    /* Optimistic update — mesmo formato do applyReactions pra
-     * não divergir do snapshot RTDB.                                */
-    let willReact = false
-    setMessages(prev => {
-      const next = prev.map(m => {
-        if (m.id !== msgId) return m
-        const reactions = { ...(m.reactions || {}) }
-        const cur = reactions[emoji]
-        const users = Array.isArray(cur?.users) ? [...cur.users] : []
-        const idx = users.indexOf(myId)
-        willReact = idx === -1
-        if (willReact) users.push(myId)
-        else users.splice(idx, 1)
-        if (users.length === 0) {
-          delete reactions[emoji]
-        } else {
-          reactions[emoji] = {
-            count: users.length,
-            users,
-            mine: willReact,
-          }
-        }
-        return { ...m, reactions }
+    const applyUsers = (users) => {
+      setMessages((prev) => {
+        const next = prev.map((message) => {
+          if (!keyIds.includes(message.id) && !keyIds.includes(message.firestoreId)) return message
+          const reactions = { ...(message.reactions || {}) }
+          if (users.length === 0) delete reactions[emoji]
+          else reactions[emoji] = { count: users.length, users: [...users], mine: users.includes(myId) }
+          return { ...message, reactions }
+        })
+        saveHistory(roomKey, next)
+        return next
       })
-      saveHistory(roomKey, next)
-      return next
-    })
-
-    /* Atualiza o Map autoritativo pra evitar race com snapshot
-     * RTDB que chegar logo depois — idem likes.                    */
-    if (msgId) {
-      const ref = reactionsFromServerRef.current
-      const byEmoji = ref.get(msgId) || {}
-      const users = Array.isArray(byEmoji[emoji]) ? [...byEmoji[emoji]] : []
-      const idx = users.indexOf(myId)
-      const will = idx === -1
-      if (will) users.push(myId)
-      else users.splice(idx, 1)
-      byEmoji[emoji] = users
-      ref.set(msgId, byEmoji)
+      for (const key of keyIds) {
+        const byEmoji = { ...(reactionsFromServerRef.current.get(key) || {}) }
+        if (users.length) byEmoji[emoji] = [...users]
+        else delete byEmoji[emoji]
+        reactionsFromServerRef.current.set(key, byEmoji)
+      }
     }
 
-    /* Persiste no RTDB. */
-    if (spaceId && roomId) {
+    const optimisticUsers = [...currentUsers]
+    if (willReact) optimisticUsers.push(myId)
+    else optimisticUsers.splice(optimisticUsers.indexOf(myId), 1)
+    applyUsers(optimisticUsers)
+
+    if (spaceId && roomId && reactionId) {
       const op = willReact
-        ? reactToMessage(spaceId, roomId, msgId, emoji, myId)
-        : unreactToMessage(spaceId, roomId, msgId, emoji, myId)
-      op.catch((err) => console.warn('[reactions] persist', err))
+        ? reactToMessage(spaceId, roomId, reactionId, emoji, myId)
+        : unreactToMessage(spaceId, roomId, reactionId, emoji, myId)
+      op.catch((err) => {
+        console.warn('[reactions] persist', err)
+        if (reactionMutationRef.current.get(mutationKey) !== mutation) return
+        applyUsers(currentUsers)
+        flashToast('Nao foi possivel atualizar a reacao.')
+      })
     }
-
-    /* Bump na frequência local — reordena quick bar. */
     try {
       if (willReact) bumpFrequent(emoji)
       else unbumpFrequent(emoji)
-    } catch { /* localStorage indisponível */ }
-  }, [roomKey, userId, spaceId, roomId])
+    } catch { /* localStorage unavailable */ }
+  }, [messages, roomKey, userId, spaceId, roomId])
 
-  // ----- Likes (Sparkles — synced P2P + persisted in RTDB) ---------------
-  // Like = binário por user. Armazenado como `msg.likes: string[]` de
-  // userIds. Persistido no Firebase RTDB (fonte da verdade) e
-  // propagado via data channel (fast-path P2P). Quando o user troca
-  // de sala ou desloga, o RTDB restaura o estado das curtidas.
-  const toggleLike = useCallback((msgId) => {
-    if (!msgId || !userId) return
-    const myId = userId
-
-    let willLike = false
-    let keyIds = [msgId]
-    let nextLikesForMsg = null
-
-    setMessages((prev) => {
-      const target = prev.find((m) => m.id === msgId || m.firestoreId === msgId)
-      if (!target) return prev
-
-      keyIds = [...new Set([target.id, target.firestoreId].filter(Boolean))]
-      const likes = Array.isArray(target.likes) ? [...target.likes] : []
-      const idx = likes.indexOf(myId)
-      willLike = idx === -1
-      if (willLike) likes.push(myId)
-      else likes.splice(idx, 1)
-      nextLikesForMsg = likes
-
-      const next = prev.map((m) => (
-        (m.id === target.id || (target.firestoreId && m.firestoreId === target.firestoreId))
-          ? { ...m, likes }
-          : m
-      ))
-      saveHistory(roomKey, next)
-      return next
-    })
-
-    if (!nextLikesForMsg) return
-
-    /* Atualiza o Map autoritativo sob todos os ids conhecidos da msg. */
-    syncLikesMapKeys(keyIds, nextLikesForMsg)
-
-    if (spaceId && roomId) {
-      const op = willLike
-        ? likeMessageKeys(spaceId, roomId, keyIds, myId)
-        : unlikeMessageKeys(spaceId, roomId, keyIds, myId)
-      op.catch((err) => {
-        console.warn('[likes] persist', err)
-        /* Revert optimistic on hard failure so UI matches RTDB. */
-        setMessages((prev) => {
-          const next = prev.map((m) => {
-            if (!keyIds.includes(m.id) && !keyIds.includes(m.firestoreId)) return m
-            const likes = Array.isArray(m.likes) ? m.likes.filter((u) => u !== myId) : []
-            if (willLike) {
-              /* failed like → remove me */
-              return { ...m, likes }
-            }
-            /* failed unlike → put me back */
-            return likes.includes(myId) ? m : { ...m, likes: [...likes, myId] }
-          })
-          syncLikesMapKeys(keyIds, willLike
-            ? (next.find((m) => keyIds.includes(m.id))?.likes || [])
-            : (next.find((m) => keyIds.includes(m.id))?.likes || []))
-          saveHistory(roomKey, next)
-          return next
-        })
-      })
+  // ----- Chan (confirmed persistence + RTDB listener + P2P fast-path) -----
+  // The configured persistence provider owns the write. In temporary unlimited
+  // mode this is direct RTDB; future quota mode uses the authoritative callable.
+  // Local state and P2P update only after that provider confirms the operation.
+  const toggleLike = useCallback(async (msgId) => {
+    if (!msgId || !userId || !spaceId || !roomId) {
+      return { success: false, status: 'failed' }
+    }
+    if (chanMutationRef.current) {
+      return { success: false, status: 'pending' }
     }
 
+    const target = messages.find((message) => message.id === msgId || message.firestoreId === msgId)
+    if (!target) return { success: false, status: 'failed' }
+
+    const myId = userId
+    const identity = resolveMessageIdentity(target, msgId)
+    // Canonical Firestore id first; the callable validates every alias and
+    // materializes all known keys for compatibility with older clients.
+    const keyIds = [...new Set([identity.persistenceId, ...identity.aliases].filter(Boolean))]
+    const currentlyHasChan = Array.isArray(target.likes) && target.likes.includes(myId)
+    const operation = currentlyHasChan ? 'remove' : 'grant'
+    chanMutationRef.current = identity.persistenceId || msgId
+
     try {
-      if (channel && channel.readyState === 'open') {
-        channel.send(JSON.stringify({
-          kind: willLike ? 'like' : 'unlike',
-          msgId,
-          userId: myId,
-          ts: Date.now(),
-        }))
+      const serverResult = currentlyHasChan
+        ? await unlikeMessageKeys(spaceId, roomId, keyIds, myId)
+        : await likeMessageKeys(spaceId, roomId, keyIds, myId)
+      const granted = serverResult?.status !== 'removed'
+      const confirmedIds = [...new Set([
+        ...keyIds,
+        serverResult?.messageId,
+        ...(Array.isArray(serverResult?.messageIds) ? serverResult.messageIds : []),
+      ].filter(Boolean))]
+      let confirmedLikes = []
+
+      setMessages((previous) => {
+        const next = previous.map((message) => {
+          if (!confirmedIds.includes(message.id) && !confirmedIds.includes(message.firestoreId)) return message
+          const likes = Array.isArray(message.likes) ? message.likes.filter((uid) => uid !== myId) : []
+          if (granted) likes.push(myId)
+          confirmedLikes = likes
+          return { ...message, likes }
+        })
+        syncLikesMapKeys(confirmedIds, confirmedLikes)
+        saveHistory(roomKey, next)
+        return next
+      })
+
+      try {
+        if (channel?.readyState === 'open') {
+          channel.send(JSON.stringify({
+            kind: granted ? 'like' : 'unlike',
+            msgId: identity.actionId || msgId,
+            userId: myId,
+            ts: Date.now(),
+          }))
+        }
+      } catch {}
+
+      return {
+        ...serverResult,
+        success: true,
+        status: granted ? 'success' : 'removed',
+        granted,
+        removed: !granted,
       }
-    } catch {}
-  }, [channel, userId, roomKey, spaceId, roomId, syncLikesMapKeys])
+    } catch (error) {
+      const code = String(error?.code || '').replace(/^functions\//, '')
+      if (code === 'resource-exhausted') {
+        const nextResetAt = error?.details?.nextResetAt || null
+        let resetHint = ''
+        if (nextResetAt) {
+          const reset = new Date(nextResetAt)
+          if (!Number.isNaN(reset.getTime())) {
+            const time = reset.toLocaleTimeString('pt-BR', {
+              hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo',
+            })
+            resetHint = ' Voc\u00ea poder\u00e1 dar outro ap\u00f3s ' + time + '.'
+          }
+        }
+        flashToast('Seu Chan di\u00e1rio j\u00e1 foi usado.' + resetHint)
+        return { success: false, status: 'exhausted', nextResetAt, details: error?.details || null }
+      }
+      console.warn('[chan] ' + operation + ' failed', error)
+      flashToast(currentlyHasChan
+        ? 'N\u00e3o foi poss\u00edvel remover o Chan. Tente novamente.'
+        : 'N\u00e3o foi poss\u00edvel dar o Chan. Tente novamente.')
+      return { success: false, status: 'failed', error }
+    } finally {
+      chanMutationRef.current = null
+    }
+  }, [channel, messages, userId, roomKey, spaceId, roomId, syncLikesMapKeys])
 
   // ----- Edit (own message only) -------------------------------------------
-  const editMessage = useCallback((msgId, newText) => {
-    setMessages(prev => {
-      const next = prev.map(m => {
-        if (m.id !== msgId) return m
-        if (m.direction !== 'out') return m // only own
-        if (m.status === 'sending') return m // block edit during in-flight send
-        return {
-          ...m,
-          text: newText,
-          edited: true,
-          editedAt: Date.now(),
-        }
-      })
-      saveHistory(roomKey, next)
-      return next
-    })
-  }, [roomKey])
+  const editMessage = useCallback(async (msgId, newText, mentions = []) => {
+    const trimmed = String(newText || '').trim()
+    if (!msgId || !trimmed) return false
+    const target = messages.find((m) => m.id === msgId || m.firestoreId === msgId)
+    if (!target || target.deleted || (target.authorId && target.authorId !== userId) || target.status === 'sending') return false
+    const editedAt = Date.now()
+    const patch = { text: trimmed, mentions, edited: true, editedAt }
+    replaceMessage(target.id, patch)
+    try {
+      if (typeof signaling?.editChatMessage !== 'function') {
+        throw new Error('Edicao remota indisponivel')
+      }
+      await signaling.editChatMessage(target.firestoreId || target.id, trimmed, mentions, roomId)
+      if (channel?.readyState === 'open') {
+        channel.send(JSON.stringify({
+          kind: 'edit', msgId: target.id, authorId: userId, text: trimmed, mentions, editedAt,
+        }))
+      }
+      return true
+    } catch (err) {
+      console.warn('[chat] edit failed:', err)
+      replaceMessage(target.id, { text: target.text, mentions: target.mentions || [], edited: target.edited, editedAt: target.editedAt })
+      flashToast(err?.message || 'Nao foi possivel editar a mensagem.')
+      return false
+    }
+  }, [messages, userId, signaling, roomId, channel, replaceMessage])
 
   // ----- Pins (persisted on Firestore message docs via signaling) --------
   const togglePin = useCallback(async (msgId) => {
@@ -1230,51 +1401,82 @@ export function useChat({
   // ----- Delete -----------------------------------------------------------
   // Own messages always; moderators may delete anyone's when canModerate.
   // Persist to Firestore so the soft-delete survives room/space switches.
-  const deleteMessage = useCallback((msgId, { moderate = false } = {}) => {
-    let allowed = false
-    let persistId = msgId
+  const deleteMessage = useCallback(async (msgId, { moderate = false } = {}) => {
+    const target = messages.find((message) => message.id === msgId || message.firestoreId === msgId)
+    if (!target) return false
+    const isOwn = target.direction === 'out' || (!!userId && target.authorId === userId)
+    if (!isOwn && !moderate) return false
+
+    const identity = resolveMessageIdentity(target, msgId)
+    const actionIds = identity.aliases
+    const { outboxId, persistenceId: persistId } = identity
+    const rawKey = String(roomKey || '')
+    const sep = rawKey.indexOf(':')
+    const chatRoomId = sep >= 0 ? rawKey.slice(sep + 1) : (rawKey || null)
+    const pending = target.status === 'sending'
+      || target.status === 'failed'
+      || target.status === 'permanent-failed'
+
+    if (pending) {
+      setMessages((prev) => {
+        const next = prev.filter((message) => !actionIds.includes(message.id) && !actionIds.includes(message.firestoreId))
+        saveHistory(roomKey, next)
+        return next
+      })
+      try {
+        await dispatcherCancel(outboxId)
+        if (typeof signaling?.deleteChatMessage === 'function') {
+          await signaling.deleteChatMessage(persistId, chatRoomId)
+        }
+        if (channel?.readyState === 'open') {
+          channel.send(JSON.stringify({
+            kind: 'delete', msgId: persistId,
+            userId: userId || signaling?.userId || null, ts: Date.now(),
+          }))
+        }
+        return true
+      } catch (err) {
+        console.warn('[chat] pending delete failed:', err)
+        flashToast(err?.message || 'A mensagem foi cancelada, mas a exclusao remota nao foi confirmada.')
+        return false
+      }
+    }
+
     setMessages((prev) => {
-      const target = prev.find((m) => m.id === msgId || m.firestoreId === msgId)
-      if (!target) return prev
-      const isOwn = target.direction === 'out'
-        || (!!userId && target.authorId === userId)
-      if (!isOwn && !moderate) return prev
-      allowed = true
-      persistId = target.firestoreId || target.id || msgId
-      const next = prev.map((m) => (
-        (m.id === target.id || (target.firestoreId && m.firestoreId === target.firestoreId))
-          ? {
-              ...m,
-              deleted: true,
-              text: '',
-              attachment: undefined,
-              attachments: undefined,
-            }
-          : m
+      const next = prev.map((message) => (
+        actionIds.includes(message.id) || actionIds.includes(message.firestoreId)
+          ? { ...message, deleted: true, text: '', attachment: undefined, attachments: undefined }
+          : message
       ))
       saveHistory(roomKey, next)
       return next
     })
-    if (!allowed) return
-
-    const rawKey = String(roomKey || '')
-    const sep = rawKey.indexOf(':')
-    const chatRoomId = sep >= 0 ? rawKey.slice(sep + 1) : (rawKey || null)
-    signaling?.deleteChatMessage?.(persistId, chatRoomId)?.catch((err) => {
-      console.warn('[chat] delete persist failed:', err)
-    })
 
     try {
-      if (channel && channel.readyState === 'open') {
+      if (typeof signaling?.deleteChatMessage !== 'function') {
+        throw new Error('Exclusao remota indisponivel')
+      }
+      await signaling.deleteChatMessage(persistId, chatRoomId)
+      if (channel?.readyState === 'open') {
         channel.send(JSON.stringify({
-          kind: 'delete',
-          msgId: persistId,
-          userId: userId || signaling?.userId || null,
-          ts: Date.now(),
+          kind: 'delete', msgId: persistId,
+          userId: userId || signaling?.userId || null, ts: Date.now(),
         }))
       }
-    } catch {}
-  }, [roomKey, signaling, channel, userId])
+      return true
+    } catch (err) {
+      console.warn('[chat] delete persist failed:', err)
+      setMessages((prev) => {
+        const next = prev.map((message) => (
+          actionIds.includes(message.id) || actionIds.includes(message.firestoreId) ? target : message
+        ))
+        saveHistory(roomKey, next)
+        return next
+      })
+      flashToast(err?.message || 'Nao foi possivel excluir a mensagem.')
+      return false
+    }
+  }, [messages, roomKey, signaling, channel, userId])
 
   // Hard-purge messages (incl. soft-deleted stubs). Optimistic local + Firestore.
   const purgeMessages = useCallback(async ({ authorId = null, beforeTs = null } = {}) => {
@@ -1326,6 +1528,7 @@ export function useChat({
     messages,
     files,
     ready,
+    historyReady,
     connectionState,
     sendMessage,
     sendFile,

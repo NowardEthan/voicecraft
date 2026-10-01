@@ -20,6 +20,7 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   startAfter,
@@ -36,7 +37,8 @@ import {
   findRulesRoom,
 } from '../../features/chat/rulesSchema'
 import { onAuthStateChanged, updateProfile } from 'firebase/auth'
-import { auth, db, VC } from '../firebase/app'
+import { getFunctions, httpsCallable } from 'firebase/functions'
+import { auth, db, firebaseApp, VC } from '../firebase/app'
 import { deleteSpaceCover, uploadSpaceCover, uploadSpaceIcon, deleteSpaceIcon, uploadRoomCover, deleteRoomCover, uploadAnnounceAsset } from '../firebase/covers'
 import {
   normalizeAnnounce,
@@ -58,6 +60,21 @@ import {
 } from '../../features/spaces/model/spaceTypography'
 
 const ONLINE_MS = 45_000
+const SPECIAL_CHAT_KINDS = new Set(['announce', 'lobby_event'])
+const SPECIAL_CHAT_PAYLOAD_FIELDS = ['announce', 'lobbyEvent']
+const ANNOUNCEMENT_CLIENT_FALLBACK = import.meta.env?.VITE_ANNOUNCEMENT_CLIENT_FALLBACK === 'true'
+
+function isSpecialChatPayload(message) {
+  if (!message || typeof message !== 'object') return false
+  return SPECIAL_CHAT_KINDS.has(message.kind)
+    || SPECIAL_CHAT_PAYLOAD_FIELDS.some((field) => message[field] != null)
+}
+
+function scheduledAnnouncementMessageId(scheduleId) {
+  const safe = String(scheduleId || '')
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(safe)) throw new Error('Agendamento inválido')
+  return `scheduled_announce_${safe}`
+}
 
 function uid() {
   return Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
@@ -191,6 +208,7 @@ function toRoomView(id, data = {}) {
     lastMessageAt: data.lastMessageAt || null,
     lastMessageId: data.lastMessageId || null,
     lastMessagePreview: data.lastMessagePreview || '',
+    lastMentionIds: Array.isArray(data.lastMentionIds) ? data.lastMentionIds.map(String) : [],
     lastAuthorId: data.lastAuthorId || null,
     lastAuthorName: data.lastAuthorName || '',
     chatLocked: !!data.chatLocked,
@@ -226,6 +244,9 @@ function toSpaceSummary(id, data = {}, joined = true) {
     chatAutomation: data.chatAutomation && typeof data.chatAutomation === 'object'
       ? { autopurge: normalizeAutopurge(data.chatAutomation.autopurge) }
       : null,
+    rulesRoomId: typeof data.rulesRoomId === 'string' ? data.rulesRoomId : null,
+    rulesVersion: Math.max(0, Math.floor(Number(data.rulesVersion) || 0)),
+    rulesLock: data.rulesLock === true,
   }
 }
 
@@ -1884,16 +1905,20 @@ export class SignalingClient {
     this._emit('cameraState', { active: !!active, userId: this.userId })
   }
 
-  async uploadChatFile(file, roomId = null) {
-    const sid = this.voiceSpaceId || this.spaceId
+  async uploadChatFile(file, roomId = null, spaceId = null) {
+    const sid = spaceId || this.voiceSpaceId || this.spaceId
     const rid = roomId || this.roomId
     if (!sid || !rid || !file) return null
     return uploadChatFile(sid, rid, file)
   }
 
-  async sendChatMessage(message, roomId = null) {
+  async sendChatMessage(message, roomId = null, spaceId = null) {
+    const sid = spaceId || this.spaceId
     const rid = roomId || this.roomId
-    if (!this.spaceId || !rid || !message) return
+    if (!sid || !rid || !message) return
+    if (isSpecialChatPayload(message)) {
+      throw new Error('Cards especiais exigem o fluxo dedicado de moderação')
+    }
     const id = message.id || uid()
     const clean = JSON.parse(JSON.stringify({
       ...message,
@@ -1903,7 +1928,7 @@ export class SignalingClient {
       ...(message.replyToId ? { replyToId: String(message.replyToId) } : {}),
     }))
     // Doc id === client message id so edit/delete can target by id.
-    await setDoc(doc(messagesCol(this.spaceId, rid), id), clean, { merge: true })
+    await setDoc(doc(messagesCol(sid, rid), id), clean, { merge: true })
     const preview = String(
       clean.text
       || clean.attachment?.name
@@ -1911,16 +1936,45 @@ export class SignalingClient {
       || 'Anexo'
     ).slice(0, 140)
     try {
-      await updateDoc(roomRef(this.spaceId, rid), {
+      await updateDoc(roomRef(sid, rid), {
         lastMessageAt: clean.ts,
         lastMessageId: id,
         lastMessagePreview: preview,
+        lastMentionIds: Array.isArray(clean.mentions)
+          ? clean.mentions.map((mention) => String(mention?.userId || mention)).filter(Boolean)
+          : [],
         lastAuthorId: this.userId,
         lastAuthorName: clean.author || this.displayName || 'alguém',
       })
     } catch (err) {
       console.warn('[sendChatMessage] lastMessage', err)
     }
+  }
+
+  async editChatMessage(messageId, text, mentions = [], roomId = null) {
+    const rid = roomId || this.roomId
+    if (!this.spaceId || !rid || !messageId) throw new Error('Mensagem invalida')
+    const col = messagesCol(this.spaceId, rid)
+    let targetRef = doc(col, messageId)
+    let snap = await getDoc(targetRef)
+    if (!snap.exists()) {
+      const found = await getDocs(query(col, where('id', '==', messageId), limit(1)))
+      if (found.empty) throw new Error('Mensagem nao encontrada')
+      targetRef = found.docs[0].ref
+      snap = found.docs[0]
+    }
+    const prior = snap.data() || {}
+    if (prior.authorId !== this.userId) throw new Error('So o autor pode editar esta mensagem')
+    if (prior.deleted) throw new Error('Mensagem apagada nao pode ser editada')
+    const editedAt = Date.now()
+    const patch = {
+      text: String(text || '').trim(),
+      mentions: Array.isArray(mentions) ? mentions : [],
+      edited: true,
+      editedAt,
+    }
+    await updateDoc(targetRef, JSON.parse(JSON.stringify(patch)))
+    return { ...patch, id: prior.id || messageId }
   }
 
   /**
@@ -2154,9 +2208,6 @@ export class SignalingClient {
     if (!this.spaceId || !rid) throw new Error('Sala inválida')
     this._assertCan('mod_chat', 'precisa da permissão Moderar chat')
 
-    const prevSnap = await getDoc(roomRef(this.spaceId, rid))
-    const prevRules = normalizeRules(prevSnap.exists() ? prevSnap.data()?.rules : null)
-
     let rules = normalizeRules(rulesConfig)
     rules = {
       ...rules,
@@ -2175,41 +2226,64 @@ export class SignalingClient {
     await uploadField('iconImage', 'rules-icon')
     await uploadField('authorPhoto', 'rules-author')
 
-    if (rules.enabled) {
-      const contentChanged = rulesContentFingerprint(rules) !== rulesContentFingerprint(prevRules)
-        || !prevRules.enabled
-      rules = {
-        ...rules,
-        version: contentChanged
-          ? Math.max(1, (prevRules.version || 0) + 1)
-          : Math.max(1, prevRules.version || 1),
-      }
-    } else {
-      rules = { ...rules, version: Math.max(1, prevRules.version || 1) }
-    }
+    const roomSnaps = await getDocs(roomsCol(this.spaceId))
+    const refs = roomSnaps.docs.map((entry) => roomRef(this.spaceId, entry.id))
+    if (!refs.some((ref) => ref.id === rid)) refs.push(roomRef(this.spaceId, rid))
 
-    await updateDoc(roomRef(this.spaceId, rid), { rules })
-
-    // Ensure only one rules channel is enabled in the Space.
-    if (rules.enabled) {
-      try {
-        const roomsSnap = await getDocs(roomsCol(this.spaceId))
-        await Promise.all(roomsSnap.docs.map(async (d) => {
-          if (d.id === rid) return
-          const other = normalizeRules(d.data()?.rules)
-          if (!other.enabled) return
-          await updateDoc(roomRef(this.spaceId, d.id), {
-            rules: { ...other, enabled: false },
-          })
-        }))
-      } catch (err) {
-        console.warn('[updateRoomRules] exclusive', err)
+    const committed = await runTransaction(db, async (transaction) => {
+      const spaceSnap = await transaction.get(spaceRef(this.spaceId))
+      if (!spaceSnap.exists()) throw new Error('Space não encontrado')
+      const spaceData = spaceSnap.data() || {}
+      const snapshots = await Promise.all(refs.map((ref) => transaction.get(ref)))
+      const target = snapshots.find((snap) => snap.id === rid)
+      if (!target?.exists()) throw new Error('Sala não encontrada')
+      const previous = normalizeRules(target.data()?.rules)
+      let nextRules = rules
+      if (nextRules.enabled) {
+        const contentChanged = rulesContentFingerprint(nextRules) !== rulesContentFingerprint(previous)
+          || !previous.enabled
+        nextRules = {
+          ...nextRules,
+          version: contentChanged
+            ? Math.max(1, (previous.version || 0) + 1)
+            : Math.max(1, previous.version || 1),
+        }
+      } else {
+        nextRules = { ...nextRules, version: Math.max(1, previous.version || 1) }
       }
-    }
+
+      for (const snap of snapshots) {
+        if (!snap.exists()) continue
+        if (snap.id === rid) {
+          transaction.update(snap.ref, { rules: nextRules })
+          continue
+        }
+        const other = normalizeRules(snap.data()?.rules)
+        if (nextRules.enabled && other.enabled) {
+          transaction.update(snap.ref, { rules: { ...other, enabled: false } })
+        }
+      }
+
+      const priorPolicy = {
+        rulesRoomId: typeof spaceData.rulesRoomId === 'string' ? spaceData.rulesRoomId : null,
+        rulesVersion: Math.max(0, Math.floor(Number(spaceData.rulesVersion) || 0)),
+        rulesLock: spaceData.rulesLock === true,
+      }
+      const policy = nextRules.enabled
+        ? { rulesRoomId: rid, rulesVersion: nextRules.version, rulesLock: nextRules.lockSpace }
+        : (priorPolicy.rulesRoomId && priorPolicy.rulesRoomId !== rid
+          ? priorPolicy
+          : { rulesRoomId: null, rulesVersion: nextRules.version, rulesLock: false })
+      transaction.update(spaceRef(this.spaceId), policy)
+      return { rules: nextRules, policy }
+    })
 
     const snap = await getDoc(roomRef(this.spaceId, rid))
     if (!snap.exists()) return null
-    const room = toRoomView(rid, snap.data())
+    const room = toRoomView(rid, { ...snap.data(), rules: committed.rules })
+    if (this._spaceCache?.id === this.spaceId) {
+      this._spaceCache = this.cacheSpace({ ...this._spaceCache, ...committed.policy })
+    }
     this._emit('roomChanged', { kind: 'updated', spaceId: this.spaceId, room })
     return { room }
   }
@@ -2223,6 +2297,7 @@ export class SignalingClient {
     const ver = Math.max(
       1,
       Math.floor(Number(version)
+        || Number(this._spaceCache?.rulesVersion)
         || normalizeRules(rulesRoom?.rules).version
         || 1),
     )
@@ -2255,6 +2330,7 @@ export class SignalingClient {
     const rid = roomId || this.roomId
     if (!this.spaceId || !rid || !this.userId) return null
     const force = !!opts.force
+    this._assertCan('mod_chat', 'precisa da permissão Moderar chat')
 
     const roomSnap = await getDoc(roomRef(this.spaceId, rid))
     if (!roomSnap.exists()) return null
@@ -2299,9 +2375,10 @@ export class SignalingClient {
         ? (previewText.slice(0, 140) || `${displayName} entrou em ${spaceName}`)
         : `${displayName} saiu de ${spaceName}`,
       author: displayName,
-      authorId: userId,
+      authorId: this.userId,
       authorPhoto: photoURL,
       ts,
+      createdBy: this.userId,
       lobbyAccent: lobby.accent,
       lobbyEvent: {
         type: eventType,
@@ -2335,7 +2412,7 @@ export class SignalingClient {
         const existing = await getDoc(doc(messagesCol(this.spaceId, rid), id))
         if (existing.exists()) return null
       }
-      await setDoc(doc(messagesCol(this.spaceId, rid), id), JSON.parse(JSON.stringify(clean)))
+      await this._writeSpecialChatMessage(rid, 'lobby_event', clean)
     } catch (err) {
       if (eventType === 'join' && !force) return null
       throw err
@@ -2345,7 +2422,7 @@ export class SignalingClient {
         lastMessageAt: ts,
         lastMessageId: id,
         lastMessagePreview: clean.text.slice(0, 140),
-        lastAuthorId: userId,
+        lastAuthorId: this.userId,
         lastAuthorName: displayName,
       })
     } catch {}
@@ -2439,6 +2516,7 @@ export class SignalingClient {
       text: announcePreviewText(announce),
       author: announce.authorName || 'sistema',
       authorId: this.userId,
+      createdBy: this.userId,
       authorPhoto: announce.authorPhoto || '',
       ts,
       announce: {
@@ -2446,7 +2524,7 @@ export class SignalingClient {
         scheduledFor: null,
       },
     }
-    await setDoc(doc(messagesCol(this.spaceId, rid), id), JSON.parse(JSON.stringify(clean)))
+    await this._writeSpecialChatMessage(rid, 'announce', clean)
     try {
       await updateDoc(roomRef(this.spaceId, rid), {
         lastMessageAt: ts,
@@ -2498,8 +2576,19 @@ export class SignalingClient {
       },
     }
     await updateDoc(targetRef, JSON.parse(JSON.stringify(patch)))
+    const resolvedId = prior.id || messageId
+    try {
+      const room = await getDoc(roomRef(this.spaceId, rid))
+      if (room.data()?.lastMessageId === resolvedId) {
+        await updateDoc(roomRef(this.spaceId, rid), {
+          lastMessagePreview: patch.text.slice(0, 140),
+          lastAuthorId: this.userId,
+          lastAuthorName: patch.author || 'Anúncio',
+        })
+      }
+    } catch {}
     return {
-      id: prior.id || messageId,
+      id: resolvedId,
       ...prior,
       ...patch,
       ts: prior.ts || editedAt,
@@ -2601,53 +2690,113 @@ export class SignalingClient {
     return { ok: true }
   }
 
-  /** Publish a scheduled announcement immediately. */
-  async publishScheduledAnnouncementNow(roomId, scheduleId) {
+  _announcementPublisherCallable() {
+    return httpsCallable(getFunctions(firebaseApp), 'publishScheduledAnnouncement')
+  }
+
+  async _writeSpecialChatMessage(roomId, expectedKind, message) {
+    if (!SPECIAL_CHAT_KINDS.has(expectedKind) || message?.kind !== expectedKind) {
+      throw new Error('Tipo de card especial inválido')
+    }
+    this._assertCan('mod_chat', 'precisa da permissão Moderar chat')
+    await setDoc(
+      doc(messagesCol(this.spaceId, roomId), message.id),
+      JSON.parse(JSON.stringify(message)),
+    )
+  }
+
+  async _publishScheduledAnnouncementFallback(roomId, scheduleId, payloadOverride = null) {
+    if (!ANNOUNCEMENT_CLIENT_FALLBACK && this._scheduledAnnouncementClientFallback !== true) {
+      throw new Error('Fallback cliente de anúncios está desativado')
+    }
+    const scheduleRef = scheduledAnnouncementRef(this.spaceId, roomId, scheduleId)
+    const messageId = scheduledAnnouncementMessageId(scheduleId)
+    return runTransaction(db, async (transaction) => {
+      const scheduleSnap = await transaction.get(scheduleRef)
+      if (!scheduleSnap.exists()) throw new Error('Agendamento não encontrado')
+      const schedule = scheduleSnap.data() || {}
+      if (schedule.status === 'published') {
+        return { ok: true, idempotent: true, messageId: schedule.publishedMessageId || messageId }
+      }
+      if (schedule.status !== 'scheduled') throw new Error('Este anúncio já não está agendado')
+      const source = payloadOverride && typeof payloadOverride === 'object'
+        ? payloadOverride
+        : schedule.announce || {}
+      const normalized = normalizeAnnounce({ ...source, scheduledFor: null })
+      const announce = {
+        ...normalized,
+        bodyHtml: sanitizeAnnounceHtml(normalized.bodyHtml),
+        body: normalized.body || htmlToPlainText(normalized.bodyHtml),
+        scheduledFor: null,
+      }
+      const ts = Date.now()
+      const clean = {
+        id: messageId,
+        kind: 'announce',
+        text: announcePreviewText(announce),
+        author: announce.authorName || 'sistema',
+        authorId: this.userId,
+        authorPhoto: announce.authorPhoto || '',
+        ts,
+        createdAt: ts,
+        createdBy: this.userId,
+        scheduleId,
+        announce: { ...announce, scheduledFor: null },
+      }
+      transaction.set(doc(messagesCol(this.spaceId, roomId), messageId), clean)
+      transaction.update(scheduleRef, {
+        status: 'published',
+        publishedAt: ts,
+        publishedBy: this.userId,
+        publishedMessageId: messageId,
+      })
+      return { ok: true, idempotent: false, messageId }
+    })
+  }
+
+  /** Publish a scheduled announcement immediately through the authoritative callable. */
+  async publishScheduledAnnouncementNow(roomId, scheduleId, payloadOverride = null) {
     const rid = roomId || this.roomId
     if (!this.spaceId || !rid || !scheduleId) throw new Error('Agendamento inválido')
     this._assertCan('mod_chat', 'precisa da permissão Moderar chat')
-    const ref = scheduledAnnouncementRef(this.spaceId, rid, scheduleId)
-    const snap = await getDoc(ref)
-    if (!snap.exists()) throw new Error('Agendamento não encontrado')
-    const data = snap.data() || {}
-    if (data.status !== 'scheduled') throw new Error('Este anúncio já não está agendado')
-    await this.sendChatAnnouncement(rid, data.announce || {})
-    await updateDoc(ref, { status: 'published', publishedAt: Date.now() })
-    return { ok: true }
+    const preparedOverride = payloadOverride && typeof payloadOverride === 'object'
+      ? await this._prepareAnnouncePayload(rid, { ...payloadOverride, scheduledFor: null })
+      : null
+    try {
+      const result = await this._announcementPublisherCallable()({
+        spaceId: this.spaceId,
+        roomId: rid,
+        scheduleId,
+        payloadOverride: preparedOverride,
+      })
+      return result.data
+    } catch (error) {
+      if (!ANNOUNCEMENT_CLIENT_FALLBACK && this._scheduledAnnouncementClientFallback !== true) throw error
+      console.warn('[publishScheduledAnnouncementNow] callable indisponível; usando fallback opt-in', error)
+      return this._publishScheduledAnnouncementFallback(rid, scheduleId, preparedOverride)
+    }
   }
 
-  /**
-   * Publish due scheduled announcements for a room (client-side runner).
-   * Returns number published.
-   */
+  /** Opt-in client fallback; the scheduled Cloud Function remains authoritative. */
   async publishDueAnnouncements(roomId = null) {
     const rid = roomId || this.roomId
-    if (!this.spaceId || !rid) return 0
-    if (!this.can('mod_chat')) return 0
-
-    const col = scheduledAnnouncementsCol(this.spaceId, rid)
-    const q = query(col, where('status', '==', 'scheduled'), limit(40))
-    let snap
-    try {
-      snap = await getDocs(q)
-    } catch (err) {
-      console.warn('[publishDueAnnouncements]', err)
-      return 0
-    }
+    if (!this.spaceId || !rid || !this.can('mod_chat')) return 0
+    if (!ANNOUNCEMENT_CLIENT_FALLBACK && this._scheduledAnnouncementClientFallback !== true) return 0
+    const q = query(scheduledAnnouncementsCol(this.spaceId, rid), where('status', '==', 'scheduled'), limit(40))
+    const snap = await getDocs(q)
     const now = Date.now()
-    let n = 0
-    for (const d of snap.docs) {
-      const data = d.data() || {}
-      if (Number(data.publishAt || 0) > now) continue
+    let published = 0
+    for (const entry of snap.docs) {
+      const data = entry.data() || {}
+      if (Number(data.publishAt || data.announce?.scheduledFor || 0) > now) continue
       try {
-        await this.sendChatAnnouncement(rid, data.announce || {})
-        await updateDoc(d.ref, { status: 'published', publishedAt: Date.now() })
-        n += 1
-      } catch (err) {
-        console.warn('[publishDueAnnouncements] one failed', d.id, err)
+        const result = await this.publishScheduledAnnouncementNow(rid, entry.id)
+        if (!result?.idempotent) published += 1
+      } catch (error) {
+        console.warn('[publishDueAnnouncements] one failed', entry.id, error)
       }
     }
-    return n
+    return published
   }
 
   /** Lightweight rooms listener for unread badges (all rooms in a Space). */
@@ -2658,7 +2807,7 @@ export class SignalingClient {
     }, (err) => console.warn('[listenSpaceRooms]', err))
   }
 
-  listenChat(spaceId, roomId, cb) {
+  listenChat(spaceId, roomId, cb, onError) {
     if (!spaceId || !roomId || typeof cb !== 'function') return () => {}
     return onSnapshot(messagesCol(spaceId, roomId), (snap) => {
       const list = snap.docs
@@ -2673,6 +2822,9 @@ export class SignalingClient {
         })
         .sort((a, b) => (a.ts || 0) - (b.ts || 0))
       cb(list)
+    }, (err) => {
+      console.warn('[listenChat]', err)
+      if (typeof onError === 'function') onError(err)
     })
   }
 

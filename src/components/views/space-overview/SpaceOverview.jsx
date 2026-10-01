@@ -5,7 +5,7 @@
  * With 0 rooms: hero + short empty state to create the first room.
  */
 import { memo, useMemo, useState } from 'react'
-import { MessageCircle } from 'lucide-react'
+import { CalendarDays, Hash, MessageCircle, Palette, Plus, Radio, UserPlus, Users } from 'lucide-react'
 import EmptyState from '../../../shared/ui/EmptyState'
 import SpaceSettingsModal from '../../../features/spaces/components/SpaceSettingsModal'
 import { Appear, AppearGroup, AppearItem } from '../../../shared/motion/Appear'
@@ -67,14 +67,13 @@ const SpaceOverview = memo(function SpaceOverview({
     onSelectRoom?.(room)
   }
 
+  const canEditSpace = (canEditSpaceProp || isCreator) && typeof onEditSpace === 'function'
+  const canCreateRoom = canManageRooms || isCreator
   const activeCta = activeRoom
     ? (isVoiceRoom(activeRoom) || liveCount > 0
       ? 'Entrar na sala ativa'
       : `Abrir ${activeRoom.name || 'sala'}`)
-    : 'Criar sala de voz'
-
-  const canEditSpace = (canEditSpaceProp || isCreator) && typeof onEditSpace === 'function'
-  const canCreateRoom = canManageRooms || isCreator
+    : (canCreateRoom ? 'Criar sala de voz' : null)
 
   return (
     <AppearGroup
@@ -89,10 +88,55 @@ const SpaceOverview = memo(function SpaceOverview({
           members={members}
           onlineCount={onlineCount}
           activeRoomLabel={activeCta}
-          onJoinActive={handleJoinActive}
+          onJoinActive={activeCta ? handleJoinActive : undefined}
           onInvite={onInvite}
-          onMore={canEditSpace ? () => setSettingsOpen(true) : undefined}
+          onCustomize={canEditSpace ? () => setSettingsOpen(true) : undefined}
         />
+      </AppearItem>
+
+      <AppearItem as={motion.div}>
+        <section className="vc-space-command-strip" aria-label="Resumo do Space">
+          <div className="vc-space-command-strip__metrics">
+            <div className="vc-space-metric">
+              <Users size={15} />
+              <span><strong>{members.length}</strong> membros</span>
+            </div>
+            <div className="vc-space-metric is-online">
+              <span className="vc-space-metric__dot" />
+              <span><strong>{onlineCount}</strong> online</span>
+            </div>
+            <div className="vc-space-metric">
+              <Hash size={15} />
+              <span><strong>{rooms.length}</strong> salas</span>
+            </div>
+            <div className="vc-space-metric">
+              <Radio size={15} />
+              <span><strong>{liveCount}</strong> ao vivo</span>
+            </div>
+          </div>
+          <div className="vc-space-command-strip__actions" aria-label="Ações rápidas">
+            {canCreateRoom && (
+              <button type="button" onClick={() => onCreateRoom?.({ initialPurpose: 'conversation' })}>
+                <Plus size={14} /> Criar sala
+              </button>
+            )}
+            {onInvite && (
+              <button type="button" onClick={onInvite}>
+                <UserPlus size={14} /> Convidar
+              </button>
+            )}
+            {onOpenEvents && (
+              <button type="button" onClick={onOpenEvents}>
+                <CalendarDays size={14} /> Eventos
+              </button>
+            )}
+            {canEditSpace && (
+              <button type="button" onClick={() => setSettingsOpen(true)} className="is-accent">
+                <Palette size={14} /> Personalizar
+              </button>
+            )}
+          </div>
+        </section>
       </AppearItem>
 
       {!hasRooms ? (
@@ -115,38 +159,38 @@ const SpaceOverview = memo(function SpaceOverview({
             />
           </AppearItem>
 
-          <AppearItem as={motion.div} className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.85fr)] gap-4 sm:gap-5 items-start">
-            <RecentConversations
-              rooms={textRooms}
-              members={members}
-              onSelectRoom={handleSelectRoom}
-              onBrowseAll={() => {
-                const first = textRooms[0] || rooms[0]
-                handleSelectRoom(first)
-              }}
-            />
-            <div className="space-y-4 sm:space-y-5">
+          <div className="vc-space-dashboard-grid">
+            <AppearItem as={motion.div} className="vc-space-dashboard-grid__conversations">
+              <RecentConversations
+                rooms={textRooms}
+                members={members}
+                onSelectRoom={handleSelectRoom}
+                onBrowseAll={() => {
+                  const first = textRooms[0] || rooms[0]
+                  handleSelectRoom(first)
+                }}
+              />
+            </AppearItem>
+            <AppearItem as={motion.div} className="vc-space-dashboard-grid__live">
               <LiveNowCard
                 rooms={rooms}
                 members={members}
                 onSelectRoom={handleSelectRoom}
-                onBrowseRooms={() => onCreateRoom?.({ initialPurpose: 'voice' })}
+                onBrowseRooms={canCreateRoom ? () => onCreateRoom?.({ initialPurpose: 'voice' }) : undefined}
               />
-              <NextEventCard
-                events={space.events}
-                onOpenEvents={onOpenEvents}
+            </AppearItem>
+            <AppearItem as={motion.div} className="vc-space-dashboard-grid__event">
+              <NextEventCard events={space.events} onOpenEvents={onOpenEvents} />
+            </AppearItem>
+            <AppearItem as={motion.div} className="vc-space-dashboard-grid__activity">
+              <SpaceActivity
+                space={space}
+                members={members}
+                rooms={rooms}
+                onSelectRoom={handleSelectRoom}
               />
-            </div>
-          </AppearItem>
-
-          <AppearItem as={motion.div}>
-            <SpaceActivity
-              space={space}
-              members={members}
-              rooms={rooms}
-              onSelectRoom={handleSelectRoom}
-            />
-          </AppearItem>
+            </AppearItem>
+          </div>
         </>
       )}
 

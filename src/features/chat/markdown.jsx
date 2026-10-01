@@ -82,15 +82,16 @@ function Spoiler({ children }) {
 }
 
 /* ---------- Mention ---------- */
-function Mention({ handle }) {
+function Mention({ handle, userId = null }) {
   return (
     <button
       type="button"
       data-handle={handle}
+      data-user-id={userId || ''}
       onClick={(e) => {
         e.stopPropagation()
         if (typeof window !== 'undefined' && window.__vcOpenProfile) {
-          window.__vcOpenProfile(handle)
+          window.__vcOpenProfile(userId || handle)
         }
       }}
       className="vc-mention inline-flex items-center px-1.5 py-[1px] rounded-pill bg-accent/[0.18] text-accent text-[13px] font-medium hover:bg-accent/[0.28] transition-colors align-baseline"
@@ -105,11 +106,15 @@ function Mention({ handle }) {
  * current Space. The pill is only emitted when the slug matches a real
  * room — otherwise the raw "#slug" text is rendered (see resolveRoom
  * contract below).                                            */
-function RoomMention({ slug, room }) {
+function RoomMention({ slug, room, onSelectRoom }) {
   const label = room?.name || `#${slug}`
   const onClick = (e) => {
     e.stopPropagation()
     if (!room) return
+    if (typeof onSelectRoom === 'function') {
+      onSelectRoom(room)
+      return
+    }
     if (typeof window !== 'undefined' && window.__vcSelectRoom) {
       window.__vcSelectRoom(room)
     }
@@ -165,7 +170,28 @@ export function buildRoomMentionIndex(allRooms) {
  * `resolveRoom(slug)` is optional. When provided and it returns a room
  * record, a `#slug` becomes a clickable pill. Otherwise the raw text
  * passes through untouched.                                        */
-function parseInline(text, keyPrefix, resolveRoom) {
+function highlightSearchText(value, query, keyPrefix) {
+  const text = String(value || '')
+  const needle = String(query || '').trim()
+  if (!needle) return text
+  const lower = text.toLocaleLowerCase('pt-BR')
+  const lowerNeedle = needle.toLocaleLowerCase('pt-BR')
+  const nodes = []
+  let cursor = 0
+  let matchIndex = lower.indexOf(lowerNeedle)
+  let key = 0
+  while (matchIndex >= 0) {
+    if (matchIndex > cursor) nodes.push(text.slice(cursor, matchIndex))
+    const end = matchIndex + needle.length
+    nodes.push(<mark className="vc-search-hit" key={`${keyPrefix}-hit-${key++}`}>{text.slice(matchIndex, end)}</mark>)
+    cursor = end
+    matchIndex = lower.indexOf(lowerNeedle, cursor)
+  }
+  if (cursor < text.length) nodes.push(text.slice(cursor))
+  return nodes.length ? nodes : text
+}
+
+function parseInline(text, keyPrefix, resolveRoom, resolveMention, onRoomMention, searchQuery) {
   const out = []
   let i = 0
   let k = 0
@@ -187,7 +213,7 @@ function parseInline(text, keyPrefix, resolveRoom) {
       const end = text.indexOf('||', i + 2)
       if (end > i + 1) {
         const inner = text.slice(i + 2, end)
-        push(<Spoiler>{parseInline(inner, `${keyPrefix}-sp`, resolveRoom)}</Spoiler>)
+        push(<Spoiler>{parseInline(inner, `${keyPrefix}-sp`, resolveRoom, resolveMention, onRoomMention, searchQuery)}</Spoiler>)
         i = end + 2
         continue
       }
@@ -210,7 +236,7 @@ function parseInline(text, keyPrefix, resolveRoom) {
               title={url}
               onClick={(e) => e.stopPropagation()}
             >
-              {parseInline(label, `${keyPrefix}-ln`, resolveRoom)}
+              {parseInline(label, `${keyPrefix}-ln`, resolveRoom, resolveMention, onRoomMention, searchQuery)}
             </a>,
           )
           i = closeUrl + 1
@@ -223,7 +249,8 @@ function parseInline(text, keyPrefix, resolveRoom) {
     if (text[i] === '@') {
       const m = /^@([a-zA-Z0-9_.\-]{1,24})/.exec(text.slice(i))
       if (m) {
-        push(<Mention handle={m[1]} />)
+        const resolved = resolveMention?.(m[1])
+        push(<Mention handle={m[1]} userId={resolved?.userId || null} />)
         i += m[0].length
         continue
       }
@@ -244,7 +271,7 @@ function parseInline(text, keyPrefix, resolveRoom) {
           const slug = m[1]
           const room = resolveRoom(slug)
           if (room) {
-            push(<RoomMention slug={slug} room={room} />)
+            push(<RoomMention slug={slug} room={room} onSelectRoom={onRoomMention} />)
             i += m[0].length
             continue
           }
@@ -258,7 +285,7 @@ function parseInline(text, keyPrefix, resolveRoom) {
     if (text[i] === '~' && text[i + 1] === '~') {
       const end = text.indexOf('~~', i + 2)
       if (end > i + 1) {
-        push(<s className="vc-md-s">{parseInline(text.slice(i + 2, end), `${keyPrefix}-sk`, resolveRoom)}</s>)
+        push(<s className="vc-md-s">{parseInline(text.slice(i + 2, end), `${keyPrefix}-sk`, resolveRoom, resolveMention, onRoomMention, searchQuery)}</s>)
         i = end + 2
         continue
       }
@@ -268,7 +295,7 @@ function parseInline(text, keyPrefix, resolveRoom) {
     if (text[i] === '*' && text[i + 1] === '*') {
       const end = text.indexOf('**', i + 2)
       if (end > i + 1) {
-        push(<strong className="vc-md-strong font-bold">{parseInline(text.slice(i + 2, end), `${keyPrefix}-b`, resolveRoom)}</strong>)
+        push(<strong className="vc-md-strong font-bold">{parseInline(text.slice(i + 2, end), `${keyPrefix}-b`, resolveRoom, resolveMention, onRoomMention, searchQuery)}</strong>)
         i = end + 2
         continue
       }
@@ -282,7 +309,7 @@ function parseInline(text, keyPrefix, resolveRoom) {
         // Avoid eating a stray ** that was unmatched — would already be handled above.
         if (!(ch === '*' && text[end + 1] === '*')) {
           const inner = text.slice(i + 1, end)
-          push(<em className="vc-md-em italic">{parseInline(inner, `${keyPrefix}-i`, resolveRoom)}</em>)
+          push(<em className="vc-md-em italic">{parseInline(inner, `${keyPrefix}-i`, resolveRoom, resolveMention, onRoomMention, searchQuery)}</em>)
           i = end + 1
           continue
         }
@@ -292,7 +319,7 @@ function parseInline(text, keyPrefix, resolveRoom) {
     // Plain char — accumulate up to the next special char for efficiency.
     let j = i + 1
     while (j < text.length && !'|`[*~_@#'.includes(text[j])) j++
-    push(text.slice(i, j))
+    push(highlightSearchText(text.slice(i, j), searchQuery, `${keyPrefix}-${k}`))
     i = j
   }
   return out
@@ -363,7 +390,7 @@ function highlightLine(raw, lang) {
   return out
 }
 
-function renderBlocks(text, resolveRoom) {
+function renderBlocks(text, resolveRoom, resolveMention, onRoomMention, searchQuery) {
   const lines = String(text || '').split('\n')
   const blocks = []
   let i = 0
@@ -408,7 +435,7 @@ function renderBlocks(text, resolveRoom) {
       }
       blocks.push(
         <blockquote key={k++} className="vc-md-quote">
-          {parseInline(buf.join('\n'), `${k}-q`, resolveRoom)}
+          {parseInline(buf.join('\n'), `${k}-q`, resolveRoom, resolveMention, onRoomMention, searchQuery)}
         </blockquote>,
       )
       continue
@@ -417,7 +444,7 @@ function renderBlocks(text, resolveRoom) {
     // Plain paragraph (single line).
     blocks.push(
       <span key={k++} className="block">
-        {parseInline(line, `${k}-p`, resolveRoom)}
+        {parseInline(line, `${k}-p`, resolveRoom, resolveMention, onRoomMention, searchQuery)}
       </span>,
     )
     i++
@@ -425,7 +452,16 @@ function renderBlocks(text, resolveRoom) {
   return blocks
 }
 
-export default function Markdown({ text, className = '', resolveRoom = null }) {
+export default function Markdown({ text, className = '', resolveRoom = null, onRoomMention = null, mentions = [], searchQuery = '' }) {
+  const mentionIndex = new Map()
+  for (const mention of Array.isArray(mentions) ? mentions : []) {
+    if (!mention?.userId) continue
+    for (const label of [mention.userId, mention.handle, mention.displayName]) {
+      const key = String(label || '').trim().toLowerCase()
+      if (key && !mentionIndex.has(key)) mentionIndex.set(key, mention)
+    }
+  }
+  const resolveMention = (label) => mentionIndex.get(String(label || '').toLowerCase()) || null
   if (!text) return null
   if (isJumbomoji(text)) {
     return (
@@ -441,7 +477,7 @@ export default function Markdown({ text, className = '', resolveRoom = null }) {
   }
   return (
     <div className={'vc-md whitespace-pre-wrap ' + className} style={{ overflowWrap: 'break-word', wordBreak: 'normal' }}>
-      {renderBlocks(text, resolveRoom)}
+      {renderBlocks(text, resolveRoom, resolveMention, onRoomMention, searchQuery)}
     </div>
   )
 }

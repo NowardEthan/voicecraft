@@ -8,6 +8,11 @@
  */
 const VISIBILITY_PREFIX = 'voicecraft:spaceVisibility:'
 const NOTIFY_PREFIX     = 'voicecraft:spaceNotify:'
+const DENSITY_PREFIX    = 'voicecraft:spaceDensity:'
+const MATERIAL_PREFIX   = 'voicecraft:spaceMaterial:'
+
+export const SPACE_DENSITIES = ['compact', 'comfortable']
+export const SPACE_MATERIALS = ['glass', 'solid']
 
 export function getVisibility(spaceId) {
   // Default: 'public' — show in the Spaces rail, accept join by link.
@@ -25,6 +30,42 @@ export function getNotify(spaceId) {
 
 export function setNotify(spaceId, value) {
   return writePref(NOTIFY_PREFIX, spaceId, value)
+}
+
+export function getSpaceDensity(spaceId) {
+  const value = readPref(DENSITY_PREFIX, spaceId, 'compact')
+  return SPACE_DENSITIES.includes(value) ? value : 'compact'
+}
+
+export function setSpaceDensity(spaceId, value) {
+  const next = SPACE_DENSITIES.includes(value) ? value : 'compact'
+  const written = writePref(DENSITY_PREFIX, spaceId, next)
+  emitPreferenceChange(spaceId)
+  return written
+}
+
+export function getSpaceMaterial(spaceId) {
+  const value = readPref(MATERIAL_PREFIX, spaceId, 'glass')
+  return SPACE_MATERIALS.includes(value) ? value : 'glass'
+}
+
+export function setSpaceMaterial(spaceId, value) {
+  const next = SPACE_MATERIALS.includes(value) ? value : 'glass'
+  const written = writePref(MATERIAL_PREFIX, spaceId, next)
+  emitPreferenceChange(spaceId)
+  return written
+}
+
+export function getSpaceExperience(spaceId) {
+  return {
+    density: getSpaceDensity(spaceId),
+    material: getSpaceMaterial(spaceId),
+  }
+}
+
+function emitPreferenceChange(spaceId) {
+  if (typeof window === 'undefined') return
+  window.dispatchEvent(new CustomEvent('voicecraft:space-preference', { detail: { spaceId } }))
 }
 
 export function isSpaceVisible(spaceId) {

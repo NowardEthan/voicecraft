@@ -2,6 +2,7 @@ import {
   UserRound, Pencil, Palette, Users, Shield, Lock, Monitor,
   Settings, LogOut, Mic2,
 } from 'lucide-react'
+import { TabIndicator } from '../../../shared/motion/Transitions.jsx'
 
 const PRIMARY = [
   { id: 'profile', label: 'Meu perfil', icon: UserRound },
@@ -23,13 +24,15 @@ function NavButton({ item, active, onClick }) {
       type="button"
       onClick={() => onClick(item.id)}
       className={[
-        'h-10 px-3 rounded-xl flex items-center gap-2.5 text-[13px] font-medium transition-colors shrink-0',
+        'relative h-10 px-3 rounded-xl flex items-center gap-2.5 text-[13px] font-medium transition-colors shrink-0',
         'w-auto md:w-full',
-        active ? 'bg-accent text-on-accent' : 'text-ink hover:bg-white/[0.04] hover:text-strong',
+        active ? 'text-on-accent' : 'text-ink hover:bg-white/[0.04] hover:text-strong',
       ].join(' ')}
+      aria-current={active ? 'page' : undefined}
     >
-      <Icon size={16} strokeWidth={1.8} className={active ? 'text-on-accent' : 'text-muted'} />
-      {item.label}
+      {active && <TabIndicator layoutId="account-nav-indicator" className="absolute inset-0 rounded-xl bg-accent" />}
+      <Icon size={16} strokeWidth={1.8} className={'relative z-[1] ' + (active ? 'text-on-accent' : 'text-muted')} />
+      <span className="relative z-[1]">{item.label}</span>
     </button>
   )
 }

@@ -10,9 +10,10 @@
 
 import {
   enqueueMessage, markInFlight, markSent, markFailedAttempt,
-  resetForRetry, getDueNow, getAll,
+  resetForRetry, getDueNow, getAll, deleteItem,
 } from './chatOutbox'
 import { openDB } from '../cache/idb'
+import { runOutboxTaskOnce } from './outboxState.js'
 
 const POLL_MS = 5_000
 
@@ -20,36 +21,64 @@ let sender = null
 let pollHandle = null
 let onlineHandler = null
 let booted = false
-const inFlight = new Set() // ids currently being sent (per-id idempotency)
+const inFlight = new Map() // id -> active dispatch promise (per-id idempotency)
+const canceled = new Set() // blocks stale due-list and in-flight continuations
 let activeUid = null
 
+const senderRegistrations = new Map()
+let senderSequence = 0
+
 export function setSender(fn) {
-  sender = typeof fn === 'function' ? fn : null
+  if (typeof fn !== 'function') return () => {}
+  const token = ++senderSequence
+  senderRegistrations.set(token, fn)
+  sender = fn
+  return () => {
+    senderRegistrations.delete(token)
+    if (sender !== fn) return
+    const remaining = [...senderRegistrations.values()]
+    sender = remaining[remaining.length - 1] || null
+  }
+}
+
+export function isCanceled(id) {
+  return !!id && canceled.has(id)
+}
+
+export async function cancel(id) {
+  if (!id) return false
+  canceled.add(id)
+  await deleteItem(id)
+  const running = inFlight.get(id)
+  if (running) await running.catch(() => {})
+  // The record is gone and any active continuation has stopped. A stale due
+  // snapshot can no longer dispatch it because markInFlight will find nothing.
+  canceled.delete(id)
+  return true
 }
 
 export function setActiveUid(uid) {
   activeUid = uid || null
 }
 
-async function dispatchOne(uid, id) {
-  if (inFlight.has(id)) return
+function dispatchOne(uid, id) {
+  if (canceled.has(id)) return Promise.resolve()
+  if (inFlight.has(id)) return inFlight.get(id)
   if (!sender) {
     console.warn('[outbox] No sender registered; skipping dispatch for', id)
-    return
+    return Promise.resolve()
   }
-  inFlight.add(id)
-  try {
+  const activeSender = sender
+  return runOutboxTaskOnce(inFlight, id, async () => {
     const item = await markInFlight(id)
-    if (!item) return
+    if (!item || canceled.has(id)) return
     try {
-      await sender(item)
-      await markSent(id)
+      await activeSender(item)
+      if (!canceled.has(id)) await markSent(id)
     } catch (err) {
-      await markFailedAttempt(id, err)
+      if (!canceled.has(id)) await markFailedAttempt(id, err)
     }
-  } finally {
-    inFlight.delete(id)
-  }
+  })
 }
 
 async function flushDue() {
@@ -59,7 +88,7 @@ async function flushDue() {
   // Run sequentially to avoid Firebase quota spikes during reconnect storms.
   for (const item of due) {
     // Re-check that we still want to dispatch (nextAttemptAt might've moved).
-    if (inFlight.has(item.id)) continue
+    if (inFlight.has(item.id) || canceled.has(item.id)) continue
     if (Date.now() < (item.nextAttemptAt || 0)) continue
     // eslint-disable-next-line no-await-in-loop
     await dispatchOne(activeUid, item.id)
@@ -71,7 +100,7 @@ export async function flush(uid) {
   if (!targetUid) return
   const due = await getDueNow(targetUid)
   for (const item of due) {
-    if (inFlight.has(item.id)) continue
+    if (inFlight.has(item.id) || canceled.has(item.id)) continue
     // eslint-disable-next-line no-await-in-loop
     await dispatchOne(targetUid, item.id)
   }
@@ -79,7 +108,9 @@ export async function flush(uid) {
 
 export async function retryNow(id) {
   if (!activeUid) return null
-  await resetForRetry(id)
+  canceled.delete(id)
+  const item = await resetForRetry(id)
+  if (!item) throw new Error('Mensagem nao encontrada na fila de envio')
   await dispatchOne(activeUid, id)
   return id
 }

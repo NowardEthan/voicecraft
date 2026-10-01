@@ -38,7 +38,7 @@ export default function SpaceAvatar({
 
   return (
     <div
-      className={`relative shrink-0 flex items-center justify-center overflow-hidden transition-all duration-200 ${radiusClass} ${ringClass} ${className}`}
+      className={`relative shrink-0 flex items-center justify-center overflow-hidden transition-[color,background-color,border-color,box-shadow,opacity,transform,filter] duration-200 ${radiusClass} ${ringClass} ${className}`}
       style={{
         width: size,
         height: size,

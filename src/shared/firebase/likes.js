@@ -1,83 +1,120 @@
 /**
- * Firebase RTDB helpers for message likes ("super like").
+ * Firebase helpers for Chan.
  *
- * Hierarchy:
- *   vc_room_likes/
- *     {spaceId}/
- *       {roomId}/
- *         {msgId}/
- *           {userId}: true
+ * TEMPORARY TEST MODE: Chan is unlimited and writes directly to the caller's
+ * own RTDB slots. The premium UI still awaits these writes before confirming.
  *
- * Design notes:
- *   - Like é binário (true = curtiu). Unset = não curtiu.
- *   - Cada curtida é unicamente endereçada por (spaceId, roomId, msgId,
- *     userId), então o escopo é "por mensagem" independente da sala
- *     atual.
- *   - Rules: somente o próprio user pode escrever no próprio slot,
- *     qualquer autenticado pode ler (definido em database.rules.json).
+ * FUTURE QUOTA ROLLOUT (COORDINATED SECURITY CHANGE REQUIRED): set
+ * VITE_CHAN_DAILY_QUOTA_ENABLED=true ONLY in the same release that deploys
+ * grantChan/removeChan AND publishes RTDB rules that deny every client write
+ * to vc_room_likes. Enabling only this client flag does not secure the quota;
+ * old clients could still write directly while permissive rules are deployed.
  */
-import { getDatabase, ref, set, remove, onValue } from 'firebase/database'
+import { getDatabase, ref, onValue, update } from 'firebase/database'
+import { getFunctions, httpsCallable } from 'firebase/functions'
 import { firebaseApp } from './app'
+
+export const CHAN_DAILY_QUOTA_ENABLED = import.meta.env.VITE_CHAN_DAILY_QUOTA_ENABLED === 'true'
 
 function getDb() {
   return getDatabase(firebaseApp)
 }
 
-function isLikedValue(v) {
-  return v === true || v === 1 || v === 'true'
+function getCallable(name) {
+  return httpsCallable(getFunctions(firebaseApp), name)
 }
 
-/** Subscribe a todos os likes de uma sala. O callback recebe
- *  { [msgId]: [userId, userId, ...] } — estrutura achatada pra
- *  facilitar o merge com `msg.likes` local.
- *
- *  Retorna função de cleanup.                                          */
+function isLikedValue(value) {
+  return value === true || value === 1 || value === 'true'
+}
+
+function chanPayload(spaceId, roomId, msgIds) {
+  const messageIds = [...new Set((msgIds || []).map(String).filter(Boolean))]
+  if (!spaceId || !roomId || !messageIds.length) {
+    throw new Error('Mensagem inv\u00e1lida para Chan.')
+  }
+  return {
+    spaceId,
+    roomId,
+    // useChat orders aliases with the canonical Firestore id first.
+    messageId: messageIds[0],
+    messageIds,
+  }
+}
+
+async function writeOwnChanSlots(payload, userId, value) {
+  if (!userId) throw new Error('Entre na sua conta para usar um Chan.')
+  const updates = {}
+  for (const messageId of payload.messageIds) {
+    updates[`vc_room_likes/${payload.spaceId}/${payload.roomId}/${messageId}/${userId}`] = value
+  }
+  // A single root update keeps canonical and legacy aliases synchronized.
+  await update(ref(getDb()), updates)
+}
+
+/** Subscribe to all Chan slots in a room. */
 export function listenRoomLikes(spaceId, roomId, onChange) {
   if (!spaceId || !roomId) return () => {}
-  const r = ref(getDb(), `vc_room_likes/${spaceId}/${roomId}`)
-  const handler = (snap) => {
-    const val = snap.val() || {}
+  const roomRef = ref(getDb(), `vc_room_likes/${spaceId}/${roomId}`)
+  const handler = (snapshot) => {
+    const value = snapshot.val() || {}
     const map = {}
-    Object.keys(val).forEach((msgId) => {
-      const likers = val[msgId]
-      if (likers && typeof likers === 'object') {
-        map[msgId] = Object.keys(likers).filter((uid) => isLikedValue(likers[uid]))
+    Object.keys(value).forEach((messageId) => {
+      const users = value[messageId]
+      if (users && typeof users === 'object') {
+        map[messageId] = Object.keys(users).filter((uid) => isLikedValue(users[uid]))
       }
     })
     onChange(map)
   }
-  const unsub = onValue(
-    r,
+  const unsubscribe = onValue(
+    roomRef,
     handler,
-    (err) => { console.warn('[likes] listen', err) },
+    (error) => { console.warn('[chan] listen', error) },
   )
   return () => {
-    try { unsub() } catch { /* ignore */ }
+    try { unsubscribe() } catch { /* ignore */ }
   }
 }
 
-/** Curtir — idempotente (true sobrescreve true). */
-export async function likeMessage(spaceId, roomId, msgId, userId) {
-  if (!spaceId || !roomId || !msgId || !userId) return
-  await set(ref(getDb(), `vc_room_likes/${spaceId}/${roomId}/${msgId}/${userId}`), true)
-}
-
-/** Descurtir — idempotente (remove() em chave inexistente é no-op). */
-export async function unlikeMessage(spaceId, roomId, msgId, userId) {
-  if (!spaceId || !roomId || !msgId || !userId) return
-  await remove(ref(getDb(), `vc_room_likes/${spaceId}/${roomId}/${msgId}/${userId}`))
-}
-
-/**
- * Persist like under every known message id (client id + firestore doc id).
- * Prevents Electron/browser divergence when ids differ.
- */
 export async function likeMessageKeys(spaceId, roomId, msgIds, userId) {
-  const ids = [...new Set((msgIds || []).filter(Boolean))]
-  await Promise.all(ids.map((id) => likeMessage(spaceId, roomId, id, userId)))
+  const payload = chanPayload(spaceId, roomId, msgIds)
+  if (CHAN_DAILY_QUOTA_ENABLED) {
+    const result = await getCallable('grantChan')(payload)
+    return result.data
+  }
+  await writeOwnChanSlots(payload, userId, true)
+  return {
+    success: true,
+    status: 'success',
+    granted: true,
+    mode: 'unlimited-direct',
+    messageId: payload.messageId,
+    messageIds: payload.messageIds,
+  }
 }
 
 export async function unlikeMessageKeys(spaceId, roomId, msgIds, userId) {
-  const ids = [...new Set((msgIds || []).filter(Boolean))]
-  await Promise.all(ids.map((id) => unlikeMessage(spaceId, roomId, id, userId)))
+  const payload = chanPayload(spaceId, roomId, msgIds)
+  if (CHAN_DAILY_QUOTA_ENABLED) {
+    const result = await getCallable('removeChan')(payload)
+    return result.data
+  }
+  await writeOwnChanSlots(payload, userId, null)
+  return {
+    success: true,
+    status: 'removed',
+    removed: true,
+    mode: 'unlimited-direct',
+    messageId: payload.messageId,
+    messageIds: payload.messageIds,
+  }
+}
+
+export async function likeMessage(spaceId, roomId, msgId, userId) {
+  return likeMessageKeys(spaceId, roomId, [msgId], userId)
+}
+
+export async function unlikeMessage(spaceId, roomId, msgId, userId) {
+  return unlikeMessageKeys(spaceId, roomId, [msgId], userId)
 }

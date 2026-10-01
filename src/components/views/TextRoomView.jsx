@@ -18,7 +18,7 @@
  * for grep-friendliness.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import MessageList, { resolveChatAuthor } from './MessageList'
+import MessageList, { messageMatchesSearch, resolveChatAuthor } from './MessageList'
 import Composer from './Composer'
 import ChatHeader from './ChatHeader'
 import TopicCardsRow from './TopicCardsRow'
@@ -36,7 +36,7 @@ import {
   makeTypingTracker,
   subscribeTyping,
 } from '../../features/chat/typing'
-import { CommandsFab, CommandsPanel } from '../../features/chat/commands'
+import { CommandsPanel } from '../../features/chat/commands'
 import { useScheduledAnnouncePublisher } from '../../features/chat/useScheduledAnnouncePublisher'
 import { normalizeLobby } from '../../features/chat/lobbySchema'
 import {
@@ -47,6 +47,8 @@ import {
 import { RulesCard } from '../../features/chat/RulesCards'
 import { flashToast } from '../../shared/utils/toast'
 import { Lock } from 'lucide-react'
+import { setLastRead } from '../../features/notifications/unreadStore'
+import { useNotifications } from '../../features/notifications'
 import { collectMessageMediaUrls, warmImages } from '../../shared/media/imageWarm'
 
 export default function TextRoomView({
@@ -62,6 +64,8 @@ export default function TextRoomView({
   voiceActive = false,
   canModerateChat = false,
   canKick = false,
+  // Future thread panel hook. No thread control is rendered until backend support exists.
+  onOpenThread = null,
 }) {
   const purpose = purposeOf(room)
   const accent = roomAccentColor(room)
@@ -81,11 +85,15 @@ export default function TextRoomView({
   })
 
   const roomKey = room ? `${space?.id || 'nospace'}:${room.id}` : null
+  const currentRoomKeyRef = useRef(roomKey)
+  currentRoomKeyRef.current = roomKey
 
   const selfMember = useMemo(
     () => members.find((m) => m.userId === currentUserId) || null,
     [members, currentUserId],
   )
+
+  const notifications = useNotifications()
 
   const chat = useChat({
     channel,
@@ -115,12 +123,31 @@ export default function TextRoomView({
   const onlineMembers = useMemo(() => members.filter((m) => m.online), [members])
 
   const [replyTo, setReplyTo] = useState(null)
+  const [editingMessage, setEditingMessage] = useState(null)
   const [lightbox, setLightbox] = useState(null)
   const [density, setDensity] = useState(readChatDensity)
   const [commandsOpen, setCommandsOpen] = useState(false)
   const [jumpToId, setJumpToId] = useState(null)
   const [jumpTick, setJumpTick] = useState(0)
-  const lastSendAtRef = useRef(0)
+  const lastSendAtByRoomRef = useRef(new Map())
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchFilters, setSearchFilters] = useState({ authorId: '', attachments: false, pinned: false, period: 'all' })
+  const [searchIndex, setSearchIndex] = useState(-1)
+  const [readTick, setReadTick] = useState(0)
+  const [commandTarget, setCommandTarget] = useState(null)
+
+  useEffect(() => {
+    setReplyTo(null)
+    setEditingMessage(null)
+    textStateRef.current = ''
+    setSearchOpen(false)
+    setSearchQuery('')
+    setSearchFilters({ authorId: '', attachments: false, pinned: false, period: 'all' })
+    setSearchIndex(-1)
+    setCommandTarget(null)
+    setCommandsOpen(false)
+  }, [roomKey])
 
   const chatLocked = !!room?.chatLocked
   const slowModeSeconds = Math.max(0, Number(room?.slowModeSeconds) || 0)
@@ -143,6 +170,55 @@ export default function TextRoomView({
       return m
     })
   }, [chat.messages, room?.lobby])
+
+  const hasSearchCriteria = !!(
+    searchQuery.trim()
+    || searchFilters.authorId
+    || searchFilters.attachments
+    || searchFilters.pinned
+    || searchFilters.period !== 'all'
+  )
+  const searchMatches = useMemo(() => {
+    if (!searchOpen || !hasSearchCriteria) return []
+    return feedMessages.filter((message) => messageMatchesSearch(message, searchQuery, { ...searchFilters, currentUserId }))
+  }, [feedMessages, searchOpen, hasSearchCriteria, searchQuery, searchFilters, currentUserId])
+
+  const searchAuthors = useMemo(() => {
+    const map = new Map()
+    for (const message of feedMessages) {
+      if (!message || message.deleted || message.kind === 'sys') continue
+      const author = resolveChatAuthor(message, members, currentUserId, currentUserName)
+      const id = String(author.userId || message.authorId || message.author || '')
+      if (id && !map.has(id)) map.set(id, { id, label: author.displayName || message.author || id })
+    }
+    return [...map.values()].sort((a, b) => a.label.localeCompare(b.label, 'pt-BR'))
+  }, [feedMessages, members, currentUserId, currentUserName])
+
+  useEffect(() => {
+    setSearchIndex((index) => {
+      if (!searchMatches.length) return -1
+      if (index < 0) return -1
+      return index >= searchMatches.length ? searchMatches.length - 1 : index
+    })
+  }, [searchMatches.length])
+
+  const jumpSearch = useCallback((delta) => {
+    if (!searchMatches.length) return
+    const next = searchIndex < 0
+      ? (delta < 0 ? searchMatches.length - 1 : 0)
+      : (searchIndex + delta + searchMatches.length) % searchMatches.length
+    setSearchIndex(next)
+    const target = searchMatches[next]
+    setJumpToId(target.id || target.firestoreId)
+    setJumpTick((tick) => tick + 1)
+  }, [searchMatches, searchIndex])
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false)
+    setSearchQuery('')
+    setSearchFilters({ authorId: '', attachments: false, pinned: false, period: 'all' })
+    setSearchIndex(-1)
+  }, [])
 
   // Decode announce / lobby / attachment bitmaps before paint (kills black remount).
   useEffect(() => {
@@ -187,11 +263,17 @@ export default function TextRoomView({
 
   useEffect(() => {
     if (!channel || !currentUserId) return undefined
-    const peerName = selfMember?.displayName || currentUserName || 'peer'
-    const unsubMsg = subscribeTyping(channel, currentUserId, typingTracker, peerName)
-    const detached = attachComposerTyping(channel, () => textStateRef.current)
+    const resolvePeerName = (peerId, message) => {
+      const peer = members.find((member) => String(member.userId) === String(peerId))
+      return peer?.displayName || message?.name || 'alguém'
+    }
+    const unsubMsg = subscribeTyping(channel, currentUserId, typingTracker, resolvePeerName)
+    const detached = attachComposerTyping(channel, () => textStateRef.current, {
+      userId: currentUserId,
+      name: selfMember?.displayName || currentUserName || 'você',
+    })
     return () => { unsubMsg(); detached() }
-  }, [channel, currentUserId, typingTracker, selfMember, currentUserName])
+  }, [channel, currentUserId, typingTracker, selfMember, currentUserName, members])
 
   const togglePin = useCallback(async (msgId) => {
     try {
@@ -216,10 +298,11 @@ export default function TextRoomView({
 
   const topicSourceMessages = useMemo(() => {
     const list = feedMessages || []
-    return list.filter((m) => m && !m.deleted && (m.pinned || m.kind === 'announce' || m.announce))
+    return list.filter((m) => m && !m.deleted && (m.kind === 'announce' || m.announce))
   }, [feedMessages])
 
   const handleReply = useCallback((msg) => {
+    setEditingMessage(null)
     if (!msg?.id && !msg?.firestoreId) return
     const author = resolveChatAuthor(msg, members, currentUserId, currentUserName)
     setReplyTo({
@@ -237,28 +320,51 @@ export default function TextRoomView({
 
   const handleCancelReply = useCallback(() => setReplyTo(null), [])
 
-  const handleSubmit = useCallback(async ({ text, attachment, attachments, replyToId } = {}) => {
+  const handleMarkUnread = useCallback((message) => {
+    if (!message?.ts || !space?.id || !room?.id) return
+    setLastRead(currentUserId, space.id, room.id, { at: Math.max(0, Number(message.ts) - 1), id: null })
+    notifications.refreshInbox()
+    setReadTick((tick) => tick + 1)
+    setJumpToId(message.id || message.firestoreId)
+    setJumpTick((tick) => tick + 1)
+    flashToast('Marcado como não lido a partir daqui')
+  }, [currentUserId, space?.id, room?.id, notifications])
+
+  const resolveMentions = useCallback((ids = []) => {
+    const wanted = new Set(ids.map(String))
+    return members
+      .filter((member) => member?.userId && wanted.has(String(member.userId)))
+      .map((member) => ({ userId: String(member.userId), handle: member.handle || '', displayName: member.displayName || '' }))
+  }, [members])
+
+  const handleSubmit = useCallback(async ({ text, attachment, attachments, replyToId, mentionUserIds = [], operationRoomKey = roomKey } = {}) => {
+    const stillInOriginRoom = () => currentRoomKeyRef.current === operationRoomKey
     if (chatLocked && !canModerateChat) {
-      flashToast('Canal trancado')
+      flashToast('Sala trancada')
       return false
+    }
+    const mentions = resolveMentions(mentionUserIds)
+    if (editingMessage) {
+      const ok = await chat.editMessage(editingMessage.id || editingMessage.firestoreId, text, mentions)
+      if (ok && stillInOriginRoom()) setEditingMessage(null)
+      return ok
     }
     if (slowModeSeconds > 0 && !canModerateChat) {
       const waitMs = slowModeSeconds * 1000
-      const elapsed = Date.now() - lastSendAtRef.current
-      if (lastSendAtRef.current && elapsed < waitMs) {
-        const left = Math.ceil((waitMs - elapsed) / 1000)
-        flashToast(`Slowmode: aguarde ${left}s`)
+      const lastSendAt = lastSendAtByRoomRef.current.get(operationRoomKey) || 0
+      const elapsed = Date.now() - lastSendAt
+      if (lastSendAt && elapsed < waitMs) {
+        flashToast(`Slowmode: aguarde ${Math.ceil((waitMs - elapsed) / 1000)}s`)
         return false
       }
     }
-    const ok = await chat.sendMessage({ text, attachment, attachments, replyToId })
+    const ok = await chat.sendMessage({ text, attachment, attachments, replyToId, mentions })
     if (ok) {
-      lastSendAtRef.current = Date.now()
-      setReplyTo(null)
+      lastSendAtByRoomRef.current.set(operationRoomKey, Date.now())
+      if (stillInOriginRoom()) setReplyTo(null)
     }
     return ok
-  }, [chat, chatLocked, canModerateChat, slowModeSeconds])
-
+  }, [chat, chatLocked, canModerateChat, slowModeSeconds, editingMessage, resolveMentions])
   const handleRetry = useCallback((msgId) => chat.retry(msgId), [chat])
 
   const handleComposerTextChange = useCallback((next) => {
@@ -289,12 +395,14 @@ export default function TextRoomView({
       if (!m || m.deleted || m.kind === 'sys') continue
       if (m.direction !== 'out' && m.authorId !== currentUserId) continue
       if (m.status === 'sending') continue
-      chat.editMessage(m.id, m.text || '')
+      setReplyTo(null)
+      setEditingMessage(m)
       break
     }
-  }, [chat, currentUserId])
+  }, [chat.messages, currentUserId])
 
   const tokens = useMemo(() => spaceTokens(space), [space])
+  const quickReactions = useMemo(() => getFrequentReactions(), [])
 
   if (!room) return null
 
@@ -304,11 +412,10 @@ export default function TextRoomView({
 
   const onlineCount = onlineMembers.length
 
-  const quickReactions = useMemo(() => getFrequentReactions(), [])
-
   return (
     <div
-      className="h-full w-full flex flex-col min-h-0 bg-canvas relative overflow-hidden vc-chat-bg-decor"
+      className="vc-conversation-root h-full w-full flex flex-col min-h-0 relative overflow-hidden"
+      data-conversation-density={density}
       style={tokens}
     >
       <ChatHeader
@@ -332,6 +439,26 @@ export default function TextRoomView({
         canModerate={canModerateChat}
         onJumpToPinned={handleJumpToPinned}
         onUnpinMessage={togglePin}
+        notificationKey={roomKey}
+        commandsOpen={commandsOpen}
+        onToggleCommands={() => {
+          if (commandsOpen) setCommandsOpen(false)
+          else { setCommandTarget(null); setCommandsOpen(true) }
+        }}
+        search={{
+          open: searchOpen,
+          onOpen: () => setSearchOpen(true),
+          query: searchQuery,
+          onQueryChange: (value) => { setSearchQuery(value); setSearchIndex(-1) },
+          onClose: closeSearch,
+          matchCount: searchMatches.length,
+          activeIndex: searchMatches.length ? searchIndex : -1,
+          onNext: () => jumpSearch(1),
+          onPrevious: () => jumpSearch(-1),
+          filters: searchFilters,
+          onFiltersChange: (value) => { setSearchFilters(value); setSearchIndex(-1) },
+          authors: searchAuthors,
+        }}
       />
 
       <TopicCardsRow
@@ -344,6 +471,7 @@ export default function TextRoomView({
         <div className="flex-1 min-h-0 relative overflow-hidden">
           <MessageList
             messages={feedMessages}
+            loading={!chat.historyReady}
             currentUserName={currentUserName}
             currentUserId={currentUserId}
             authorColors={authorColors}
@@ -356,12 +484,16 @@ export default function TextRoomView({
               else if (imagesOrUrl) setLightbox({ images: [imagesOrUrl], index: 0 })
             }}
             emptyHint="Nenhuma mensagem ainda. Mande a primeira."
-            query=""
+            query={searchOpen ? searchQuery : ''}
+            searchFilters={searchOpen ? searchFilters : null}
             onReply={handleReply}
             onToggleReaction={chat.toggleReaction}
             onToggleLike={chat.toggleLike}
             quickReactions={quickReactions}
-            onEdit={chat.editMessage}
+            onEdit={(id) => {
+              const message = chat.messages.find((item) => item.id === id || item.firestoreId === id)
+              if (message) { setReplyTo(null); setEditingMessage(message) }
+            }}
             onDelete={(id) => chat.deleteMessage(id, { moderate: canModerateChat })}
             canModerate={canModerateChat}
             members={members}
@@ -373,6 +505,10 @@ export default function TextRoomView({
             jumpToId={jumpToId}
             jumpTick={jumpTick}
             canPinAll={canModerateChat}
+            onMarkUnread={handleMarkUnread}
+            onReadCursorChange={notifications.refreshInbox}
+            readTick={readTick}
+            onOpenThread={onOpenThread}
             listHeader={rulesActive ? (
               <div className="pb-1">
                 <RulesCard
@@ -389,13 +525,9 @@ export default function TextRoomView({
           />
         </div>
 
-        <CommandsFab
-          open={commandsOpen}
-          onClick={() => setCommandsOpen((v) => !v)}
-        />
         <CommandsPanel
           open={commandsOpen}
-          onClose={() => setCommandsOpen(false)}
+          onClose={() => { setCommandsOpen(false); setCommandTarget(null) }}
           canModerateChat={canModerateChat}
           canKick={canKick}
           members={members}
@@ -404,6 +536,7 @@ export default function TextRoomView({
           room={room}
           signaling={signaling}
           currentUserId={currentUserId}
+          initialCommandId={commandTarget}
         />
       </div>
 
@@ -416,7 +549,7 @@ export default function TextRoomView({
               <div className="flex items-center gap-2 rounded-xl border border-[var(--vc-warning)]/25 bg-[var(--vc-warning)]/[0.08] px-3 py-2">
                 <Lock size={13} className="text-[var(--vc-warning)] shrink-0" />
                 <p className="text-[11.5px] text-ink leading-snug">
-                  Canal trancado — só moderadores podem enviar mensagens.
+                  Sala trancada — só moderadores podem enviar mensagens.
                 </p>
               </div>
             </div>
@@ -424,8 +557,8 @@ export default function TextRoomView({
           <Composer
             placeholder={
               slowModeSeconds > 0 && !canModerateChat
-                ? `Slowmode ${slowModeSeconds}s · #${room.name.toLowerCase().replace(/\s+/g, '-')}…`
-                : `Conversar em #${room.name.toLowerCase().replace(/\s+/g, '-')}…`
+                ? `Slowmode ${slowModeSeconds}s · ${room.name}…`
+                : `Conversar em ${room.name}…`
             }
             accent={accent}
             channelName={room.name}
@@ -433,18 +566,21 @@ export default function TextRoomView({
             spaceId={space?.id}
             roomId={room?.id}
             accountUid={currentUserId}
-            onSubmit={async (payload) => {
-              const ok = await handleSubmit(payload)
-              textStateRef.current = ''
-              return ok
-            }}
+            onSubmit={handleSubmit}
             replyTo={replyTo}
+            editingMessage={editingMessage}
+            onCancelEdit={() => setEditingMessage(null)}
             onCancelReply={handleCancelReply}
             onArrowUpEditLast={handleArrowUpEditLast}
             onTextChange={handleComposerTextChange}
             members={members}
             rooms={space?.rooms || []}
             currentUserId={currentUserId}
+            commandPermissions={{ canModerateChat, canKick }}
+            onSlashCommand={(command) => {
+              setCommandTarget(command.id)
+              setCommandsOpen(true)
+            }}
           />
         </>
       )}
@@ -461,34 +597,17 @@ export default function TextRoomView({
 }
 
 function ChannelLockedBanner({ channelName }) {
-  const slug = String(channelName || 'canal')
-    .toLowerCase()
-    .replace(/\s+/g, '-')
-
   return (
-    <div
-      className="relative z-20 shrink-0 px-3 sm:px-6 pb-3 sm:pb-4"
-      role="status"
-      aria-live="polite"
-    >
-      <div className="rounded-2xl border border-line bg-[#14171f] px-4 py-4 sm:px-5 sm:py-4.5 flex items-start gap-3 shadow-[0_8px_24px_rgba(0,0,0,0.25)]">
-        <div
-          className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border"
-          style={{
-            background: 'color-mix(in srgb, var(--vc-warning, #f5b942) 16%, #1a1e28)',
-            borderColor: 'color-mix(in srgb, var(--vc-warning, #f5b942) 35%, #2a303a)',
-            color: 'var(--vc-warning, #f5b942)',
-          }}
-        >
+    <div className="relative z-20 shrink-0 px-3 sm:px-6 pb-3 sm:pb-4" role="status" aria-live="polite">
+      <div className="vc-conversation-locked-card flex items-start gap-3 px-4 py-4 sm:px-5">
+        <div className="vc-conversation-locked-icon">
           <Lock size={18} strokeWidth={2.1} />
         </div>
         <div className="min-w-0 flex-1 space-y-1">
-          <div className="text-[13.5px] font-semibold text-strong">
-            Canal trancado
-          </div>
+          <div className="text-[13.5px] font-semibold text-strong">Sala trancada</div>
           <p className="text-[12px] text-muted leading-relaxed">
-            <span className="text-ink">#{slug}</span> está restrito a administradores.
-            Só quem tem permissão de moderar o chat pode enviar mensagens aqui.
+            <span className="text-ink">{channelName || 'Esta sala'}</span> está restrita a administradores.
+            Só quem tem permissão para moderar a conversa pode enviar mensagens aqui.
           </p>
         </div>
       </div>

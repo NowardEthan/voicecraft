@@ -16,6 +16,7 @@ import {
 } from './registry'
 import CommandDetail from './CommandDetail'
 import { flashToast } from '../../../shared/utils/toast'
+import { DrawerPresence, TabIndicator, TabPanelSwap } from '../../../shared/motion/Transitions.jsx'
 
 const ICONS = {
   purge_room: Trash2,
@@ -80,6 +81,7 @@ export default function CommandsPanel({
   room,
   signaling,
   currentUserId,
+  initialCommandId = null,
 }) {
   const perms = useMemo(
     () => ({ canModerateChat, canKick }),
@@ -94,6 +96,7 @@ export default function CommandsPanel({
   const [panelWidth, setPanelWidth] = useState(() => readStoredPanelWidth(currentUserId))
   const [resizing, setResizing] = useState(false)
   const searchRef = useRef(null)
+  const panelRef = useRef(null)
   const resizeRef = useRef(null)
   const panelWidthRef = useRef(panelWidth)
 
@@ -143,6 +146,13 @@ export default function CommandsPanel({
   }, [open])
 
   useEffect(() => {
+    if (open && initialCommandId && getVisibleCommand(initialCommandId, perms)) {
+      setSelectedId(initialCommandId)
+      setCatalogTab('native')
+    }
+  }, [open, initialCommandId, perms])
+
+  useEffect(() => {
     if (selectedId && !getVisibleCommand(selectedId, perms)) {
       setSelectedId(null)
     }
@@ -150,11 +160,24 @@ export default function CommandsPanel({
 
   useEffect(() => {
     if (!open) return undefined
+    const focusFrame = requestAnimationFrame(() => {
+      const target = initialCommandId ? panelRef.current?.querySelector('[aria-label="Voltar"]') : searchRef.current
+      ;(target || panelRef.current?.querySelector('button, input, select, [tabindex="0"]'))?.focus?.()
+    })
     const onKey = (e) => {
       if (e.key === 'Escape') {
         if (selectedId) setSelectedId(null)
         else if (query) setQuery('')
         else onClose?.()
+      }
+      if (e.key === 'Tab' && panelRef.current) {
+        const items = [...panelRef.current.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]')].filter((item) => item.offsetParent !== null)
+        if (items.length) {
+          const first = items[0]
+          const last = items[items.length - 1]
+          if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+          else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+        }
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k' && !selectedId) {
         e.preventDefault()
@@ -162,7 +185,7 @@ export default function CommandsPanel({
       }
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    return () => { cancelAnimationFrame(focusFrame); window.removeEventListener('keydown', onKey) }
   }, [open, onClose, selectedId, query])
 
   useEffect(() => {
@@ -203,7 +226,6 @@ export default function CommandsPanel({
     setResizing(true)
   }
 
-  if (!open) return null
 
   const ctx = {
     spaceId: space?.id,
@@ -236,23 +258,24 @@ export default function CommandsPanel({
   }
 
   return (
-    <>
-      <button
-        type="button"
-        aria-label="Fechar painel"
-        className="absolute inset-0 z-30 bg-black/35 backdrop-blur-[1px]"
-        onClick={onClose}
-      />
-      <aside
-        className={[
-          'absolute top-0 right-0 bottom-0 z-40',
-          'flex flex-col border-l border-line bg-[var(--vc-bg-panel)] shadow-2xl',
-          resizing ? '' : 'animate-[vcCmdSlide_180ms_ease-out]',
-        ].join(' ')}
-        style={{ width: `min(100%, ${panelWidth}px)` }}
-        role="dialog"
-        aria-label="Comandos do chat"
-      >
+    <DrawerPresence
+      open={open}
+      side="right"
+      overlay
+      onBackdrop={onClose}
+      backdropLabel="Fechar painel de comandos"
+      backdropClassName="absolute inset-0 bg-black/35 backdrop-blur-[1px]"
+      panelRef={panelRef}
+      panelStyle={{ width: `min(100%, ${panelWidth}px)` }}
+      panelRole="dialog"
+      panelLabel="Ferramentas e comandos da conversa"
+      presenceKey="commands"
+      panelClassName={[
+        'vc-conversation-command-sheet',
+        'absolute top-0 right-0 bottom-0',
+        'flex flex-col border-l border-line bg-[var(--vc-bg-panel)] shadow-2xl',
+      ].join(' ')}
+    >
         <div
           role="separator"
           aria-orientation="vertical"
@@ -388,6 +411,7 @@ export default function CommandsPanel({
         )}
 
         <div className="flex-1 min-h-0 overflow-y-auto px-3 py-2.5">
+          <TabPanelSwap activeKey={selected ? `detail-${selected.id}` : `catalog-${catalogTab}`}>
           {selected ? (
             <CommandDetail
               command={selected}
@@ -437,16 +461,9 @@ export default function CommandsPanel({
           ) : (
             <CommunityPlaceholder />
           )}
+          </TabPanelSwap>
         </div>
-      </aside>
-
-      <style>{`
-        @keyframes vcCmdSlide {
-          from { transform: translateX(12px); opacity: 0.85; }
-          to { transform: translateX(0); opacity: 1; }
-        }
-      `}</style>
-    </>
+    </DrawerPresence>
   )
 }
 
@@ -566,14 +583,15 @@ function TabBtn({ active, onClick, icon: Icon, label }) {
       type="button"
       onClick={onClick}
       className={[
-        'flex-1 inline-flex items-center justify-center gap-1.5 h-8 rounded-lg text-[12px] font-medium transition-colors',
+        'relative flex-1 inline-flex items-center justify-center gap-1.5 h-8 rounded-lg text-[12px] font-medium transition-colors',
         active
           ? 'bg-surface2 text-strong border border-line'
           : 'text-muted hover:text-ink hover:bg-white/[0.03]',
       ].join(' ')}
     >
-      <Icon size={13} strokeWidth={2} />
-      {label}
+      {active && <TabIndicator layoutId="commands-tab" className="absolute inset-0 rounded-lg border border-line bg-surface2" />}
+      <Icon size={13} strokeWidth={2} className="relative" />
+      <span className="relative">{label}</span>
     </button>
   )
 }

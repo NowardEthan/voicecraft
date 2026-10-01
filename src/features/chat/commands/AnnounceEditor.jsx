@@ -6,6 +6,7 @@ import {
   ANNOUNCE_ACCENTS,
   ANNOUNCE_AUTHOR_MODES,
   ANNOUNCE_COVER_HEIGHT,
+  ANNOUNCE_SIZES,
   emptyAnnounceDraft,
   normalizeAnnounce,
   htmlToPlainText,
@@ -21,6 +22,11 @@ import { SpaceIconPicker } from '../../spaces/components/SpaceIconPicker'
 import { SpaceIcon, getRecentIcons, pushRecentIcon } from '../../spaces/model/spaceIcons'
 import { DEFAULT_COVER_FIT } from '../../spaces/model/spaceCover'
 import { flashToast } from '../../../shared/utils/toast'
+import {
+  ANNOUNCEMENT_PERSISTENCE_ACTIONS,
+  buildAnnouncementPersistencePlan,
+  persistAnnouncementPlan,
+} from './announcementPersistence.js'
 
 function toLocalInputValue(ts) {
   if (!ts) return ''
@@ -146,40 +152,34 @@ export default function AnnounceEditor({
 
   const handlePublish = async () => {
     if (!canPublish || saving) return
-    const wantsSchedule = (isEditingScheduled || (!isEditingPublished && scheduleOn))
-      && draft.scheduledFor
-    const payload = normalizeAnnounce({
-      ...draft,
-      body: draft.body || htmlToPlainText(draft.bodyHtml),
-      scheduledFor: wantsSchedule ? draft.scheduledFor : null,
+    const plan = buildAnnouncementPersistencePlan({
+      draft,
+      scheduleOn,
+      editingMessageId: editingId,
+      scheduledId,
     })
-    if (wantsSchedule && (!payload.scheduledFor || payload.scheduledFor <= Date.now() + 30_000)) {
+    const isScheduledWrite = plan.action === ANNOUNCEMENT_PERSISTENCE_ACTIONS.CREATE_SCHEDULED
+      || plan.action === ANNOUNCEMENT_PERSISTENCE_ACTIONS.UPDATE_SCHEDULED
+    if (isScheduledWrite && (!plan.payload.scheduledFor || plan.payload.scheduledFor <= Date.now() + 30_000)) {
       flashToast('Agende pelo menos 30s no futuro')
       return
     }
     setSaving(true)
     try {
-      if (isEditingScheduled) {
-        if (!scheduleOn || !payload.scheduledFor) {
-          // Turned scheduling off while editing → publish now and drop queue item.
-          await signaling.publishScheduledAnnouncementNow(room?.id, scheduledId)
-          flashToast('Anúncio publicado')
-          onUpdated?.()
-        } else {
-          await signaling.updateScheduledAnnouncement(room?.id, scheduledId, payload)
-          flashToast('Agendamento atualizado')
-          onUpdated?.()
-        }
-      } else if (isEditingPublished) {
-        await signaling.updateChatAnnouncement(room?.id, editingId, payload)
-        flashToast('Anúncio atualizado')
-        onUpdated?.()
-      } else if (payload.scheduledFor) {
-        await signaling.scheduleChatAnnouncement(room?.id, payload)
+      await persistAnnouncementPlan({ signaling, roomId: room?.id, plan })
+      if (plan.action === ANNOUNCEMENT_PERSISTENCE_ACTIONS.CREATE_SCHEDULED) {
         flashToast('Anúncio agendado')
         onPublished?.()
+      } else if (plan.action === ANNOUNCEMENT_PERSISTENCE_ACTIONS.UPDATE_SCHEDULED) {
+        flashToast('Agendamento atualizado')
+        onUpdated?.()
+      } else if (plan.action === ANNOUNCEMENT_PERSISTENCE_ACTIONS.UPDATE_PUBLISHED) {
+        flashToast('Anúncio atualizado')
+        onUpdated?.()
+      } else if (plan.action === ANNOUNCEMENT_PERSISTENCE_ACTIONS.PUBLISH_SCHEDULED_NOW) {
+        flashToast('Anúncio publicado com as alterações')
+        onUpdated?.()
       } else {
-        await signaling.sendChatAnnouncement(room?.id, payload)
         flashToast('Anúncio publicado')
         setDraft(emptyAnnounceDraft({
           authorMode: 'me',
@@ -328,7 +328,7 @@ export default function AnnounceEditor({
             onClick={() => iconUploadRef.current?.click()}
             className="text-[11px] text-muted hover:text-ink inline-flex items-center gap-1"
           >
-            <Upload size={11} /> Upload PNG
+            <Upload size={11} /> Enviar PNG
           </button>
           {draft.iconImage && (
             <button
@@ -367,6 +367,18 @@ export default function AnnounceEditor({
           onChange={({ html, text }) => patch({ bodyHtml: html, body: text })}
           placeholder="Escreva com formatação — negrito, cor, tamanho…"
         />
+        <label className="block space-y-1">
+          <span className="text-[10.5px] text-muted">Tamanho do corpo</span>
+          <select
+            value={draft.bodySize}
+            onChange={(e) => patch({ bodySize: e.target.value })}
+            className="w-full h-9 rounded-lg bg-[#1a1e28] border border-line px-3 text-[12.5px] text-ink outline-none"
+          >
+            {ANNOUNCE_SIZES.map((size) => (
+              <option key={size.id} value={size.id}>{size.label}</option>
+            ))}
+          </select>
+        </label>
       </Section>
 
       <Section title="Autor">
@@ -472,7 +484,7 @@ export default function AnnounceEditor({
               onClick={() => avatarUploadRef.current?.click()}
               className="text-[11px] text-muted hover:text-ink inline-flex items-center gap-1"
             >
-              <Upload size={11} /> Upload PNG
+              <Upload size={11} /> Enviar PNG
             </button>
             {(draft.authorPhoto || draft.authorIconValue || draft.authorIcon) && (
               <button
@@ -520,10 +532,10 @@ export default function AnnounceEditor({
         />
       )}
 
-      <Section title="Badge e cores">
+      <Section title="Selo e cores">
         <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
           <label className="block space-y-1 min-w-0">
-            <span className="text-[10.5px] text-muted">Texto do badge</span>
+            <span className="text-[10.5px] text-muted">Texto do selo</span>
             <input
               value={draft.badge}
               onChange={(e) => patch({ badge: e.target.value })}
@@ -565,13 +577,13 @@ export default function AnnounceEditor({
                 onChange={(e) => patch({ accent: e.target.value })}
                 className="w-7 h-7 rounded-lg border border-line bg-transparent cursor-pointer"
               />
-              Custom
+              Personalizado
             </label>
           </div>
         </div>
       </Section>
 
-      <Section title="Cover">
+      <Section title="Capa">
         {!draft.cover ? (
           <button
             type="button"
@@ -579,7 +591,7 @@ export default function AnnounceEditor({
             className="w-full h-20 rounded-xl border border-dashed border-line bg-[#1a1e28]/80 inline-flex flex-col items-center justify-center gap-1 text-muted hover:text-ink hover:border-white/20"
           >
             <ImagePlus size={18} />
-            <span className="text-[11.5px]">Adicionar cover</span>
+            <span className="text-[11.5px]">Adicionar capa</span>
           </button>
         ) : (
           <div className="space-y-2">
@@ -609,7 +621,7 @@ export default function AnnounceEditor({
               </div>
             </div>
             <p className="text-[10.5px] text-muted">
-              Arraste para encaixar · scroll para zoom — capa compacta (96px), igual ao chat
+              Arraste para encaixar · role para ampliar ou reduzir — capa compacta (96px), igual ao chat
             </p>
             <div className="flex gap-2">
               <button
@@ -641,7 +653,7 @@ export default function AnnounceEditor({
               const dataUrl = await readImageFile(file)
               patch({ cover: dataUrl, coverFit: { ...DEFAULT_COVER_FIT } })
             } catch (err) {
-              flashToast(err.message || 'Falha no cover')
+              flashToast(err.message || 'Falha na capa')
             }
           }}
         />
@@ -707,10 +719,10 @@ export default function AnnounceEditor({
 
       <div className="space-y-1.5">
         <div className="text-[10.5px] font-semibold uppercase tracking-wide text-muted px-0.5">
-          Preview
+          Prévia
         </div>
         <div className="rounded-xl border border-dashed border-white/10 overflow-hidden bg-[#0d0f14] -mx-0.5">
-          <AnnouncementCard msg={previewMsg} />
+          <AnnouncementCard msg={previewMsg} preview />
         </div>
       </div>
     </div>

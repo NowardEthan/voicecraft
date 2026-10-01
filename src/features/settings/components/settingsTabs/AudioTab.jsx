@@ -195,7 +195,7 @@ export default function AudioTab({ draft, setDraft, mics, speakers }) {
                   key={key}
                   type="button"
                   onClick={() => setDraft((d) => ({ ...d, dspLevel: key }))}
-                  className={`relative text-left rounded-2xl border px-3 py-3 transition-all ${
+                  className={`relative text-left rounded-2xl border px-3 py-3 transition-[color,background-color,border-color,box-shadow,opacity,transform,filter] ${
                     on
                       ? 'border-accent bg-accent/[0.08] shadow-[0_0_0_1px_rgba(255,63,108,0.2)]'
                       : 'border-white/[0.08] bg-[#12141a]/60 hover:border-white/[0.14]'

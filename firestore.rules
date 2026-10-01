@@ -31,6 +31,10 @@ service cloud.firestore {
       return get(memberPath(spaceId));
     }
 
+    function isSpaceMember(spaceId) {
+      return signedIn() && exists(memberPath(spaceId));
+    }
+
     function memberHasPerm(spaceId, perm) {
       return signedIn()
         && exists(memberPath(spaceId))
@@ -51,6 +55,140 @@ service cloud.firestore {
 
     function canAssignRoles(spaceId) {
       return isSpaceCreator(spaceId) || memberHasPerm(spaceId, 'assign_roles');
+    }
+
+    function spaceDoc(spaceId) {
+      return get(/databases/$(database)/documents/vc_spaces/$(spaceId));
+    }
+
+    function spaceAfter(spaceId) {
+      return getAfter(/databases/$(database)/documents/vc_spaces/$(spaceId));
+    }
+
+    function activeRulesLocked(spaceId) {
+      return spaceDoc(spaceId).data.get('rulesLock', false) == true
+        && spaceDoc(spaceId).data.get('rulesRoomId', null) is string
+        && spaceDoc(spaceId).data.get('rulesVersion', 0) is number;
+    }
+
+    function acceptedCurrentRules(spaceId) {
+      return memberDoc(spaceId).data.get('rulesAcceptedVersion', 0) is number
+        && memberDoc(spaceId).data.get('rulesAcceptedVersion', 0)
+          >= spaceDoc(spaceId).data.get('rulesVersion', 0);
+    }
+
+    function canAccessRoom(spaceId, roomId) {
+      return isSpaceMember(spaceId) && (
+        !activeRulesLocked(spaceId)
+        || spaceDoc(spaceId).data.get('rulesRoomId', '') == roomId
+        || canModChat(spaceId)
+        || acceptedCurrentRules(spaceId)
+      );
+    }
+
+    function chatMessageIdentityUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'id', 'authorId', 'kind', 'ts', 'createdAt', 'createdBy',
+        'replyToId', 'threadRootId', 'scheduleId'
+      ]);
+    }
+
+    function isReservedSpecialKind(data) {
+      return data.get('kind', '') in ['announce', 'lobby_event'];
+    }
+
+    function hasSpecialPayload(data) {
+      return data.get('announce', null) is map
+        || data.get('lobbyEvent', null) is map;
+    }
+
+    function validMessageShape(messageId) {
+      return request.resource.data.get('id', '') == messageId
+        && request.resource.data.get('authorId', '') is string
+        && request.resource.data.get('text', '') is string
+        && request.resource.data.get('ts', 0) is number;
+    }
+
+    function validSpecialMessageCreate(spaceId, messageId) {
+      return canModChat(spaceId)
+        && validMessageShape(messageId)
+        && request.resource.data.authorId == request.auth.uid
+        && request.resource.data.get('createdBy', '') == request.auth.uid
+        && (
+          (request.resource.data.get('kind', '') == 'announce'
+            && request.resource.data.get('announce', null) is map
+            && request.resource.data.get('lobbyEvent', null) == null)
+          ||
+          (request.resource.data.get('kind', '') == 'lobby_event'
+            && request.resource.data.get('lobbyEvent', null) is map
+            && request.resource.data.get('announce', null) == null)
+        );
+    }
+
+    function validOrdinaryMessageCreate(messageId) {
+      return validMessageShape(messageId)
+        && request.resource.data.authorId == request.auth.uid
+        && !isReservedSpecialKind(request.resource.data)
+        && !hasSpecialPayload(request.resource.data);
+    }
+
+    function validRulesPolicy(data) {
+      return data.get('rulesLock', false) is bool
+        && data.get('rulesVersion', 0) is number
+        && data.get('rulesVersion', 0) >= 0
+        && (
+          (data.get('rulesRoomId', null) == null && data.get('rulesLock', false) == false)
+          || data.get('rulesRoomId', null) is string
+        );
+    }
+
+    function activeRulesRoomMatchesPolicy(spaceId, roomId) {
+      return spaceAfter(spaceId).data.get('rulesRoomId', null) == roomId
+        && spaceAfter(spaceId).data.get('rulesVersion', 0)
+          == request.resource.data.get('rules', {}).get('version', 0)
+        && spaceAfter(spaceId).data.get('rulesLock', false)
+          == request.resource.data.get('rules', {}).get('lockSpace', true);
+    }
+
+    function rulesRoomUpdateConsistent(spaceId, roomId) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['rules'])
+        || (
+          request.resource.data.get('rules', {}).get('enabled', false) == true
+            ? activeRulesRoomMatchesPolicy(spaceId, roomId)
+            : spaceAfter(spaceId).data.get('rulesRoomId', null) != roomId
+        );
+    }
+
+    function rulesPolicyUpdateAllowed(spaceId) {
+      return canModChat(spaceId)
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['rulesRoomId', 'rulesVersion', 'rulesLock'])
+        && validRulesPolicy(request.resource.data)
+        && (
+          resource.data.get('rulesRoomId', null) == null
+          || request.resource.data.get('rulesRoomId', null)
+            == resource.data.get('rulesRoomId', null)
+          || getAfter(/databases/$(database)/documents/vc_spaces/$(spaceId)/rooms/$(resource.data.rulesRoomId)).data.get('rules', {}).get('enabled', false) != true
+        )
+        && (
+          request.resource.data.get('rulesRoomId', null) == null
+          || (
+            getAfter(/databases/$(database)/documents/vc_spaces/$(spaceId)/rooms/$(request.resource.data.rulesRoomId)).data.get('rules', {}).get('enabled', false) == true
+            && getAfter(/databases/$(database)/documents/vc_spaces/$(spaceId)/rooms/$(request.resource.data.rulesRoomId)).data.get('rules', {}).get('version', 0)
+              == request.resource.data.rulesVersion
+            && getAfter(/databases/$(database)/documents/vc_spaces/$(spaceId)/rooms/$(request.resource.data.rulesRoomId)).data.get('rules', {}).get('lockSpace', true)
+              == request.resource.data.rulesLock
+          )
+        );
+    }
+
+    function memberRulesAcceptanceUpdate(spaceId, uid) {
+      return request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['rulesAcceptedAt', 'rulesAcceptedVersion'])
+        && request.resource.data.get('rulesAcceptedAt', 0) is number
+        && request.resource.data.get('rulesAcceptedVersion', 0)
+          == spaceDoc(spaceId).data.get('rulesVersion', 0);
     }
 
     // Join: add only self. Leave: remove only self.
@@ -108,8 +246,13 @@ service cloud.firestore {
     // mod_chat holders may update chatAutomation only.
     function spaceUpdateAllowed(spaceId) {
       return signedIn() && (
-        request.auth.uid == resource.data.createdBy
-        || memberHasPerm(spaceId, 'edit_space')
+        (
+          (request.auth.uid == resource.data.createdBy
+            || memberHasPerm(spaceId, 'edit_space'))
+          && !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(['rulesRoomId', 'rulesVersion', 'rulesLock'])
+        )
+        || rulesPolicyUpdateAllowed(spaceId)
         || (
           memberHasPerm(spaceId, 'manage_events')
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['events'])
@@ -169,6 +312,11 @@ service cloud.firestore {
     match /vc_users/{uid} {
       allow read: if signedIn();
       allow write: if signedIn() && request.auth.uid == uid;
+
+      // Daily Chan quota is server-owned. Admin SDK bypasses these rules.
+      match /chan_ledgers/{day} {
+        allow read, write: if false;
+      }
     }
 
     match /vc_user_tags/{uid} {
@@ -255,7 +403,9 @@ service cloud.firestore {
         allow read: if signedIn();
         // Create own membership row only. Delete: self, kick/creator, or
         // leftover Auth UID for the same email (re-login cleanup).
-        allow create: if signedIn() && request.auth.uid == uid;
+        allow create: if signedIn()
+          && request.auth.uid == uid
+          && request.resource.data.get('rulesAcceptedVersion', 0) == 0;
         allow delete: if signedIn() && (
           request.auth.uid == uid
           || isSpaceCreator(spaceId)
@@ -265,10 +415,11 @@ service cloud.firestore {
         allow update: if signedIn() && (
           isSpaceCreator(spaceId)
           || memberRoleAssignUpdate(spaceId, uid)
+          || memberRulesAcceptanceUpdate(spaceId, uid)
           || (
             request.auth.uid == uid
             && !request.resource.data.diff(resource.data).affectedKeys()
-              .hasAny(['roleIds', 'perms'])
+              .hasAny(['roleIds', 'perms', 'rulesAcceptedAt', 'rulesAcceptedVersion'])
           )
         );
       }
@@ -291,26 +442,52 @@ service cloud.firestore {
 
       match /rooms/{roomId} {
         allow read: if signedIn();
-        allow create, delete: if canManageRooms(spaceId);
-        allow update: if canManageRooms(spaceId)
+        allow create: if canManageRooms(spaceId)
+          && request.resource.data.get('rules', {}).get('enabled', false) != true;
+        allow delete: if canManageRooms(spaceId)
+          && spaceDoc(spaceId).data.get('rulesRoomId', null) != roomId;
+        allow update: if (
+          (
+            canManageRooms(spaceId)
+            && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['rules'])
+          )
           || (
             canModChat(spaceId)
             && request.resource.data.diff(resource.data).affectedKeys()
               .hasOnly(['chatLocked', 'slowModeSeconds', 'lobby', 'rules'])
-          );
+          )
+        ) && rulesRoomUpdateConsistent(spaceId, roomId);
 
         match /messages/{messageId} {
-          allow read: if signedIn();
-          allow create: if signedIn() && (
-            canModChat(spaceId)
-            || get(/databases/$(database)/documents/vc_spaces/$(spaceId)/rooms/$(roomId)).data.chatLocked != true
-            || (
-              request.resource.data.kind == 'lobby_event'
-              && request.resource.data.authorId == request.auth.uid
-              && get(/databases/$(database)/documents/vc_spaces/$(spaceId)/rooms/$(roomId)).data.lobby.enabled == true
-            )
-          );
-          allow update, delete: if signedIn() && (
+          // Legacy documents remain readable; shape validation applies only to writes.
+          allow read: if canAccessRoom(spaceId, roomId);
+          allow create: if canAccessRoom(spaceId, roomId)
+            && (validSpecialMessageCreate(spaceId, messageId) || (
+              validOrdinaryMessageCreate(messageId)
+              && get(/databases/$(database)/documents/vc_spaces/$(spaceId)/rooms/$(roomId)).data.get('chatLocked', false) != true
+            ));
+          allow update: if canAccessRoom(spaceId, roomId)
+            && chatMessageIdentityUnchanged()
+            && (
+              canModChat(spaceId)
+              || (
+                resource.data.authorId == request.auth.uid
+                && !isReservedSpecialKind(resource.data)
+                && !hasSpecialPayload(resource.data)
+                && resource.data.get('deleted', false) != true
+                && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                  'text', 'mentions', 'edited', 'editedAt',
+                  'deleted', 'deletedAt', 'deletedBy',
+                  'attachment', 'attachments',
+                  'pinned', 'pinnedAt', 'pinnedBy'
+                ])
+                && (!request.resource.data.get('deleted', false)
+                  || request.resource.data.deletedBy == request.auth.uid)
+                && (!request.resource.data.get('pinned', false)
+                  || request.resource.data.pinnedBy == request.auth.uid)
+              )
+            );
+          allow delete: if canAccessRoom(spaceId, roomId) && (
             resource.data.authorId == request.auth.uid
             || canModChat(spaceId)
           );
@@ -318,7 +495,34 @@ service cloud.firestore {
 
         match /scheduled_announcements/{announceId} {
           allow read: if signedIn() && canModChat(spaceId);
-          allow create, update, delete: if canModChat(spaceId);
+          allow create: if canModChat(spaceId)
+            && request.resource.data.get('id', '') == announceId
+            && request.resource.data.get('spaceId', '') == spaceId
+            && request.resource.data.get('roomId', '') == roomId
+            && request.resource.data.get('createdBy', '') == request.auth.uid
+            && request.resource.data.get('createdAt', 0) is number
+            && request.resource.data.get('publishAt', 0) is number
+            && request.resource.data.get('status', '') == 'scheduled'
+            && request.resource.data.get('announce', null) is map;
+          allow update: if canModChat(spaceId)
+            && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+              'id', 'spaceId', 'roomId', 'createdAt', 'createdBy'
+            ])
+            && resource.data.get('status', '') == 'scheduled'
+            && request.resource.data.get('publishAt', 0) is number
+            && request.resource.data.get('announce', null) is map
+            && (
+              request.resource.data.get('status', '') == 'scheduled'
+              || (
+                request.resource.data.get('status', '') == 'published'
+                && request.resource.data.get('publishedBy', '') == request.auth.uid
+                && request.resource.data.get('publishedAt', 0) is number
+                && request.resource.data.get('publishedMessageId', '')
+                  == 'scheduled_announce_' + announceId
+                && getAfter(/databases/$(database)/documents/vc_spaces/$(spaceId)/rooms/$(roomId)/messages/$(request.resource.data.publishedMessageId)).data.get('scheduleId', '') == announceId
+              )
+            );
+          allow delete: if canModChat(spaceId);
         }
 
         match /peers/{peerId} {

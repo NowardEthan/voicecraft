@@ -2,7 +2,6 @@
  * HomeNavPanel — left sidebar on personal Início.
  * Layout aligned to product mockups (Início / Explorar / …).
  */
-import { motion } from 'framer-motion'
 import {
   Calendar,
   Headphones,
@@ -17,6 +16,7 @@ import SpaceAvatar from '../SpaceAvatar'
 import { PersonAvatar } from '../../features/people'
 import { useNotifications } from '../../features/notifications'
 import { Appear, AppearList, AppearItem } from '../../shared/motion/Appear'
+import { TabIndicator } from '../../shared/motion/Transitions.jsx'
 
 const NAV = [
   { id: 'para-voce', label: 'Início', icon: Home },
@@ -66,18 +66,10 @@ export default function HomeNavPanel({
             return (
               <AppearItem key={item.id} className="relative">
                 {active && (
-                  <motion.span
-                    layoutId="home-nav-pill"
-                    className="absolute inset-0 rounded-[10px] bg-[#3b82f6]/18 border border-[#3b82f6]/25"
-                    transition={{ type: 'spring', stiffness: 380, damping: 32 }}
-                  />
-                )}
-                {active && (
-                  <motion.span
-                    layoutId="home-nav-bar"
-                    className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full bg-[#60a5fa]"
-                    transition={{ type: 'spring', stiffness: 380, damping: 32 }}
-                  />
+                  <>
+                    <TabIndicator layoutId="home-nav-pill" className="absolute inset-0 rounded-[10px] bg-[#3b82f6]/18 border border-[#3b82f6]/25" />
+                    <TabIndicator layoutId="home-nav-bar" className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full bg-[#60a5fa]" />
+                  </>
                 )}
                 <button
                   type="button"

@@ -14,6 +14,7 @@ import { useMemo, useState } from 'react'
 import { Users, Search, X } from 'lucide-react'
 import EmptyState from '../../shared/ui/EmptyState'
 import PersonCard from '../people/PersonCard'
+import { AppearItem, AppearList } from '../../shared/motion/Appear.jsx'
 
 const FILTERS = [
   { key: 'online',   label: 'Online' },
@@ -139,18 +140,19 @@ export default function PeopleDirectory({
 
       {/* Cards */}
       {filtered.length > 0 && (
-        <div className="px-2 pb-2 space-y-1">
+        <AppearList className="px-2 pb-2 space-y-1">
           {filtered.map(m => (
+            <AppearItem key={m.userId}>
             <PersonCard
-              key={m.userId}
               member={m}
               isSelf={m.userId === currentUserId}
               space={space}
               inCurrentRoom={!!currentRoomId && m.location?.roomId === currentRoomId}
               isCreator={space?.createdBy === m.userId}
             />
+            </AppearItem>
           ))}
-        </div>
+        </AppearList>
       )}
 
       <div className="h-3" />

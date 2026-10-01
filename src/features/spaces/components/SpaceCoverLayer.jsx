@@ -100,10 +100,14 @@ export function SpaceCoverLayer({
     return () => el.removeEventListener('wheel', onWheel)
   }, [interactive, commit])
 
-  if (!src) return null
+  // Kick decode as soon as the source is known so SoftCover can paint at
+  // full opacity. Lives in an effect (not the render body) so re-renders and
+  // StrictMode double-invocation don't fire redundant warm requests.
+  useEffect(() => {
+    if (src && !isImageWarm(src)) warmImage(src)
+  }, [src])
 
-  // Kick decode immediately so SoftCover can paint at full opacity.
-  if (!isImageWarm(src)) warmImage(src)
+  if (!src) return null
 
   const onPointerDown = (e) => {
     if (!interactive || e.button !== 0) return

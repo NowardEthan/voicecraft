@@ -1,14 +1,12 @@
-/**
- * Appear — soft entrance without blanking the UI.
- *
- * After a long boot, opacity:0 + stagger made the whole home look black.
- * We only nudge translateY (GPU); content stays visible the whole time.
- */
-import { motion } from 'framer-motion'
+/** Soft, always-visible entrance primitives governed by the shared motion policy. */
+import { AnimatePresence, motion } from 'framer-motion'
+import { Children } from 'react'
+import { MOTION_DURATION, MOTION_EASING, MOTION_INTENTS, MOTION_VARIANTS } from './tokens.js'
+import { useMotionIntent } from './MotionPolicyProvider.jsx'
+import { resolveDynamicListMotion } from './dynamicPolicy.js'
 
-export const APPEAR_EASE = [0.22, 1, 0.36, 1]
+export const APPEAR_EASE = MOTION_EASING.emphasized
 
-/** True for ~1s after boot splash lifts — skip entrance so first paint is solid. */
 let skipUntil = 0
 
 export function markBootReveal() {
@@ -19,14 +17,7 @@ export function shouldSkipAppear() {
   return Date.now() < skipUntil
 }
 
-export const appearItem = {
-  initial: { opacity: 1, y: 6 },
-  animate: {
-    opacity: 1,
-    y: 0,
-    transition: { duration: 0.22, ease: APPEAR_EASE },
-  },
-}
+export const appearItem = MOTION_VARIANTS.appear
 
 export const appearContainer = {
   initial: 'initial',
@@ -34,101 +25,132 @@ export const appearContainer = {
   variants: {
     initial: {},
     animate: {
-      transition: { staggerChildren: 0.03, delayChildren: 0.02 },
+      transition: { staggerChildren: 0, delayChildren: 0 },
     },
   },
 }
 
-/** Single element rise (visible throughout). */
 export function Appear({
   children,
   className = '',
   delay = 0,
   y = 6,
-  duration = 0.22,
+  duration = MOTION_DURATION.slow,
+  intent = MOTION_INTENTS.decorative,
   as: Comp = motion.div,
+  initial,
+  animate,
+  transition,
+  exit,
   ...rest
 }) {
-  const skip = shouldSkipAppear()
+  const { enabled } = useMotionIntent(intent)
+  const animateEntrance = enabled && !shouldSkipAppear()
   return (
     <Comp
-      className={className}
-      initial={skip ? false : { opacity: 1, y }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: skip ? 0 : duration, delay: skip ? 0 : delay, ease: APPEAR_EASE }}
       {...rest}
+      className={className}
+      data-motion-intent={intent}
+      initial={animateEntrance ? (initial ?? { opacity: 1, y }) : false}
+      animate={animateEntrance ? (animate ?? { opacity: 1, y: 0 }) : { opacity: 1, y: 0 }}
+      exit={animateEntrance ? exit : undefined}
+      transition={animateEntrance
+        ? (transition ?? { duration, delay, ease: APPEAR_EASE })
+        : MOTION_TRANSITION_INSTANT}
     >
       {children}
     </Comp>
   )
 }
 
-/** Stagger parent — any element (div, section, nav…). */
+const MOTION_TRANSITION_INSTANT = { duration: 0 }
+
 export function AppearGroup({
   children,
   className = '',
   stagger = 0.03,
   delayChildren = 0.02,
+  intent = MOTION_INTENTS.decorative,
   as: Comp = motion.div,
+  initial,
+  animate,
+  variants,
+  transition,
+  itemCount,
   ...rest
 }) {
-  const skip = shouldSkipAppear()
+  const policy = useMotionIntent(intent)
+  const animateEntrance = policy.enabled && !shouldSkipAppear()
+  const listMotion = resolveDynamicListMotion(itemCount ?? Children.count(children), {
+    stagger,
+    delayChildren,
+    reducedMotion: policy.reducedMotion,
+    perfTier: policy.perfTier,
+    visible: policy.isDocumentVisible,
+  })
+  const groupVariants = variants ?? {
+    initial: {},
+    animate: {
+      transition: {
+        staggerChildren: listMotion.staggerChildren,
+        delayChildren: listMotion.delayChildren,
+      },
+    },
+  }
   return (
     <Comp
-      className={className}
-      initial={skip ? false : 'initial'}
-      animate="animate"
-      variants={{
-        initial: {},
-        animate: {
-          transition: {
-            staggerChildren: skip ? 0 : stagger,
-            delayChildren: skip ? 0 : delayChildren,
-          },
-        },
-      }}
       {...rest}
+      className={className}
+      data-motion-intent={intent}
+      initial={animateEntrance ? (initial ?? 'initial') : false}
+      animate={animateEntrance ? (animate ?? 'animate') : undefined}
+      variants={animateEntrance ? groupVariants : undefined}
+      transition={animateEntrance ? transition : MOTION_TRANSITION_INSTANT}
     >
       {children}
     </Comp>
   )
 }
 
-/** Stagger parent as `<ul>`. */
-export function AppearList({
-  children,
-  className = '',
-  stagger = 0.03,
-  delayChildren = 0.02,
-  ...rest
-}) {
+export function AppearList({ children, className = '', stagger = 0.03, delayChildren = 0.02, ...rest }) {
   return (
     <AppearGroup
       as={motion.ul}
       className={className}
       stagger={stagger}
       delayChildren={delayChildren}
+      itemCount={Children.count(children)}
       {...rest}
     >
-      {children}
+      <AnimatePresence initial={false}>{children}</AnimatePresence>
     </AppearGroup>
   )
 }
 
-/** Child of AppearGroup / AppearList. */
 export function AppearItem({
   children,
   className = '',
+  intent = MOTION_INTENTS.decorative,
   as: Comp = motion.li,
+  initial,
+  animate,
+  variants,
+  transition,
+  exit,
   ...rest
 }) {
-  const skip = shouldSkipAppear()
+  const { enabled } = useMotionIntent(intent)
+  const animateEntrance = enabled && !shouldSkipAppear()
   return (
     <Comp
-      className={className}
-      variants={skip ? undefined : appearItem}
-      initial={skip ? false : undefined}
       {...rest}
+      className={className}
+      data-motion-intent={intent}
+      variants={animateEntrance ? (variants ?? appearItem) : undefined}
+      initial={animateEntrance ? initial : false}
+      animate={animateEntrance ? animate : { opacity: 1, y: 0 }}
+      transition={animateEntrance ? transition : MOTION_TRANSITION_INSTANT}
+      exit={animateEntrance ? (exit ?? { opacity: 0, y: -2, transition: { duration: MOTION_DURATION.fast } }) : undefined}
     >
       {children}
     </Comp>

@@ -40,7 +40,7 @@ export function RoomCard({ room, members, currentUserId, onClick, variant = 'com
           group relative w-full text-left p-5 rounded-card
           border border-line bg-surface1
           hover:bg-surface2 hover:border-accent/40
-          transition-all active:scale-[0.99]
+          transition-[color,background-color,border-color,box-shadow,opacity,transform,filter] active:scale-[0.99]
           focus:outline-none focus-visible:border-accent
         "
       >
@@ -109,7 +109,7 @@ export function RoomCard({ room, members, currentUserId, onClick, variant = 'com
         group w-full text-left p-3 rounded-card
         border border-line bg-surface1
         hover:bg-surface2 hover:border-accent/40
-        transition-all active:scale-[0.99]
+        transition-[color,background-color,border-color,box-shadow,opacity,transform,filter] active:scale-[0.99]
         focus:outline-none focus-visible:border-accent
       "
     >

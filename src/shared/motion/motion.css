@@ -1,0 +1,78 @@
+/* Canonical CSS motion tokens. Component animation rules stay colocated. */
+:root {
+  --vc-motion-duration-instant: 1ms;
+  --vc-motion-duration-fast: 120ms;
+  --vc-motion-duration-base: 180ms;
+  --vc-motion-duration-slow: 220ms;
+  --vc-motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --vc-motion-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --vc-motion-ease-emphasized: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* The provider derives these gates from OS preference, tier and visibility. */
+:root[data-motion-decorative='off'] [data-motion-intent='decorative'],
+:root[data-motion-decorative='off'] [data-motion-intent='decorative']::before,
+:root[data-motion-decorative='off'] [data-motion-intent='decorative']::after,
+:root[data-motion-continuous='off'] [data-motion-intent='continuous'],
+:root[data-motion-continuous='off'] [data-motion-intent='continuous']::before,
+:root[data-motion-continuous='off'] [data-motion-intent='continuous']::after {
+  animation: none !important;
+  transition-duration: var(--vc-motion-duration-instant) !important;
+}
+
+:root[data-document-visibility='hidden'] *,
+:root[data-document-visibility='hidden'] *::before,
+:root[data-document-visibility='hidden'] *::after {
+  animation-play-state: paused !important;
+  transition-duration: var(--vc-motion-duration-instant) !important;
+}
+
+/* Semantic portal layers: one scale for every overlay family. */
+:root {
+  --vc-z-drawer: 300;
+  --vc-z-popover: 400;
+  --vc-z-tooltip: 500;
+  --vc-z-modal: 600;
+  --vc-z-toast: 700;
+}
+.vc-layer-drawer { z-index: var(--vc-z-drawer) !important; }
+.vc-layer-popover { z-index: var(--vc-z-popover) !important; transform-origin: var(--vc-overlay-origin, center); }
+.vc-layer-tooltip { z-index: var(--vc-z-tooltip) !important; pointer-events: none; }
+.vc-layer-modal { z-index: var(--vc-z-modal) !important; }
+.vc-layer-toast { z-index: var(--vc-z-toast) !important; }
+
+.vc-imperative-toast-host {
+  position: fixed;
+  z-index: var(--vc-z-toast);
+  left: 50%;
+  bottom: 24px;
+  display: flex;
+  width: min(420px, calc(100vw - 32px));
+  transform: translateX(-50%);
+  flex-direction: column-reverse;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+.vc-imperative-toast {
+  max-width: 100%;
+  padding: 8px 16px;
+  border: 1px solid var(--vc-border, rgba(255,255,255,.1));
+  border-radius: 999px;
+  color: var(--vc-text, #e6e9ef);
+  background: var(--vc-surface-1, #151922);
+  box-shadow: 0 14px 36px -16px rgba(0,0,0,.8);
+  font-size: 12px;
+  opacity: 0;
+  transform: translateY(6px) scale(.985);
+  transition: opacity var(--vc-motion-duration-base) var(--vc-motion-ease-out), transform var(--vc-motion-duration-base) var(--vc-motion-ease-out);
+}
+.vc-imperative-toast[data-state='visible'] { opacity: 1; transform: translateY(0) scale(1); }
+.vc-imperative-toast[data-state='exiting'] {
+  opacity: 0;
+  transform: translateY(3px) scale(.99);
+  transition-duration: var(--vc-motion-duration-fast);
+}
+@media (prefers-reduced-motion: reduce) {
+  .vc-imperative-toast { transform: none !important; transition-duration: 100ms !important; }
+}

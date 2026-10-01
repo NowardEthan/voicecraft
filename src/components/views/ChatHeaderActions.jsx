@@ -1,25 +1,17 @@
-/**
- * ChatHeaderActions — horizontal row of icon buttons (Pin, Bell,
- * Invite, Search, Density, More).
- *
- * Layout component (Horizontal Layout Group). All buttons share the
- * same `vc-icon-btn` styling. The DensityMenu is hidden at narrow
- * widths but a fallback row appears in the More dropdown.
- *
- * The "More" dropdown owns its own open/close state and closes on
- * outside mousedown.
- */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
-import {
-  Pin, Bell, UserPlus, Search, MoreHorizontal,
-} from 'lucide-react'
+/** Progressive conversation actions: search and invite stay visible; secondary tools live in More. */
+import { forwardRef, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Bell, BellOff, MoreHorizontal, Pin, Search, Terminal, UserPlus, X } from 'lucide-react'
 import ChatDensityMenu from './ChatDensityMenu'
-import {
-  cycleChatDensity,
-  normalizeChatDensity,
-  resolveChatDensity,
-} from './chatDensity'
+import { AnchoredOverlay } from '../../shared/motion/AnchoredOverlay.jsx'
+
+const NOTIFY_OPTIONS = [
+  { value: 'all', label: 'Todas as mensagens' },
+  { value: 'mentions', label: 'Somente menções' },
+  { value: 'muted', label: 'Silenciado' },
+]
+
+function prefKey(key) { return `voicecraft:channel-notifications:${key || 'default'}` }
+function readPref(key) { try { return localStorage.getItem(prefKey(key)) || 'all' } catch { return 'all' } }
 
 export default function ChatHeaderActions({
   accent,
@@ -27,180 +19,199 @@ export default function ChatHeaderActions({
   onDensityChange,
   onInvite,
   onSearchClick,
+  searchButtonRef,
   onClose,
   pinCount = 0,
   pinsOpen = false,
   onTogglePins,
-  pinButtonRef = null,
+  pinButtonRef,
+  notificationKey,
+  commandsOpen = false,
+  onToggleCommands,
 }) {
-  const inviteBg = accent || 'var(--space-accent)'
-
   return (
-    <div className="vc-channel-actions flex items-center gap-1 sm:gap-1.5 shrink-0 ml-auto">
-      <button
-        ref={pinButtonRef}
-        type="button"
-        onClick={onTogglePins}
-        className={[
-          'vc-icon-btn relative w-9 h-9 rounded-full flex items-center justify-center transition-colors shrink-0',
-          pinsOpen
-            ? 'text-strong bg-white/[0.08]'
-            : 'text-muted hover:text-strong hover:bg-white/[0.05]',
-        ].join(' ')}
-        title={pinCount > 0 ? `Mensagens fixadas (${pinCount})` : 'Mensagens fixadas'}
-        aria-label="Mensagens fixadas"
-        aria-expanded={pinsOpen}
-      >
-        <Pin size={15} strokeWidth={pinsOpen || pinCount > 0 ? 2.2 : 1.8} />
-        {pinCount > 0 && (
-          <span
-            className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full text-[9px] font-bold leading-4 text-center"
-            style={{
-              background: accent || 'var(--space-accent)',
-              color: 'var(--vc-on-accent, #fff)',
-            }}
-          >
-            {pinCount > 99 ? '99+' : pinCount}
-          </span>
-        )}
-      </button>
-
+    <div className="vc-channel-actions">
+      <ActionButton ref={searchButtonRef} onClick={onSearchClick} label="Buscar nesta conversa">
+        <Search size={17} />
+      </ActionButton>
       <button
         type="button"
-        className="vc-icon-btn w-9 h-9 rounded-full flex items-center justify-center text-muted hover:text-strong hover:bg-white/[0.05] transition-colors shrink-0"
-        title="Notificações"
-        aria-label="Configurar notificações"
+        onClick={onInvite}
+        className="vc-header-invite"
+        style={{ '--vc-action-accent': accent || 'var(--space-accent)' }}
       >
-        <Bell size={15} strokeWidth={1.8} />
+        <UserPlus size={16} />
+        <span className="hidden @[480px]:inline">Convidar</span>
       </button>
-
-      <button
-        type="button"
-        onClick={onSearchClick}
-        className="vc-icon-btn w-9 h-9 rounded-full flex items-center justify-center text-muted hover:text-strong hover:bg-white/[0.05] transition-colors shrink-0"
-        title="Buscar"
-        aria-label="Buscar nesta conversa"
-      >
-        <Search size={15} strokeWidth={1.8} />
-      </button>
-
-      <div className="hidden @[520px]:block shrink-0">
-        <ChatDensityMenu
-          value={density}
-          onChange={onDensityChange}
-        />
-      </div>
-
       <MoreMenu
         density={density}
         onDensityChange={onDensityChange}
         onCloseRoom={onClose}
+        pinCount={pinCount}
+        pinsOpen={pinsOpen}
+        onTogglePins={onTogglePins}
+        anchorRef={pinButtonRef}
+        notificationKey={notificationKey}
+        commandsOpen={commandsOpen}
+        onToggleCommands={onToggleCommands}
       />
-
-      {/* Convidar — CTA na cor da sala / Space. */}
-      <button
-        type="button"
-        onClick={onInvite}
-        className="shrink-0 inline-flex items-center gap-1.5 h-9 px-3 rounded-full text-[12.5px] font-semibold transition-colors"
-        style={{
-          background: inviteBg,
-          color: 'var(--vc-on-accent, #fff)',
-          boxShadow: accent
-            ? `0 0 0 1px color-mix(in srgb, ${accent} 45%, transparent)`
-            : '0 0 0 1px color-mix(in srgb, var(--space-accent) 45%, transparent)',
-        }}
-        title="Convidar pessoas pra essa sala"
-        aria-label="Convidar pessoas pra essa sala"
-      >
-        <UserPlus size={14} strokeWidth={2} />
-        Convidar
-      </button>
     </div>
   )
 }
 
-/** "More" dropdown — density toggle (narrow widths) + close room.
- *  Portaled so it isn't covered by the message feed. */
-function MoreMenu({ density, onDensityChange, onCloseRoom }) {
+const ActionButton = forwardRef(function ActionButton({ children, onClick, active, label }, ref) {
+  return (
+    <button
+      ref={ref}
+      type="button"
+      onClick={onClick}
+      className={`vc-icon-btn${active ? ' is-active' : ''}`}
+      title={label}
+      aria-label={label}
+      aria-pressed={active || undefined}
+    >
+      {children}
+    </button>
+  )
+})
+
+function MoreMenu({
+  density,
+  onDensityChange,
+  onCloseRoom,
+  pinCount,
+  pinsOpen,
+  onTogglePins,
+  anchorRef,
+  notificationKey,
+  commandsOpen,
+  onToggleCommands,
+}) {
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState(null)
+  const [notifyMode, setNotifyMode] = useState(() => readPref(notificationKey))
   const btnRef = useRef(null)
   const menuRef = useRef(null)
+  const commandsWasOpenRef = useRef(false)
+
+  const setButtonRef = (node) => {
+    btnRef.current = node
+    if (anchorRef) anchorRef.current = node
+  }
+
+  useEffect(() => {
+    setNotifyMode(readPref(notificationKey))
+    setOpen(false)
+  }, [notificationKey])
+
+  useEffect(() => {
+    if (commandsWasOpenRef.current && !commandsOpen) btnRef.current?.focus()
+    commandsWasOpenRef.current = commandsOpen
+  }, [commandsOpen])
 
   useLayoutEffect(() => {
-    if (!open) {
-      setPos(null)
-      return undefined
-    }
+    if (!open) { setPos(null); return undefined }
     const update = () => {
-      const el = btnRef.current
-      if (!el) return
-      const r = el.getBoundingClientRect()
-      const width = 176
-      let left = r.right - width
-      left = Math.max(8, Math.min(left, window.innerWidth - width - 8))
-      setPos({ top: r.bottom + 6, left, width })
+      const rect = btnRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const width = Math.min(300, window.innerWidth - 16)
+      const maxHeight = Math.max(240, window.innerHeight - rect.bottom - 16)
+      setPos({
+        top: Math.min(rect.bottom + 8, window.innerHeight - 248),
+        left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)),
+        width,
+        maxHeight,
+      })
     }
     update()
     window.addEventListener('resize', update)
     window.addEventListener('scroll', update, true)
-    return () => {
-      window.removeEventListener('resize', update)
-      window.removeEventListener('scroll', update, true)
-    }
+    return () => { window.removeEventListener('resize', update); window.removeEventListener('scroll', update, true) }
   }, [open])
 
-  useEffect(() => {
-    if (!open) return undefined
-    const onDown = (e) => {
-      if (btnRef.current?.contains(e.target)) return
-      if (menuRef.current?.contains(e.target)) return
-      setOpen(false)
-    }
-    window.addEventListener('mousedown', onDown)
-    return () => window.removeEventListener('mousedown', onDown)
-  }, [open])
+
+  const saveNotify = (value) => {
+    setNotifyMode(value)
+    try { localStorage.setItem(prefKey(notificationKey), value) } catch {}
+    window.dispatchEvent(new CustomEvent('voicecraft:channel-notifications-changed', {
+      detail: { key: notificationKey, mode: value },
+    }))
+  }
+
+  const handleMenuKeys = (event) => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+    const items = [...menuRef.current.querySelectorAll('button:not(:disabled)')]
+    if (!items.length) return
+    event.preventDefault()
+    const current = Math.max(0, items.indexOf(document.activeElement))
+    const next = event.key === 'Home' ? 0
+      : event.key === 'End' ? items.length - 1
+        : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
+    items[next]?.focus()
+  }
+
+  const BellIcon = notifyMode === 'muted' ? BellOff : Bell
 
   return (
-    <div className="relative shrink-0" data-header-menu>
+    <>
       <button
-        ref={btnRef}
+        ref={setButtonRef}
         type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="vc-icon-btn w-9 h-9 rounded-full flex items-center justify-center text-muted hover:text-strong hover:bg-white/[0.05] transition-colors"
-        title="Mais"
-        aria-label="Mais opções"
+        onClick={() => setOpen((value) => !value)}
+        className={`vc-icon-btn${open || pinsOpen || commandsOpen ? ' is-active' : ''}`}
+        aria-label="Mais opções da conversa"
+        aria-haspopup="menu"
         aria-expanded={open}
       >
-        <MoreHorizontal size={15} strokeWidth={1.8} />
+        <MoreHorizontal size={18} />
+        {pinCount > 0 && <span className="vc-header-count">{pinCount > 99 ? '99+' : pinCount}</span>}
       </button>
-      {open && pos && typeof document !== 'undefined' && createPortal(
-        <div
-          ref={menuRef}
-          className="fixed z-[200] py-1 rounded-xl bg-surface1 border border-line shadow-2xl animate-fade-in-up"
-          style={{ top: pos.top, left: pos.left, width: pos.width }}
-        >
-          <button
-            type="button"
-            onClick={() => {
-              const next = cycleChatDensity(density)
-              setOpen(false)
-              onDensityChange(next)
-            }}
-            className="w-full px-3 py-1.5 text-left text-[12px] text-ink hover:bg-surface2 hover:text-strong"
-          >
-            Densidade: {resolveChatDensity(normalizeChatDensity(density)).shortLabel}
+      <AnchoredOverlay
+        open={open && !!pos}
+        ref={menuRef}
+        anchorRef={btnRef}
+        onClose={() => setOpen(false)}
+        placement="top"
+        initialFocus
+        className="vc-conversation-popover vc-conversation-more-menu fixed"
+        style={pos || undefined}
+        role="menu"
+        aria-label="Mais opções da conversa"
+        onKeyDown={handleMenuKeys}
+      >
+          <p className="vc-conversation-menu__eyebrow">Conversa</p>
+          <button type="button" role="menuitem" className={pinsOpen ? 'is-active' : ''} onClick={() => { setOpen(false); onTogglePins?.() }}>
+            <span className="vc-conversation-menu__icon"><Pin size={16} /></span>
+            <span className="vc-conversation-menu__copy"><strong>Mensagens fixadas</strong><small>{pinCount ? `${pinCount} nesta sala` : 'Nenhuma nesta sala'}</small></span>
           </button>
-          <button
-            type="button"
-            onClick={() => { setOpen(false); onCloseRoom?.() }}
-            className="w-full px-3 py-1.5 text-left text-[12px] text-ink hover:bg-surface2 hover:text-strong"
-          >
-            Fechar sala
+          <button type="button" role="menuitem" className={commandsOpen ? 'is-active' : ''} onClick={() => { setOpen(false); onToggleCommands?.() }}>
+            <span className="vc-conversation-menu__icon"><Terminal size={16} /></span>
+            <span className="vc-conversation-menu__copy"><strong>Ferramentas e comandos</strong><small>Ações da conversa e moderação</small></span>
           </button>
-        </div>,
-        document.body,
-      )}
-    </div>
+
+          <div className="vc-conversation-menu__section" role="group" aria-label="Notificações">
+            <p><BellIcon size={13} /> Notificações</p>
+            {NOTIFY_OPTIONS.map((option) => (
+              <button key={option.value} type="button" role="menuitemradio" aria-checked={notifyMode === option.value} className={notifyMode === option.value ? 'is-active' : ''} onClick={() => saveNotify(option.value)}>
+                <span>{option.label}</span><span className="vc-conversation-radio" aria-hidden />
+              </button>
+            ))}
+          </div>
+
+          <div className="vc-conversation-menu__section" role="group" aria-label="Densidade">
+            <p>Densidade</p>
+            <ChatDensityMenu value={density} onChange={onDensityChange} embedded />
+          </div>
+
+          {onCloseRoom && (
+            <div className="vc-conversation-menu__section">
+              <button type="button" role="menuitem" onClick={() => { setOpen(false); onCloseRoom() }}>
+                <span className="vc-conversation-menu__icon"><X size={16} /></span>
+                <span className="vc-conversation-menu__copy"><strong>Fechar sala</strong></span>
+              </button>
+            </div>
+          )}
+      </AnchoredOverlay>
+    </>
   )
 }

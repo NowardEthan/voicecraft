@@ -201,11 +201,11 @@ export default function CommandDetail({
         {!allowed ? <LockedNotice /> : (
           <div className="rounded-xl border border-line bg-surface1/80 p-3.5 space-y-3">
             <label className="flex items-center justify-between gap-3">
-              <span className="text-[12.5px] text-ink">Canal trancado</span>
+              <span className="text-[12.5px] text-ink">Sala trancada</span>
               <Toggle checked={chatLocked} onChange={setChatLocked} />
             </label>
             <p className="text-[11px] text-muted leading-snug">
-              Com o canal trancado, só quem tem Moderar chat consegue enviar.
+              Com a sala trancada, só quem tem Moderar chat consegue enviar.
             </p>
             <RunButton
               running={running}

@@ -297,7 +297,7 @@ export default function RulesSettings({
               onClick={() => iconUploadRef.current?.click()}
               className="text-[11px] text-muted hover:text-ink inline-flex items-center gap-1"
             >
-              <Upload size={11} /> Upload PNG
+              <Upload size={11} /> Enviar PNG
             </button>
             {draft.iconImage && (
               <button
@@ -490,7 +490,7 @@ export default function RulesSettings({
                 onClick={() => avatarUploadRef.current?.click()}
                 className="text-[11px] text-muted hover:text-ink inline-flex items-center gap-1"
               >
-                <Upload size={11} /> Upload PNG
+                <Upload size={11} /> Enviar PNG
               </button>
               {(draft.authorPhoto || draft.authorIconValue || draft.authorIcon) && (
                 <button
@@ -526,7 +526,7 @@ export default function RulesSettings({
         <Section title="Cores">
           <div className="grid grid-cols-2 gap-2">
             <label className="block space-y-1 min-w-0">
-              <span className="text-[10.5px] text-muted">Badge</span>
+              <span className="text-[10.5px] text-muted">Selo</span>
               <input
                 value={draft.badge}
                 onChange={(e) => patch({ badge: e.target.value })}
@@ -534,7 +534,7 @@ export default function RulesSettings({
               />
             </label>
             <label className="block space-y-1">
-              <span className="text-[10.5px] text-muted">Cor do badge</span>
+              <span className="text-[10.5px] text-muted">Cor do selo</span>
               <input
                 type="color"
                 value={draft.badgeColor}
@@ -544,7 +544,7 @@ export default function RulesSettings({
             </label>
           </div>
           <div className="flex items-center gap-2 mt-2">
-            <span className="text-[10.5px] text-muted shrink-0">Acento</span>
+            <span className="text-[10.5px] text-muted shrink-0">Cor de destaque</span>
             <input
               type="color"
               value={draft.accent}
@@ -632,7 +632,7 @@ export default function RulesSettings({
       {draft.enabled && (
         <div className="space-y-1.5">
           <div className="text-[10.5px] font-semibold uppercase tracking-wide text-muted px-0.5">
-            Preview
+            Prévia
           </div>
           <div className="rounded-xl border border-dashed border-white/10 overflow-hidden bg-[#0d0f14] -mx-0.5 p-2">
             <RulesCard

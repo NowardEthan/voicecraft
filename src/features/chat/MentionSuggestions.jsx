@@ -8,7 +8,7 @@
  *     `computeMentionSuggestions({...})` so the caller can decide what
  *     happens when Enter selects an item.
  *   - The popover is positioned via the `anchor` prop = the textarea's
- *     bounding rect. We render via createPortal(document.body) so it
+ *     bounding rect. AnchoredOverlay portals it to document.body so it
  *     floats above the rest of the chat.
  *
  * Keyboard:
@@ -23,13 +23,17 @@
  *   - Avatar 28x28 for people; Hash icon for rooms
  */
 import { useEffect, useMemo, useRef } from 'react'
-import { createPortal } from 'react-dom'
+import { AnchoredOverlay } from '../../shared/motion/AnchoredOverlay.jsx'
 import { Hash, AtSign } from 'lucide-react'
 import { PersonAvatar } from '../people'
 
 /* Maximum items shown — Discord caps at ~8 so the popover stays compact
  * but enough that a short query still sees the closest matches.       */
 const MAX_ITEMS = 8
+
+function optionDomId(prefix, value) {
+  return `${prefix}-${String(value || 'none').replace(/[^a-zA-Z0-9_-]/g, '-')}`
+}
 
 /** Pure: given members/rooms + a query, produce a filtered list capped at
  *  MAX_ITEMS. The same function is exposed so the Composer can also
@@ -71,7 +75,7 @@ export function applyMentionReplacement(text, caretStart, caretEnd, item, kind) 
   const before = text.slice(0, caretStart)
   const after = text.slice(caretEnd)
   const replacement = kind === 'member'
-    ? `@${item?.displayName || item?.handle || item?.userId || ''}`
+    ? `@${item?.handle || item?.userId || item?.displayName || ''}`
     : `#${item?.name || item?.id || ''}`
   const newText = `${before}${replacement} ${after}`
   const newCaret = (before + replacement + ' ').length
@@ -132,20 +136,23 @@ function SuggestionAvatar({ item, kind, currentUserId }) {
 }
 
 export default function MentionSuggestions({
-  anchor,             // {top, left} — viewport coords for popover anchor
-  placement = 'top',  // 'top' (above textarea) or 'bottom'
-  kind = 'member',    // 'member' | 'room'
+  open = true,
+  anchorRef,
+  id = 'vc-mention-suggestions',
+  optionIdPrefix = 'vc-mention-option',
+  anchor,
+  placement = 'top',
+  kind = 'member',
   query = '',
   items = [],
   selectedId = null,
   currentUserId,
-  onHover,            // (id) => void
-  onSelect,           // (item) => void
-  onClose,            // () => void
+  onHover,
+  onSelect,
+  onClose,
 }) {
   const listRef = useRef(null)
 
-  // Keep the selected row visible when navigating with ↑/↓.
   useEffect(() => {
     if (!selectedId || !listRef.current) return
     const el = listRef.current.querySelector(`[data-mention-id="${CSS.escape(String(selectedId))}"]`)
@@ -167,27 +174,31 @@ export default function MentionSuggestions({
       left = Math.max(margin, Math.min(left, vw - popW - margin))
       if (placement === 'top') {
         if (top - estH < margin) top = anchor.bottom + margin
-      } else {
-        if (top + estH > vh - margin) top = anchor.top - estH - margin
+      } else if (top + estH > vh - margin) {
+        top = anchor.top - estH - margin
       }
       top = Math.max(margin, Math.min(top, vh - estH - margin))
     }
     return { left, top, width: popW }
   }, [anchor, placement, items.length])
 
-  if (typeof document === 'undefined') return null
-
   const totalLabel = kind === 'room' ? 'salas' : 'pessoas'
 
-  return createPortal(
-    <div
+  return (
+    <AnchoredOverlay
+      open={open && !!anchor}
+      anchorRef={anchorRef}
+      onClose={onClose}
+      placement={placement}
+      restoreFocus
       ref={listRef}
+      id={id}
       role="listbox"
       aria-label={kind === 'room' ? 'Sugestões de sala' : 'Sugestões de pessoas'}
       className="vc-mention-popover"
       style={style}
       data-mention-kind={kind}
-      onMouseDown={(e) => e.preventDefault()}
+      onMouseDown={(event) => event.preventDefault()}
     >
       <p className="vc-mention-popover__count">
         Top {items.length} {totalLabel}
@@ -196,11 +207,12 @@ export default function MentionSuggestions({
         <div className="px-3 py-2 text-[12px] text-muted">Nada encontrado</div>
       ) : (
         items.map((item) => {
-          const isSel = selectedId === item.id
+          const isSel = selectedId === (item.id || item.userId)
           return (
             <button
               key={item.id || `${kind}-${item.userId || item.name}`}
               type="button"
+              id={optionDomId(optionIdPrefix, item.id || item.userId)}
               role="option"
               aria-selected={isSel}
               data-mention-id={String(item.id || item.userId || '')}
@@ -213,11 +225,7 @@ export default function MentionSuggestions({
               onMouseEnter={() => onHover?.(item.id || item.userId)}
               onClick={() => onSelect?.(item)}
             >
-              <SuggestionAvatar
-                item={item}
-                kind={kind}
-                currentUserId={currentUserId}
-              />
+              <SuggestionAvatar item={item} kind={kind} currentUserId={currentUserId} />
               <span className="vc-mention-popover__name">
                 {kind === 'room' ? (item.name || item.id) : (item.displayName || item.handle || item.userId)}
               </span>
@@ -233,14 +241,11 @@ export default function MentionSuggestions({
               {kind === 'room' && item.type === 'text' && (
                 <span className="vc-mention-popover__badge">texto</span>
               )}
-              {kind === 'member' && (
-                <AtSign size={11} className="opacity-50" aria-hidden />
-              )}
+              {kind === 'member' && <AtSign size={11} className="opacity-50" aria-hidden />}
             </button>
           )
         })
       )}
-    </div>,
-    document.body,
+    </AnchoredOverlay>
   )
 }

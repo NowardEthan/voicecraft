@@ -23,6 +23,14 @@ import {
 
 const NotificationsContext = createContext(null)
 
+function channelNotificationMode(spaceId, roomId) {
+  try {
+    return localStorage.getItem(`voicecraft:channel-notifications:${roomKey(spaceId, roomId)}`) || 'all'
+  } catch {
+    return 'all'
+  }
+}
+
 export function NotificationsProvider({
   children,
   userId,
@@ -34,6 +42,7 @@ export function NotificationsProvider({
   const [roomsBySpace, setRoomsBySpace] = useState({})
   const [inbox, setInbox] = useState(() => getInbox(userId))
   const [tick, setTick] = useState(0)
+  const [notificationPrefsTick, setNotificationPrefsTick] = useState(0)
   const hydratedRef = useRef(false)
 
   useEffect(() => {
@@ -44,6 +53,16 @@ export function NotificationsProvider({
     setInbox(getInbox(userId))
     setTick((t) => t + 1)
   }, [userId])
+
+  useEffect(() => {
+    const refresh = () => setNotificationPrefsTick((value) => value + 1)
+    window.addEventListener('voicecraft:channel-notifications-changed', refresh)
+    window.addEventListener('storage', refresh)
+    return () => {
+      window.removeEventListener('voicecraft:channel-notifications-changed', refresh)
+      window.removeEventListener('storage', refresh)
+    }
+  }, [])
 
   const spaceIdsKey = useMemo(
     () => spaces.map((s) => s.id).filter(Boolean).join('|'),
@@ -92,6 +111,10 @@ export function NotificationsProvider({
         if (!isRoomUnread(userId, spaceId, room, userId)) return
         if (!room.lastMessageId) return
         if (spaceId === currentSpaceId && room.id === currentRoomId) return
+        const notificationMode = channelNotificationMode(spaceId, room.id)
+        if (notificationMode === 'muted') return
+        if (notificationMode === 'mentions'
+          && !(room.lastMentionIds || []).some((id) => String(id) === String(userId))) return
 
         const added = pushMessageNotif(userId, {
           id: `msg:${spaceId}:${room.id}:${room.lastMessageId}`,
@@ -113,21 +136,8 @@ export function NotificationsProvider({
       })
     })
     if (addedAny) refreshInbox()
-  }, [roomsBySpace, userId, spaceIdsKey, spaces, currentSpaceId, currentRoomId, refreshInbox])
+  }, [roomsBySpace, userId, spaceIdsKey, spaces, currentSpaceId, currentRoomId, refreshInbox, notificationPrefsTick])
 
-  // Auto-mark when viewing a room
-  useEffect(() => {
-    if (!userId || !currentSpaceId || !currentRoomId) return
-    const rooms = roomsBySpace[currentSpaceId] || []
-    const room = rooms.find((r) => r.id === currentRoomId)
-    persistMarkRoomRead(userId, currentSpaceId, currentRoomId, {
-      at: Math.max(Date.now(), Number(room?.lastMessageAt) || 0),
-      id: room?.lastMessageId || null,
-    })
-    refreshInbox()
-    // Intentionally omit roomsBySpace — only re-mark when the viewed room changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId, currentSpaceId, currentRoomId, refreshInbox])
 
   const unreadByRoom = useMemo(() => {
     void tick
@@ -142,7 +152,7 @@ export function NotificationsProvider({
       })
     })
     return map
-  }, [roomsBySpace, userId, currentSpaceId, currentRoomId, tick])
+  }, [roomsBySpace, userId, tick])
 
   const unreadBySpace = useMemo(() => {
     const map = {}

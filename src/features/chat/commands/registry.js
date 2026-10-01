@@ -21,7 +21,7 @@ export const SLOWMODE_PRESETS = [
 export const COMMAND_CATEGORIES = [
   { id: 'utility', label: 'Utilidades' },
   { id: 'cleanup', label: 'Limpeza' },
-  { id: 'channel', label: 'Canal' },
+  { id: 'channel', label: 'Sala' },
   { id: 'members', label: 'Membros' },
   { id: 'info', label: 'Info' },
   { id: 'automation', label: 'Automação' },
@@ -95,7 +95,7 @@ export const COMMANDS = [
   },
   {
     id: 'lock_channel',
-    label: 'Trancar canal',
+    label: 'Trancar sala',
     description: 'Só moderadores podem enviar mensagens enquanto estiver trancado.',
     audience: 'admin',
     category: 'channel',
@@ -346,8 +346,8 @@ export async function runCommand(id, ctx, params = {}) {
     case 'lock_channel': {
       const locked = !!params.chatLocked
       await ctx.signaling.updateRoomChatModeration(ctx.roomId, { chatLocked: locked })
-      ctx.postSystem?.(locked ? 'Canal trancado.' : 'Canal destrancado.')
-      ctx.flashToast?.(locked ? 'Canal trancado' : 'Canal destrancado')
+      ctx.postSystem?.(locked ? 'Sala trancada.' : 'Sala destrancada.')
+      ctx.flashToast?.(locked ? 'Sala trancada' : 'Sala destrancada')
       return { chatLocked: locked }
     }
     case 'slowmode': {

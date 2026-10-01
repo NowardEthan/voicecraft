@@ -1,11 +1,11 @@
 /**
  * VoiceMoreMenu — glass popover for secondary call actions.
  */
-import { useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useRef, useState } from 'react'
 import { MoreHorizontal, Link2, Settings, PhoneOff, Check } from 'lucide-react'
 import { flashToast } from '../../../../../shared/utils/toast'
 import { buildSpaceInviteUrl } from '../../../../spaces/model/spaceInvite'
+import { AnchoredOverlay } from '../../../../../shared/motion/AnchoredOverlay.jsx'
 
 export function VoiceMoreMenu({ space, room, onOpenSettings, onLeave }) {
   const [open, setOpen] = useState(false)
@@ -14,21 +14,6 @@ export function VoiceMoreMenu({ space, room, onOpenSettings, onLeave }) {
   const btnRef = useRef(null)
   const popRef = useRef(null)
 
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e) => {
-      if (popRef.current?.contains(e.target)) return
-      if (btnRef.current?.contains(e.target)) return
-      setOpen(false)
-    }
-    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
 
   const toggle = () => {
     if (open) {
@@ -59,16 +44,20 @@ export function VoiceMoreMenu({ space, room, onOpenSettings, onLeave }) {
     }
   }
 
-  const node = open ? (
-    <div
+  const node = (
+    <AnchoredOverlay
+      open={open}
       ref={popRef}
+      anchorRef={btnRef}
+      onClose={() => setOpen(false)}
+      placement="top"
       role="menu"
       aria-label="Mais ações da call"
       className="
-        fixed z-50 w-[220px] p-1.5 rounded-2xl
+        fixed w-[220px] p-1.5 rounded-2xl
         bg-black/70 backdrop-blur-xl
         shadow-[0_20px_44px_-16px_rgba(0,0,0,0.75),inset_0_1px_0_rgba(255,255,255,0.06)]
-        animate-fade-in
+
       "
       style={{ top: pos.top, left: pos.left }}
     >
@@ -102,8 +91,8 @@ export function VoiceMoreMenu({ space, room, onOpenSettings, onLeave }) {
           />
         </>
       )}
-    </div>
-  ) : null
+    </AnchoredOverlay>
+  )
 
   return (
     <>
@@ -127,7 +116,7 @@ export function VoiceMoreMenu({ space, room, onOpenSettings, onLeave }) {
       >
         <MoreHorizontal size={15} strokeWidth={1.9} />
       </button>
-      {typeof document !== 'undefined' && createPortal(node, document.body)}
+      {node}
     </>
   )
 }

@@ -52,15 +52,29 @@ export default function FeaturedSpacesCarousel({
   const safe = count ? ((index % count) + count) % count : 0
   const current = spaces[safe] || null
 
+  const spacesKey = spaces.map((s) => s.id).join('|')
   useEffect(() => {
     setIndex(0)
-  }, [spaces.map((s) => s.id).join('|')])
+  }, [spacesKey])
 
   useEffect(() => {
     if (paused || count < 2) return undefined
     const t = setInterval(() => setIndex((i) => i + 1), AUTO_MS)
     return () => clearInterval(t)
   }, [paused, count])
+
+  // Warm current + neighbors so carousel steps never paint cold bitmaps.
+  // Must run before any early return: hook order has to stay identical
+  // across the loading -> loaded transition.
+  useEffect(() => {
+    if (!count) return undefined
+    const idxs = [safe, (safe + 1) % count, (safe - 1 + count) % count]
+    for (const i of idxs) {
+      const url = resolveSpaceCover(spaces[i])
+      if (url) warmImage(url)
+    }
+    return undefined
+  }, [safe, count, spacesKey])
 
   const already = current && (memberIds?.has(current.id) || current.joined)
 
@@ -90,17 +104,6 @@ export default function FeaturedSpacesCarousel({
   }
 
   const cover = resolveSpaceCover(current)
-
-  // Warm current + neighbors so carousel steps never paint cold bitmaps.
-  useEffect(() => {
-    if (!count) return undefined
-    const idxs = [safe, (safe + 1) % count, (safe - 1 + count) % count]
-    for (const i of idxs) {
-      const url = resolveSpaceCover(spaces[i])
-      if (url) warmImage(url)
-    }
-    return undefined
-  }, [safe, count, spaces])
 
   return (
     <div
@@ -203,7 +206,7 @@ export default function FeaturedSpacesCarousel({
               aria-label={`Space ${i + 1}`}
               onClick={() => setIndex(i)}
               className={
-                'h-1.5 rounded-full transition-all ' +
+                'h-1.5 rounded-full transition-[color,background-color,border-color,box-shadow,opacity,transform,filter] ' +
                 (i === safe ? 'w-5 bg-white' : 'w-1.5 bg-white/35 hover:bg-white/55')
               }
             />

@@ -4,6 +4,7 @@ import {
 } from 'lucide-react'
 import { enumerateMics, enumerateSpeakers, watchDeviceChanges } from '../../../utils/devices'
 import { ModalShell } from '../../../shared/motion/ModalShell.jsx'
+import { TabIndicator, TabPanelSwap } from '../../../shared/motion/Transitions.jsx'
 import { BrandAppIcon } from '../../../shared/ui/BrandMark'
 import { SETTINGS_DEFAULTS } from '../hooks/useSettings'
 import { flashToast } from '../../../shared/utils/toast'
@@ -138,7 +139,7 @@ export default function SettingsModal({
             onClick={handleCancel}
             aria-label="Fechar configurações"
             title="Fechar"
-            className="w-8 h-8 rounded-full hover:bg-white/[0.06] flex items-center justify-center transition-all shrink-0"
+            className="w-8 h-8 rounded-full hover:bg-white/[0.06] flex items-center justify-center transition-[color,background-color,border-color,box-shadow,opacity,transform,filter] shrink-0"
           >
             <X size={15} strokeWidth={1.75} className="text-ink" />
           </button>
@@ -161,9 +162,7 @@ export default function SettingsModal({
                 >
                   <Icon size={14} strokeWidth={1.8} className={on ? 'text-accent' : 'text-muted'} />
                   {label}
-                  {on && (
-                    <span className="absolute left-2 right-2 bottom-0 h-0.5 rounded-full bg-accent" />
-                  )}
+                  {on && <TabIndicator layoutId="settings-tab-indicator" className="absolute left-2 right-2 bottom-0 h-0.5 rounded-full bg-accent" />}
                 </button>
               )
             })}
@@ -171,6 +170,7 @@ export default function SettingsModal({
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto px-5 sm:px-6 py-5">
+          <TabPanelSwap activeKey={tab} className="min-h-full" role="tabpanel">
           {tab === 'audio' && (
             <AudioTab draft={draft} setDraft={setDraft} mics={mics} speakers={speakers} />
           )}
@@ -186,6 +186,7 @@ export default function SettingsModal({
               onClaimPrincipal={onClaimPrincipal}
             />
           )}
+          </TabPanelSwap>
         </div>
 
         <div className="px-5 sm:px-6 py-4 border-t border-white/[0.07] flex items-center justify-between gap-3 shrink-0 flex-wrap">

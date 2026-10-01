@@ -38,7 +38,7 @@ const SpaceActivity = memo(function SpaceActivity({
   }, [members, rooms, space?.name])
 
   return (
-    <section className="vc-space-card rounded-[18px] border border-white/[0.07] bg-[#14161c]/90 overflow-hidden">
+    <section className="vc-space-card vc-space-module vc-space-module--activity rounded-[18px] border border-white/[0.07] bg-[#14161c]/90 overflow-hidden">
       <div className="flex items-center justify-between gap-3 px-4 sm:px-5 pt-4 pb-3">
         <div className="flex items-center gap-2 min-w-0">
           <Activity size={15} className="text-accent shrink-0" strokeWidth={1.75} />

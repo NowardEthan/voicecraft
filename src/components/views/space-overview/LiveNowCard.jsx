@@ -28,7 +28,7 @@ const LiveNowCard = memo(function LiveNowCard({
 
   return (
     <section
-      className={`vc-space-card vc-live-now-card rounded-[18px] overflow-hidden ${
+      className={`vc-space-card vc-space-module vc-space-module--live vc-live-now-card rounded-[18px] overflow-hidden ${
         isLive
           ? 'border border-accent/35 bg-[#14161c]/95 shadow-[0_0_0_1px_rgba(255,63,108,0.12),0_18px_40px_-24px_var(--space-accent-glow-32)]'
           : 'border border-white/[0.07] bg-[#14161c]/90'

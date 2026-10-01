@@ -1,7 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { Bell, CheckCheck, MessageSquare } from 'lucide-react'
 import { useNotifications } from './useNotifications.jsx'
+import { AnchoredOverlay } from '../../shared/motion/AnchoredOverlay.jsx'
+import { AppearItem, AppearList } from '../../shared/motion/Appear.jsx'
 
 function timeAgo(ts) {
   const d = Date.now() - (Number(ts) || 0)
@@ -102,31 +103,20 @@ export default function NotificationBell({
     }
   }, [open, placement])
 
-  useEffect(() => {
-    if (!open) return undefined
-    const onDoc = (e) => {
-      if (btnRef.current?.contains(e.target) || panelRef.current?.contains(e.target)) return
-      setOpen(false)
-    }
-    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
-    document.addEventListener('mousedown', onDoc)
-    window.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDoc)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [open])
 
   const unread = inbox.filter((n) => !n.read)
   const items = (unread.length ? unread : inbox).slice(0, 40)
 
-  const panel = open && typeof document !== 'undefined'
-    ? createPortal(
-      <div
+  const panel = (
+      <AnchoredOverlay
+        open={open}
         ref={panelRef}
+        anchorRef={btnRef}
+        onClose={() => setOpen(false)}
+        placement={placement === 'rail' ? 'right' : 'top'}
         role="dialog"
         aria-label="Notificações"
-        className="fixed z-[200] rounded-2xl border border-line bg-panel shadow-2xl overflow-hidden animate-fade-in"
+        className="fixed rounded-2xl border border-line bg-panel shadow-2xl overflow-hidden"
         style={{ top: pos.top, left: pos.left, width: pos.width || 360 }}
       >
         <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 border-b border-line">
@@ -153,9 +143,9 @@ export default function NotificationBell({
               <p className="text-[13px] text-muted">Nenhuma notificação ainda.</p>
             </div>
           ) : (
-            <ul className="divide-y divide-line">
+            <AppearList className="divide-y divide-line">
               {items.map((n) => (
-                <li key={n.id}>
+                <AppearItem key={n.id}>
                   <button
                     type="button"
                     onClick={() => {
@@ -186,15 +176,14 @@ export default function NotificationBell({
                       </div>
                     </div>
                   </button>
-                </li>
+                </AppearItem>
               ))}
-            </ul>
+            </AppearList>
           )}
         </div>
-      </div>,
-      document.body,
+      </AnchoredOverlay>
     )
-    : null
+
 
   return (
     <div className={`relative shrink-0 ${className}`}>

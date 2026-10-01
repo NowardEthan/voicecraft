@@ -511,7 +511,7 @@ export function SpaceIconCropModal({
               type="button"
               onClick={apply}
               disabled={busy}
-              className="h-9 px-4 rounded-xl text-[12.5px] font-semibold bg-accent text-white hover:brightness-110 shadow-lg inline-flex items-center gap-1.5 disabled:opacity-50 transition-all"
+              className="h-9 px-4 rounded-xl text-[12.5px] font-semibold bg-accent text-white hover:brightness-110 shadow-lg inline-flex items-center gap-1.5 disabled:opacity-50 transition-[color,background-color,border-color,box-shadow,opacity,transform,filter]"
             >
               <Check size={14} strokeWidth={2.4} />
               {busy ? 'Aplicando…' : 'Aplicar imagem'}

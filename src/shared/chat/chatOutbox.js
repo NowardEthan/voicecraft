@@ -19,12 +19,27 @@
  *   - deleteItem(id)
  */
 import { openDB, declareStore, upgradeStore, getAll as idbGetAll, get, put, deleteItem as deleteFromIDB } from '../cache/idb'
+import {
+  outboxEventType, transitionOutboxCanceled, transitionOutboxFailed, transitionOutboxInFlight,
+  transitionOutboxPermanentFailed, transitionOutboxRetry,
+} from './outboxState.js'
 
 const OUTBOX_STORE = 'outbox'
-const MAX_ATTEMPTS = 5
-const BASE_DELAY_MS = 1000
-const CAP_DELAY_MS = 16000
-const JITTER_MS = 500
+const listeners = new Set()
+
+function emit(type, item = null, id = item?.id || null) {
+  const event = { type, id, item }
+  for (const listener of [...listeners]) {
+    try { listener(event) } catch (err) { console.warn('[outbox] listener failed:', err) }
+  }
+}
+
+/** Subscribe to durable outbox transitions. Safe for multiple mounted rooms. */
+export function subscribe(listener) {
+  if (typeof listener !== 'function') return () => {}
+  listeners.add(listener)
+  return () => listeners.delete(listener)
+}
 
 // Declare the outbox store at module load time so the IndexedDB upgrade
 // creates it before any reads happen.
@@ -53,13 +68,6 @@ function genId() {
   return `${rnd(8)}-${rnd(4)}-4${rnd(3)}-${(8 + Math.floor(Math.random() * 4)).toString(16)}${rnd(3)}-${rnd(12)}`
 }
 
-function computeDelay(attempts) {
-  const exp = BASE_DELAY_MS * Math.pow(2, attempts)
-  const capped = Math.min(CAP_DELAY_MS, exp)
-  const jitter = Math.floor(Math.random() * JITTER_MS)
-  return capped + jitter
-}
-
 export async function enqueueMessage(uid, roomKey, messageId, payload) {
   if (!uid || !roomKey) throw new Error('enqueueMessage requires uid and roomKey')
   await ensureStore()
@@ -78,24 +86,38 @@ export async function enqueueMessage(uid, roomKey, messageId, payload) {
     lastError: null,
   }
   await put(OUTBOX_STORE, item)
+  emit('enqueued', item)
   console.info('[outbox] Enqueued message:', id, roomKey)
   return id
+}
+
+export async function updateMessagePayload(id, payload) {
+  await ensureStore()
+  const item = await get(OUTBOX_STORE, id)
+  if (!item) return null
+  item.payload = payload || {}
+  item.updatedAt = Date.now()
+  await put(OUTBOX_STORE, item)
+  emit('payload-updated', item)
+  return item
 }
 
 export async function markInFlight(id) {
   await ensureStore()
   const item = await get(OUTBOX_STORE, id)
   if (!item) return null
-  item.status = 'in-flight'
-  item.lastAttemptAt = Date.now()
-  await put(OUTBOX_STORE, item)
+  const next = transitionOutboxInFlight(item)
+  await put(OUTBOX_STORE, next)
+  emit(outboxEventType(next), next)
   console.info('[outbox] In-flight attempt #', item.attempts + 1, id)
-  return item
+  return next
 }
 
 export async function markSent(id) {
   await ensureStore()
+  const item = await get(OUTBOX_STORE, id)
   await deleteFromIDB(OUTBOX_STORE, id)
+  emit('sent', item, id)
   console.info('[outbox] Message delivered successfully:', id)
 }
 
@@ -103,48 +125,37 @@ export async function markFailedAttempt(id, error) {
   await ensureStore()
   const item = await get(OUTBOX_STORE, id)
   if (!item) return null
-  item.attempts = (item.attempts || 0) + 1
-  item.lastError = error?.message || String(error || 'unknown')
-  item.lastAttemptAt = Date.now()
-  if (item.attempts >= MAX_ATTEMPTS) {
-    item.status = 'permanent-failed'
-    item.nextAttemptAt = null
-    console.error('[outbox] Permanent failure reached:', id, 'attempts=', item.attempts)
+  const next = transitionOutboxFailed(item, error)
+  if (next.status === 'permanent-failed') {
+    console.error('[outbox] Permanent failure reached:', id, 'attempts=', next.attempts)
   } else {
-    const delay = computeDelay(item.attempts)
-    item.status = 'pending'
-    item.nextAttemptAt = Date.now() + delay
-    console.warn('[outbox] Attempt failed, next attempt at:', item.nextAttemptAt, id, item.lastError)
+    console.warn('[outbox] Attempt failed, next attempt at:', next.nextAttemptAt, id, next.lastError)
   }
-  await put(OUTBOX_STORE, item)
-  return item
+  await put(OUTBOX_STORE, next)
+  emit(outboxEventType(next), next)
+  return next
 }
 
 export async function markPermanentFailed(id, error) {
   await ensureStore()
   const item = await get(OUTBOX_STORE, id)
   if (!item) return null
-  item.status = 'permanent-failed'
-  item.lastError = error?.message || String(error || 'unknown')
-  item.nextAttemptAt = null
-  item.attempts = Math.max(item.attempts || 0, MAX_ATTEMPTS)
-  await put(OUTBOX_STORE, item)
+  const next = transitionOutboxPermanentFailed(item, error)
+  await put(OUTBOX_STORE, next)
+  emit(outboxEventType(next), next)
   console.error('[outbox] Permanent failure reached:', id)
-  return item
+  return next
 }
 
 export async function resetForRetry(id) {
   await ensureStore()
   const item = await get(OUTBOX_STORE, id)
   if (!item) return null
-  item.attempts = 0
-  item.status = 'pending'
-  item.nextAttemptAt = Date.now()
-  item.lastError = null
-  item.lastAttemptAt = null
-  await put(OUTBOX_STORE, item)
+  const next = transitionOutboxRetry(item)
+  await put(OUTBOX_STORE, next)
+  emit(outboxEventType(next), next)
   console.info('[outbox] Reset for retry:', id)
-  return item
+  return next
 }
 
 export async function getAll(uid) {
@@ -157,15 +168,31 @@ export async function getDueNow(uid) {
   const now = Date.now()
   const items = await getAll(uid)
   return items.filter((m) =>
-    (m.status === 'pending') &&
-    (m.nextAttemptAt === null || m.nextAttemptAt <= now)
+    (m.status === 'pending' || m.status === 'in-flight') &&
+    (m.status === 'in-flight' || m.nextAttemptAt === null || m.nextAttemptAt <= now)
   )
 }
 
 export async function deleteItem(id) {
   await ensureStore()
+  const item = await get(OUTBOX_STORE, id)
+  if (item) {
+    // Persist a tombstone before deleting. If IndexedDB deletion fails or the
+    // renderer exits between operations, getDueNow() still cannot resend it.
+    const canceledItem = transitionOutboxCanceled(item)
+    await put(OUTBOX_STORE, canceledItem)
+    emit('canceled', canceledItem, id)
+    try {
+      await deleteFromIDB(OUTBOX_STORE, id)
+    } catch (err) {
+      console.warn('[outbox] Canceled tombstone retained:', id, err)
+      return canceledItem
+    }
+    console.info('[outbox] Deleted item:', id)
+    return canceledItem
+  }
   await deleteFromIDB(OUTBOX_STORE, id)
-  console.info('[outbox] Deleted item:', id)
+  return null
 }
 
 // Re-export for direct usage if needed

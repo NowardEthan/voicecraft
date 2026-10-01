@@ -11,6 +11,7 @@ import {
   searchGifs,
   searchStickers,
 } from './giphy'
+import { TabIndicator, TabPanelSwap } from '../../shared/motion/Transitions.jsx'
 
 const SUGGESTIONS = ['oi', 'obrigado', 'lol', 'clap', 'dance', 'cat', 'dog', 'fire', 'yes', 'no']
 const TABS = [
@@ -73,8 +74,9 @@ export default function GifPicker({
     <div
       className={`vc-gif-picker flex flex-col rounded-2xl overflow-hidden border border-line bg-surface1 shadow-2xl ${className}`}
       style={{
-        width: 360,
-        height: 440,
+        width: 'min(360px, calc(100vw - 24px))',
+        height: 'min(440px, calc(100vh - 24px))',
+        minHeight: 300,
         '--gif-accent': accent || 'var(--space-accent, #22c55e)',
       }}
       data-vc-gif-picker="1"
@@ -89,14 +91,15 @@ export default function GifPicker({
               type="button"
               onClick={() => setTab(t.id)}
               className={
-                'h-8 px-3 rounded-lg text-[12px] font-semibold transition-colors ' +
+                'relative h-8 px-3 rounded-lg text-[12px] font-semibold transition-colors ' +
                 (active
                   ? 'text-strong bg-surface2'
                   : 'text-muted hover:text-strong hover:bg-surface2/60')
               }
               aria-pressed={active}
             >
-              {t.label}
+              {active && <TabIndicator layoutId="gif-picker-tab-indicator" className="absolute inset-0 rounded-lg bg-surface2" />}
+              <span className="relative z-[1]">{t.label}</span>
             </button>
           )
         })}
@@ -155,7 +158,8 @@ export default function GifPicker({
         </div>
       )}
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-3 pb-3">
+      <TabPanelSwap activeKey={tab} className="flex-1 min-h-0 overflow-hidden" role="tabpanel">
+      <div className="h-full min-h-0 overflow-y-auto px-3 pb-3">
         {!keyed && (
           <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-4">
             <p className="text-[13px] text-strong font-medium">GIFs e stickers</p>
@@ -219,6 +223,7 @@ export default function GifPicker({
           </p>
         )}
       </div>
+      </TabPanelSwap>
 
       {keyed && (
         <div className="px-3 py-2 border-t border-line flex items-center justify-end">

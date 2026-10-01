@@ -23,7 +23,9 @@ export function PersonAvatar({
     : ''
 
   const dim = { width: size, height: size }
-  const initials = photo ? '' : initialsOf(name)
+  // Monogram always renders underneath; the photo covers it once painted,
+  // so a decoding avatar never shows a letterless color block.
+  const initials = initialsOf(name)
   const placeholderColor = colorFromId(userId || name || 'user')
 
   return (
@@ -42,7 +44,7 @@ export function PersonAvatar({
           src={photo}
           alt=""
           imgStyle={{ objectFit: 'cover' }}
-          placeholderColor={placeholderColor}
+          placeholderColor="transparent"
           className="absolute inset-0 w-full h-full"
         />
       ) : null}

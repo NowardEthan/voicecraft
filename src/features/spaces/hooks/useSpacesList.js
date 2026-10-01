@@ -4,9 +4,15 @@
  * Does not nest useCurrentSpace (that would create a second state
  * instance). Deletion/leave is reported via onSpaceDeleted.
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { getSharedSignaling } from '../../../shared/connection/useSignaling'
+import { auth } from '../../../shared/firebase/app'
+import { readL1Spaces, writeL1Snapshot } from '../../../shared/cache/l1Snapshot'
 import { hasLeftSpace, syncMembershipFromServer } from '../model/spacePreferences'
+
+function currentUid(sig) {
+  return sig?.userId || auth?.currentUser?.uid || null
+}
 
 function toSummary(s) {
   return {
@@ -27,16 +33,30 @@ function toSummary(s) {
 
 export function useSpacesList({ onSpaceDeleted } = {}) {
   const sig = getSharedSignaling()
+  // Seed order: live signaling list (already connected) → L1 snapshot from
+  // the last session → empty. The rail never starts blank on a warm start.
   const [spaces, setSpaces] = useState(() => {
-    const cached = Array.isArray(sig._spacesList) ? sig._spacesList : []
+    const cached = Array.isArray(sig._spacesList)
+      ? sig._spacesList
+      : readL1Spaces(currentUid(sig))
     return cached
       .filter(s => s.joined === true || (s.joined == null && !hasLeftSpace(s.id)))
       .map(s => toSummary({ ...s, joined: true }))
   })
+  // Only persist once the server has answered at least once, so a stale or
+  // empty seed is never written back as if it were fresh.
+  const fromServerRef = useRef(Array.isArray(sig._spacesList))
+
+  useEffect(() => {
+    if (!fromServerRef.current) return
+    const uid = currentUid(sig)
+    if (uid) writeL1Snapshot(uid, { spaces })
+  }, [sig, spaces])
 
   useEffect(() => {
     const off = sig.onSpaceChanged((info) => {
       if (info.spaces !== undefined) {
+        fromServerRef.current = true
         syncMembershipFromServer(info.spaces)
         setSpaces(info.spaces
           .filter(s => s.joined === true || (s.joined == null && !hasLeftSpace(s.id)))

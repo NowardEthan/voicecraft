@@ -1,20 +1,13 @@
 /**
- * PinnedMessagesPanel — Discord-style list of pinned messages for a room.
+ * PinnedMessagesPanel - Discord-style list of pinned messages for a room.
  * Portaled to document.body with fixed coords so it never paints under the feed.
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useLayoutEffect, useMemo, useState } from 'react'
 import { Pin, PinOff, X } from 'lucide-react'
-
-function previewText(msg) {
-  if (!msg || msg.deleted) return 'Mensagem apagada'
-  const text = String(msg.text || '').trim()
-  if (text) return text.length > 160 ? `${text.slice(0, 160)}…` : text
-  if (msg.attachment?.name) return `Anexo: ${msg.attachment.name}`
-  if (msg.kind === 'announce' || msg.announce) return msg.announce?.title || 'Anúncio'
-  if (msg.kind === 'lobby_event') return 'Evento do lobby'
-  return 'Mensagem'
-}
+import { AnchoredOverlay } from '../../shared/motion/AnchoredOverlay.jsx'
+import { AppearItem, AppearList } from '../../shared/motion/Appear.jsx'
+import ChatFeatureCardFrame from './cards/ChatFeatureCardFrame.jsx'
+import { createAnnouncementCardViewModel, createMessageCardViewModel } from './cards/featureCardViewModels.js'
 
 function formatPinTime(ts) {
   if (!ts) return ''
@@ -72,39 +65,29 @@ export default function PinnedMessagesPanel({
   onUnpin,
   anchorRef = null,
 }) {
-  const panelRef = useRef(null)
   const pos = useAnchorRect(open, anchorRef)
 
   const pinned = useMemo(() => {
     return (messages || [])
       .filter((m) => m && m.pinned && !m.deleted)
       .sort((a, b) => (b.pinnedAt || b.ts || 0) - (a.pinnedAt || a.ts || 0))
+      .map((message) => ({
+        message,
+        vm: message.kind === 'announce' || message.announce
+          ? createAnnouncementCardViewModel(message, { variant: 'pinned', maxLength: 160 })
+          : createMessageCardViewModel(message, { variant: 'pinned', maxLength: 160 }),
+      }))
   }, [messages])
 
-  useEffect(() => {
-    if (!open) return undefined
-    const onDown = (e) => {
-      if (panelRef.current?.contains(e.target)) return
-      if (anchorRef?.current?.contains?.(e.target)) return
-      onClose?.()
-    }
-    const onKey = (e) => { if (e.key === 'Escape') onClose?.() }
-    window.addEventListener('mousedown', onDown)
-    window.addEventListener('keydown', onKey)
-    return () => {
-      window.removeEventListener('mousedown', onDown)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [open, onClose, anchorRef])
 
-  if (!open || !pos || typeof document === 'undefined') return null
+  if (typeof document === 'undefined') return null
 
   const nameOf = (msg) => {
     const uid = msg.authorId
     const member = members.find((m) => m.userId === uid || m.id === uid)
     if (member?.displayName) return member.displayName
-    if (uid && uid === currentUserId) return 'você'
-    return msg.author || 'alguém'
+    if (uid && uid === currentUserId) return '\u0076\u006f\u0063\u00ea'
+    return msg.author || '\u0061\u006c\u0067\u0075\u00e9\u006d'
   }
 
   const canUnpinMsg = (msg) => {
@@ -112,18 +95,22 @@ export default function PinnedMessagesPanel({
     return !!(currentUserId && msg.authorId === currentUserId)
   }
 
-  return createPortal(
-    <div
-      ref={panelRef}
+  return (
+    <AnchoredOverlay
+      open={open && !!pos}
+      anchorRef={anchorRef}
+      placement="top"
       role="dialog"
+      onClose={onClose}
+      initialFocus="[data-pins-close]"
       aria-label="Mensagens fixadas"
-      className="fixed z-[200] flex flex-col rounded-2xl border border-white/[0.1] bg-[#15171c] shadow-[0_20px_50px_-16px_rgba(0,0,0,0.75)] overflow-hidden"
-      style={{
+      className="vc-conversation-popover vc-conversation-pins fixed flex flex-col overflow-hidden"
+      style={pos ? {
         top: pos.top,
         left: pos.left,
         width: pos.width,
         maxHeight: 'min(420px, 55vh)',
-      }}
+      } : undefined}
     >
       <header className="shrink-0 flex items-center justify-between gap-2 px-3.5 py-2.5 border-b border-white/[0.08]">
         <div className="flex items-center gap-2 min-w-0">
@@ -146,6 +133,7 @@ export default function PinnedMessagesPanel({
           </div>
         </div>
         <button
+          data-pins-close
           type="button"
           onClick={onClose}
           className="w-8 h-8 rounded-lg flex items-center justify-center text-muted hover:text-strong hover:bg-white/[0.06] transition-colors"
@@ -164,47 +152,45 @@ export default function PinnedMessagesPanel({
             </p>
           </div>
         ) : (
-          pinned.map((msg) => (
-            <div
-              key={msg.id}
+          <AppearList>
+          {pinned.map(({ message: msg, vm }) => (
+            <AppearItem
+              key={msg.id || msg.firestoreId}
               className="group flex items-start gap-2 px-2.5 py-1.5 mx-1 rounded-xl hover:bg-white/[0.04] transition-colors"
             >
-              <button
+              <ChatFeatureCardFrame
+                as="button"
                 type="button"
+                compact
+                interactive
+                accent={vm.accent || accent}
+                className={`vc-pinned-card ${vm.kind === 'announcement' ? 'is-announcement' : 'is-message'}`}
                 onClick={() => {
-                  onJump?.(msg.id)
+                  onJump?.(msg.id || msg.firestoreId)
                   onClose?.()
                 }}
-                className="flex-1 min-w-0 text-left px-1.5 py-1"
-              >
-                <div className="flex items-baseline gap-1.5 min-w-0">
-                  <span className="text-[12.5px] font-semibold text-strong truncate">
-                    {nameOf(msg)}
-                  </span>
-                  <span className="text-[10.5px] text-muted shrink-0 tabular-nums">
-                    {formatPinTime(msg.pinnedAt || msg.ts)}
-                  </span>
-                </div>
-                <p className="text-[12.5px] text-ink/90 line-clamp-2 mt-0.5 whitespace-pre-wrap break-words">
-                  {previewText(msg)}
-                </p>
-              </button>
+                badge={<span>{vm.kind === 'announcement' ? 'Anúncio fixado' : 'Mensagem fixada'}</span>}
+                title={<span>{vm.kind === 'announcement' ? vm.title : nameOf(msg)}</span>}
+                body={<span>{vm.snippet || (msg.attachment?.name ? `Anexo: ${msg.attachment.name}` : 'Mensagem')}</span>}
+                status={<time dateTime={vm.time?.iso}>{formatPinTime(msg.pinnedAt || msg.ts)}</time>}
+                aria-label={`Ir para ${vm.kind === 'announcement' ? 'anúncio' : 'mensagem'} fixada: ${vm.title}`}
+              />
               {canUnpinMsg(msg) && onUnpin && (
                 <button
                   type="button"
-                  onClick={() => onUnpin(msg.id)}
-                  className="shrink-0 w-8 h-8 mt-0.5 rounded-lg flex items-center justify-center text-muted opacity-0 group-hover:opacity-100 hover:text-warning hover:bg-white/[0.06] transition-all"
+                  onClick={() => onUnpin(msg.id || msg.firestoreId)}
+                  className="shrink-0 w-8 h-8 mt-0.5 rounded-lg flex items-center justify-center text-muted opacity-0 group-hover:opacity-100 hover:text-warning hover:bg-white/[0.06] transition-[color,background-color,border-color,box-shadow,opacity,transform,filter]"
                   title="Desafixar"
                   aria-label="Desafixar mensagem"
                 >
                   <PinOff size={14} strokeWidth={1.9} />
                 </button>
               )}
-            </div>
-          ))
+            </AppearItem>
+          ))}
+          </AppearList>
         )}
       </div>
-    </div>,
-    document.body,
+    </AnchoredOverlay>
   )
 }

@@ -6,6 +6,7 @@ import {
 import AnnounceEditor from './AnnounceEditor'
 import { normalizeAnnounce, announcePreviewText } from '../announceSchema.js'
 import { SpaceIcon } from '../../spaces/model/spaceIcons'
+import { SpaceCoverLayer } from '../../spaces/components/SpaceCoverLayer'
 import { flashToast } from '../../../shared/utils/toast'
 
 function isAnnounceMsg(m) {
@@ -36,11 +37,7 @@ function AnnounceRow({
     <li className="rounded-xl border border-line bg-[#14171f] overflow-hidden">
       {a.cover ? (
         <div className="h-16 w-full relative overflow-hidden">
-          <img
-            src={a.cover}
-            alt=""
-            className="absolute inset-0 w-full h-full object-cover opacity-80"
-          />
+          <SpaceCoverLayer src={a.cover} fit={a.coverFit} className="opacity-80" />
           <div className="absolute inset-0 bg-gradient-to-t from-[#14171f] to-transparent" />
         </div>
       ) : null}
@@ -76,7 +73,7 @@ function AnnounceRow({
               ) : null}
               {!a.cover && (
                 <span className="text-muted inline-flex items-center gap-0.5 text-[10px]">
-                  <ImageIcon size={10} /> sem cover
+                  <ImageIcon size={10} /> sem capa
                 </span>
               )}
             </div>
@@ -270,7 +267,7 @@ export default function AnnounceManager({
           </div>
           <div className="text-[13px] font-semibold text-strong">Nenhum anúncio ainda</div>
           <p className="text-[11.5px] text-muted leading-relaxed">
-            Crie o primeiro card com cover, rich text e badge — ou agende para depois.
+            Crie o primeiro card com capa, texto formatado e selo — ou agende para depois.
           </p>
         </div>
       ) : (

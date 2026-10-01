@@ -103,14 +103,14 @@ export default function PersonCard({
         pl-3 pr-3 py-2 rounded-card
         bg-surface1 hover:bg-surface2
         border border-line hover:border-line
-        transition-all duration-200 hover:-translate-y-px
+        transition-[color,background-color,border-color,box-shadow,opacity,transform,filter] duration-200 hover:-translate-y-px
         focus:outline-none focus-visible:border-accent
       "
     >
       {/* Left accent rail */}
       <span
         className={
-          `absolute left-0 top-2 bottom-2 w-[2px] rounded-r transition-all ` +
+          `absolute left-0 top-2 bottom-2 w-[2px] rounded-r transition-[color,background-color,border-color,box-shadow,opacity,transform,filter] ` +
           `${railClass} ${inCurrentRoom || inRoom ? 'opacity-100' : 'opacity-0 group-hover:opacity-70'}`
         }
       />

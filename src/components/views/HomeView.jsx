@@ -22,6 +22,7 @@ import HomeExplore from './home/HomeExplore'
 import AmigosView from './AmigosView'
 import { useNotifications } from '../../features/notifications'
 import { usePublicSpacesCache } from '../../shared/media/usePublicSpacesCache'
+import { PersistentTabPanel } from '../../shared/motion/Transitions.jsx'
 
 const ALL_TABS = ['para-voce', 'amigos', 'mensagens', 'eventos']
 
@@ -142,28 +143,13 @@ export default function HomeView({
 
 function TabPane({ active, children }) {
   return (
-    <div
+    <PersistentTabPanel
+      active={active}
       className="absolute inset-0 h-full min-h-0"
-      style={{
-        visibility: active ? 'visible' : 'hidden',
-        pointerEvents: active ? 'auto' : 'none',
-        zIndex: active ? 1 : 0,
-      }}
-      aria-hidden={!active}
+      style={{ zIndex: active ? 1 : 0 }}
     >
-      {active ? (
-        <motion.div
-          className="h-full min-h-0"
-          initial={{ opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-        >
-          {children}
-        </motion.div>
-      ) : (
-        children
-      )}
-    </div>
+      {children}
+    </PersistentTabPanel>
   )
 }
 

@@ -5,10 +5,12 @@
 import { useEffect, useState, lazy, Suspense, useCallback, useMemo, useRef } from 'react'
 import { PanelLeftOpen, PanelRightOpen } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { DrawerPresence, ViewTransition } from '../shared/motion/Transitions.jsx'
 
 import ErrorBoundary from '../components/ErrorBoundary'
 import SpacesRail from '../components/SpacesRail'
 import SpaceContextPanel from '../components/layout/SpaceContextPanel'
+import SpaceExperienceModal from '../features/spaces/components/SpaceExperienceModal'
 import HomeNavPanel from '../components/layout/HomeNavPanel'
 import HomeAside from '../components/layout/HomeAside'
 import { useFriends } from '../features/people/hooks/useFriends'
@@ -16,7 +18,7 @@ import SpaceHome from '../components/views/SpaceHome'
 import VoiceActiveBar from '../features/rooms/views/voice/components/VoiceActiveBar'
 import { nextEventAcrossSpaces, aggregateUpcomingEvents } from '../components/views/home/homeData'
 
-import { useCurrentSpace, useSpacesList, isSpaceInRail, spaceTokens, ensureFullSpaceIcons } from '../features/spaces'
+import { useCurrentSpace, useSpacesList, isSpaceInRail, spaceTokens, ensureFullSpaceIcons, getSpaceExperience } from '../features/spaces'
 import { useSpaceFonts } from '../features/spaces/hooks/useSpaceFonts'
 import { useAllEventRsvps } from '../features/spaces/hooks/useAllEventRsvps'
 import { parseSpaceInvite } from '../features/spaces/model/spaceInvite'
@@ -123,6 +125,7 @@ export default function AppShell({ account }) {
   const [roomEditor, setRoomEditor] = useState(null)
   const [showSpaceCreator, setShowSpaceCreator] = useState(false)
   const [showSpaceHub, setShowSpaceHub] = useState(false)
+  const [showSpaceExperience, setShowSpaceExperience] = useState(false)
   const [homeTab, setHomeTab] = useState('para-voce')
   const pendingHomeEventsRef = useRef(null)
   const [inviteRoom, setInviteRoom] = useState(null)
@@ -159,6 +162,7 @@ export default function AppShell({ account }) {
   // overview/events beat the live call in the main pane (see browsingSpacePage).
   useEffect(() => {
     setSelectedRoom(null)
+    setShowSpaceExperience(false)
     if (pendingHomeEventsRef.current && pendingHomeEventsRef.current === currentSpace?.id) {
       pendingHomeEventsRef.current = null
       setActiveView('events')
@@ -381,6 +385,17 @@ export default function AppShell({ account }) {
   }, [leaveCall, setSelectedRoom, clearSpace])
 
   const rootTokens = useMemo(() => spaceTokens(currentSpace), [currentSpace])
+  const [spaceExperience, setSpaceExperience] = useState(() => getSpaceExperience(null))
+
+  useEffect(() => {
+    const refresh = () => setSpaceExperience(getSpaceExperience(currentSpace?.id))
+    refresh()
+    const onPreference = (event) => {
+      if (!event.detail?.spaceId || event.detail.spaceId === currentSpace?.id) refresh()
+    }
+    window.addEventListener('voicecraft:space-preference', onPreference)
+    return () => window.removeEventListener('voicecraft:space-preference', onPreference)
+  }, [currentSpace?.id])
 
   const handleSignOut = useCallback(async () => {
     try { await signOutAccount() } catch {}
@@ -543,7 +558,12 @@ export default function AppShell({ account }) {
       currentSpaceId={currentSpace?.id || null}
       currentRoomId={selectedRoom?.id || currentRoom?.id || null}
     >
-    <div className="vc-space-shell flex h-full min-h-0 bg-canvas overflow-hidden text-strong" style={rootTokens}>
+    <div
+      className="vc-space-shell flex h-full min-h-0 bg-canvas overflow-hidden text-strong"
+      style={rootTokens}
+      data-space-density={spaceExperience.density}
+      data-space-material={spaceExperience.material}
+    >
       {/* Panel 1: Spaces rail */}
       <SpacesRail
         compact={compactRail}
@@ -565,24 +585,23 @@ export default function AppShell({ account }) {
       <div className="relative flex-1 min-w-0 min-h-0 flex">
       <div className={`flex flex-1 min-w-0 min-h-0 ${showAccount ? 'invisible pointer-events-none absolute inset-0' : ''}`}>
 
-      {/* Panel 2: Space contextual panel — docked on wide screens,
+      {/* Panel 2: Space contextual panel ? docked on wide screens,
           overlay drawer when the window (or phone) is too narrow. */}
-      {panelVisible && overlayNav && (
-        <button
-          type="button"
-          aria-label="Fechar painel do Space"
-          className="absolute inset-0 z-40 bg-black/50"
-          onClick={togglePanel}
-        />
-      )}
-      {panelVisible && (
-        <div
-          className={
-            overlayNav
-              ? 'absolute left-0 top-0 z-50 h-full w-[min(280px,88vw)] shadow-2xl animate-fade-in-left vc-side-shell'
-              : 'vc-side-shell w-[min(280px,32vw)] min-w-[220px] max-w-[280px] shrink-0 h-full animate-fade-in-left'
-          }
-        >
+      <DrawerPresence
+        open={panelVisible}
+        side="left"
+        overlay={overlayNav}
+        onBackdrop={togglePanel}
+        backdropLabel="Fechar painel do Space"
+        backdropClassName="absolute inset-0 bg-black/50"
+        panelAs={motion.div}
+        presenceKey="space-nav"
+        panelClassName={
+          overlayNav
+            ? 'absolute left-0 top-0 h-full w-[min(280px,88vw)] shadow-2xl vc-side-shell'
+            : 'vc-side-shell w-[min(280px,32vw)] min-w-[220px] max-w-[280px] shrink-0 h-full'
+        }
+      >
           <SpaceContextPanel
             space={currentSpace}
             activeView={activeView}
@@ -615,11 +634,10 @@ export default function AppShell({ account }) {
             onCollapse={togglePanel}
             onInvite={handleOpenInvite}
             onOpenSettings={() => setShowSettingsModal(true)}
+            onOpenExperience={() => setShowSpaceExperience(true)}
             optimisticFirstRoom={optimisticFirstRoom}
           />
-        </div>
-      )}
-
+      </DrawerPresence>
       {showHomeChrome && !showAccount && (
         <div className="w-[min(260px,36vw)] min-w-[200px] max-w-[280px] shrink-0 h-full animate-fade-in-left">
           <HomeNavPanel
@@ -701,16 +719,11 @@ export default function AppShell({ account }) {
           </div>
         )}
 
-        <AnimatePresence mode="sync">
           {currentRoom && (
-            <motion.div
+            <ViewTransition
               key={`voice-${currentRoom.id}`}
-              initial={{ opacity: 1, scale: 0.995 }}
-              animate={{ opacity: showVoiceFullscreen ? 1 : 0, scale: 1 }}
-              exit={{ opacity: 1, scale: 0.995 }}
-              transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-              className={showVoiceFullscreen ? 'absolute inset-0' : 'absolute inset-0 invisible pointer-events-none'}
-              aria-hidden={!showVoiceFullscreen}
+              active={showVoiceFullscreen}
+              className="absolute inset-0"
             >
               <ErrorBoundary key={currentRoom.id}>
                 <Suspense fallback={<ViewLoader />}>
@@ -729,24 +742,17 @@ export default function AppShell({ account }) {
                   />
                 </Suspense>
               </ErrorBoundary>
-            </motion.div>
+            </ViewTransition>
           )}
 
           {textRoomAlive && keptTextRooms.map((kept) => {
             if (!kept?.id || kept.type === 'voice') return null
             const visible = activeTextId === kept.id
             return (
-              <motion.div
+              <ViewTransition
                 key={`conversation-${kept.id}`}
-                initial={false}
-                animate={{ opacity: visible ? 1 : 0 }}
-                transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-                className={
-                  visible
-                    ? 'absolute inset-0 flex flex-col min-h-0 z-[1] overflow-hidden'
-                    : 'absolute inset-0 flex flex-col min-h-0 z-[1] overflow-hidden invisible pointer-events-none'
-                }
-                aria-hidden={!visible}
+                active={visible}
+                className="absolute inset-0 flex flex-col min-h-0 z-[1] overflow-hidden"
               >
                 <ErrorBoundary key={kept.id} className="h-full min-h-0 flex flex-col">
                   <Suspense fallback={<ViewLoader />}>
@@ -765,25 +771,15 @@ export default function AppShell({ account }) {
                     />
                   </Suspense>
                 </ErrorBoundary>
-              </motion.div>
+              </ViewTransition>
             )
           })}
 
           {(currentSpace || !currentRoom) && (
-            <motion.div
+            <ViewTransition
               key={`space-page-${currentSpace?.id || 'home'}`}
-              initial={false}
-              animate={{
-                opacity: showSpacePage ? 1 : 0,
-                y: showSpacePage ? 0 : 4,
-              }}
-              transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-              className={
-                showSpacePage
-                  ? 'absolute inset-0 min-h-0 flex flex-col overflow-hidden z-[1]'
-                  : 'absolute inset-0 min-h-0 flex flex-col overflow-hidden z-[1] invisible pointer-events-none'
-              }
-              aria-hidden={!showSpacePage}
+              active={showSpacePage}
+              className="absolute inset-0 min-h-0 flex flex-col overflow-hidden z-[1]"
             >
               {showHomeVoiceBar && (
                 <div className="shrink-0 border-b border-line">
@@ -845,29 +841,26 @@ export default function AppShell({ account }) {
                   optimisticFirstRoom={optimisticFirstRoom}
                 />
               )}
-            </motion.div>
+            </ViewTransition>
           )}
-        </AnimatePresence>
       </main>
 
-      {/* Panel 3.5: People (right) — same panel for voice and text. */}
-      {!peoplePanelCollapsed && currentSpace && overlayPeople && (
-        <button
-          type="button"
-          aria-label="Fechar painel de pessoas"
-          className="absolute inset-0 z-40 bg-black/50"
-          onClick={() => setPeoplePanelCollapsed(true)}
-        />
-      )}
-      {currentSpace && !peoplePanelCollapsed && (
-        <div
-          key={`people-panel-${currentSpace.id}`}
-          className={
-            overlayPeople
-              ? 'absolute right-0 top-0 z-50 h-full w-[min(280px,88vw)] shadow-2xl animate-fade-in-right vc-people-shell'
-              : 'vc-people-shell w-[min(260px,28vw)] min-w-[220px] max-w-[280px] shrink-0 h-full animate-fade-in-right'
-          }
-        >
+      {/* Panel 3.5: People (right) ? same panel for voice and text. */}
+      <DrawerPresence
+        open={!!currentSpace && !peoplePanelCollapsed}
+        side="right"
+        overlay={overlayPeople}
+        onBackdrop={() => setPeoplePanelCollapsed(true)}
+        backdropLabel="Fechar painel de pessoas"
+        backdropClassName="absolute inset-0 bg-black/50"
+        panelAs={motion.div}
+        presenceKey="people-panel"
+        panelClassName={
+          overlayPeople
+            ? 'absolute right-0 top-0 h-full w-[min(280px,88vw)] shadow-2xl vc-people-shell'
+            : 'vc-people-shell w-[min(260px,28vw)] min-w-[220px] max-w-[280px] shrink-0 h-full'
+        }
+      >
           <Suspense fallback={null}>
             <PeoplePanel
               space={currentSpace}
@@ -891,9 +884,7 @@ export default function AppShell({ account }) {
               }
             />
           </Suspense>
-        </div>
-      )}
-
+      </DrawerPresence>
       {showHomeChrome && !showAccount && !overlayPeople && (
         <div
           key="home-aside"
@@ -968,6 +959,11 @@ export default function AppShell({ account }) {
           onDelete={(room) => deleteRoom(room.id)}
         />
       </Suspense>
+      <SpaceExperienceModal
+        open={showSpaceExperience}
+        space={currentSpace}
+        onClose={() => setShowSpaceExperience(false)}
+      />
       {showSettingsModal && (
         <Suspense fallback={null}>
           <SettingsModal

@@ -17,6 +17,7 @@ import { PersonRichCard } from '../../features/people/components/PersonRichCard'
 import { useFriends } from '../../features/people/hooks/useFriends'
 import { getSharedSignaling } from '../../shared/connection/useSignaling'
 import { flashToast } from '../../shared/utils/toast'
+import { TabIndicator, TabPanelSwap } from '../../shared/motion/Transitions.jsx'
 import { pageVariants, sectionVariants, staggerContainer, staggerItem } from './home/homeMotion'
 
 const TABS = [
@@ -109,13 +110,17 @@ export default function AmigosView({ onOpenFriend }) {
                 type="button"
                 onClick={() => setTab(t.id)}
                 className={
-                  'shrink-0 inline-flex items-center gap-1.5 h-10 px-3 text-[13px] font-semibold border-b-2 transition-colors ' +
-                  (active
-                    ? 'text-[#60a5fa] border-[#3b82f6]'
-                    : 'text-muted border-transparent hover:text-strong')
+                  'relative shrink-0 inline-flex items-center gap-1.5 h-10 px-3 text-[13px] font-semibold border-b-2 border-transparent transition-colors ' +
+                  (active ? 'text-[#60a5fa]' : 'text-muted hover:text-strong')
                 }
               >
-                {t.label}
+                {active && (
+                  <TabIndicator
+                    layoutId="friends-tab-indicator"
+                    className="absolute left-2 right-2 bottom-0 h-0.5 rounded-full bg-[#3b82f6]"
+                  />
+                )}
+                <span className="relative">{t.label}</span>
                 <span
                   className={
                     'min-w-[20px] h-5 px-1.5 inline-flex items-center justify-center rounded-full text-[10.5px] font-bold ' +
@@ -132,7 +137,8 @@ export default function AmigosView({ onOpenFriend }) {
         </motion.nav>
 
         {/* Content */}
-        <motion.div variants={staggerContainer} initial="initial" animate="animate" className="mt-5 space-y-6">
+        <TabPanelSwap activeKey={tab} className="mt-5">
+          <motion.div variants={staggerContainer} initial="initial" animate="animate" className="space-y-6">
           {incoming.length > 0 && (tab === 'pendentes' || tab === 'todos') && (
             <motion.section variants={sectionVariants}>
               <PendingSection
@@ -206,7 +212,8 @@ export default function AmigosView({ onOpenFriend }) {
               </div>
             </motion.section>
           )}
-        </motion.div>
+          </motion.div>
+        </TabPanelSwap>
 
         {/* Sent requests (collapsed) */}
         {outgoing.length > 0 && (

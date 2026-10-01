@@ -9,11 +9,12 @@
  * (e-mail + Google, password reset, keep-signed-in, system-browser fallback).
  */
 import { useState } from 'react'
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
+import { AnimatePresence, motion } from 'framer-motion'
 import {
   Mail, Lock, Eye, EyeOff, ArrowRight, Mic2, AudioLines, Shield,
 } from 'lucide-react'
 import { EASE_OUT, EASE_SPRING_SOFT } from '../../../shared/motion/presets'
+import { useMotionPolicy } from '../../../shared/motion/MotionPolicyProvider'
 import {
   authErrorMessage,
   createAccountWithEmail,
@@ -116,7 +117,9 @@ function Field({
 }
 
 export default function LoginScreenVoice() {
-  const reduce = useReducedMotion()
+  const policy = useMotionPolicy()
+  const motionDisabled = policy.reducedMotion || !policy.allowFeedback
+  const allowContinuous = policy.allowContinuous
   const [mode, setMode] = useState('signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -170,7 +173,7 @@ export default function LoginScreenVoice() {
     })
   }
 
-  const enter = (delay = 0, y = 16) => reduce
+  const enter = (delay = 0, y = 16) => motionDisabled
     ? { initial: false, animate: { opacity: 1 } }
     : {
         initial: { opacity: 0, y },
@@ -188,19 +191,19 @@ export default function LoginScreenVoice() {
         <motion.div
           className="absolute -left-[14%] -top-[24%] w-[72%] h-[80%] rounded-full blur-[110px]"
           style={{ backgroundColor: 'rgba(10,102,255,0.32)' }}
-          animate={reduce ? undefined : { scale: [1, 1.08, 1], opacity: [0.55, 0.85, 0.55] }}
+          animate={allowContinuous ? { scale: [1, 1.08, 1], opacity: [0.55, 0.85, 0.55] } : undefined}
           transition={{ duration: 14, repeat: Infinity, ease: 'easeInOut' }}
         />
         <motion.div
           className="absolute left-[6%] top-[34%] w-[44%] h-[55%] rounded-full blur-[100px]"
           style={{ backgroundColor: 'rgba(87,190,255,0.22)' }}
-          animate={reduce ? undefined : { scale: [1, 1.06, 0.98, 1], x: [0, 16, -8, 0] }}
+          animate={allowContinuous ? { scale: [1, 1.06, 0.98, 1], x: [0, 16, -8, 0] } : undefined}
           transition={{ duration: 18, repeat: Infinity, ease: 'easeInOut' }}
         />
         <motion.div
           className="absolute -right-[12%] -bottom-[20%] w-[52%] h-[60%] rounded-full blur-[120px]"
           style={{ backgroundColor: 'rgba(10,102,255,0.18)' }}
-          animate={reduce ? undefined : { scale: [1, 1.1, 1], opacity: [0.45, 0.7, 0.45] }}
+          animate={allowContinuous ? { scale: [1, 1.1, 1], opacity: [0.45, 0.7, 0.45] } : undefined}
           transition={{ duration: 16, repeat: Infinity, ease: 'easeInOut' }}
         />
       </div>
@@ -241,7 +244,7 @@ export default function LoginScreenVoice() {
               <br />
               <motion.span
                 className="inline-block"
-                animate={reduce ? undefined : { opacity: [1, 0.78, 1] }}
+                animate={allowContinuous ? { opacity: [1, 0.78, 1] } : undefined}
                 transition={{ duration: 3.6, repeat: Infinity, ease: 'easeInOut' }}
                 style={{ color: VOICE_MIST }}
               >
@@ -297,9 +300,9 @@ export default function LoginScreenVoice() {
         {/* Card */}
         <section className="flex items-center justify-center min-h-0">
           <motion.div
-            initial={reduce ? false : { opacity: 0, y: 24, scale: 0.97 }}
+            initial={motionDisabled ? false : { opacity: 0, y: 24, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            transition={reduce ? { duration: 0 } : { ...EASE_SPRING_SOFT, delay: 0.12 }}
+            transition={motionDisabled ? { duration: 0 } : { ...EASE_SPRING_SOFT, delay: 0.12 }}
             className="w-full max-w-[420px] rounded-[24px] border shadow-[0_30px_80px_-24px_rgba(0,0,0,0.75)] backdrop-blur-2xl px-6 sm:px-8 py-7"
             style={{
               backgroundColor: VOICE_GRAPHITE_ALPHA,
@@ -350,9 +353,9 @@ export default function LoginScreenVoice() {
             <AnimatePresence mode="wait">
               <motion.div
                 key={mode}
-                initial={reduce ? false : { opacity: 0, y: 8 }}
+                initial={motionDisabled ? false : { opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={reduce ? undefined : { opacity: 0, y: -6 }}
+                exit={motionDisabled ? undefined : { opacity: 0, y: -6 }}
                 transition={{ duration: 0.22, ease: EASE_OUT }}
               >
                 <h2
@@ -396,7 +399,7 @@ export default function LoginScreenVoice() {
                 >
                   {mode === tab.id && (
                     <motion.span
-                      layoutId={reduce ? undefined : 'voice-login-tab'}
+                      layoutId={motionDisabled ? undefined : 'voice-login-tab'}
                       className="absolute inset-0 rounded-lg"
                       style={{ backgroundColor: VOICE_BLUE }}
                       transition={EASE_SPRING_SOFT}
@@ -518,8 +521,8 @@ export default function LoginScreenVoice() {
               <motion.button
                 type="submit"
                 disabled={!!busy}
-                whileHover={reduce || busy ? undefined : { scale: 1.015, y: -1 }}
-                whileTap={reduce || busy ? undefined : { scale: 0.98 }}
+                whileHover={motionDisabled || busy ? undefined : { scale: 1.015, y: -1 }}
+                whileTap={motionDisabled || busy ? undefined : { scale: 0.98 }}
                 className="w-full h-12 rounded-xl text-[14.5px] font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-60"
                 style={{
                   backgroundColor: VOICE_BLUE,
@@ -547,8 +550,8 @@ export default function LoginScreenVoice() {
               type="button"
               onClick={submitGoogle}
               disabled={!!busy}
-              whileHover={reduce || busy ? undefined : { scale: 1.015, y: -1 }}
-              whileTap={reduce || busy ? undefined : { scale: 0.98 }}
+              whileHover={motionDisabled || busy ? undefined : { scale: 1.015, y: -1 }}
+              whileTap={motionDisabled || busy ? undefined : { scale: 0.98 }}
               className="w-full h-11 rounded-xl border text-[13.5px] font-semibold inline-flex items-center justify-center gap-2.5 disabled:opacity-60"
               style={{
                 backgroundColor: 'rgba(255,255,255,0.04)',

@@ -18,11 +18,11 @@ export function SpeakingIndicator({ active, reducedMotion = false }) {
         <span
           key={i}
           className={[
-            'w-[3px] rounded-full bg-accent',
-            reducedMotion ? '' : 'vc-speaking-pulse',
+            'vc-wave-bar',
+            reducedMotion ? 'animation-none' : '',
           ].join(' ')}
           style={reducedMotion
-            ? { height: '100%' }
+            ? { transform: 'scaleY(1)' }
             : { animationDelay: `${i * 90}ms` }
           }
         />

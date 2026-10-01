@@ -1,5 +1,8 @@
 import { useEffect, useState, useCallback } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { AnimatePresence, IntentMotion, motion } from '../../../shared/motion/Motion.jsx'
+import { MOTION_DURATION, MOTION_EASING, MOTION_INTENTS } from '../../../shared/motion/tokens.js'
+import { useMotionPolicy } from '../../../shared/motion/MotionPolicyProvider.jsx'
+import { resolveOverlayMotion } from '../../../shared/motion/overlayPolicy.js'
 import { Download, RefreshCw, Sparkles, X } from 'lucide-react'
 
 /**
@@ -9,6 +12,7 @@ import { Download, RefreshCw, Sparkles, X } from 'lucide-react'
 export default function UpdateToast() {
   const [state, setState] = useState(null) // null | { status, version, percent, message }
   const [dismissed, setDismissed] = useState(false)
+  const motionPolicy = useMotionPolicy()
 
   useEffect(() => {
     const api = typeof window !== 'undefined' ? window.electronAPI?.updater : null
@@ -64,13 +68,11 @@ export default function UpdateToast() {
   return (
     <AnimatePresence>
       {visible && (
-        <motion.div
+        <IntentMotion
           key="update-toast"
-          initial={{ opacity: 0, y: 18, scale: 0.96, filter: 'blur(4px)' }}
-          animate={{ opacity: 1, y: 0, scale: 1, filter: 'blur(0px)' }}
-          exit={{ opacity: 0, y: 10, scale: 0.98, filter: 'blur(2px)' }}
-          transition={{ duration: 0.38, ease: [0.16, 1, 0.3, 1] }}
-          className="fixed bottom-5 right-5 z-[60] w-[min(340px,calc(100vw-2.5rem))]"
+          intent={MOTION_INTENTS.feedback}
+          {...resolveOverlayMotion('center', motionPolicy.reducedMotion)}
+          className="vc-layer-toast fixed bottom-5 right-5 w-[min(340px,calc(100vw-2.5rem))]"
           role="status"
           aria-live="polite"
         >
@@ -163,10 +165,14 @@ export default function UpdateToast() {
                       <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
                         <motion.div
                           className="h-full rounded-full"
-                          style={{ background: 'var(--space-accent)' }}
+                          style={{
+                            width: '100%',
+                            transformOrigin: 'left center',
+                            background: 'var(--space-accent)',
+                          }}
                           initial={false}
-                          animate={{ width: `${Math.max(percent, percent > 0 ? 4 : 0)}%` }}
-                          transition={{ duration: 0.35, ease: 'easeOut' }}
+                          animate={{ scaleX: Math.max(percent, percent > 0 ? 4 : 0) / 100 }}
+                          transition={{ duration: MOTION_DURATION.base, ease: MOTION_EASING.out }}
                         />
                       </div>
                     </div>
@@ -190,7 +196,7 @@ export default function UpdateToast() {
               </div>
             </div>
           </div>
-        </motion.div>
+        </IntentMotion>
       )}
     </AnimatePresence>
   )

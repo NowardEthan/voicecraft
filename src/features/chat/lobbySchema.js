@@ -27,7 +27,7 @@ export const LOBBY_AUTHOR_MODES = [
   { id: 'me', label: 'Eu' },
   { id: 'member', label: 'Membro' },
   { id: 'system', label: 'Sistema' },
-  { id: 'custom', label: 'Custom' },
+  { id: 'custom', label: 'Personalizado' },
 ]
 
 /** Compact avatar banner — smaller than announce cover (96). */

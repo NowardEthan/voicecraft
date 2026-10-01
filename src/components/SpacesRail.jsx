@@ -8,7 +8,6 @@
  *   - Account avatar at the bottom (Conta Lunar)
  */
 import { useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
 import { Home, Plus, Sparkles, LogIn } from 'lucide-react'
 import SpaceAvatar from './SpaceAvatar'
@@ -18,6 +17,7 @@ import { warmLikelyNext } from '../shared/media/useAppWarmup'
 import { warmImage } from '../shared/media/imageWarm'
 import { resolveSpaceCover } from '../features/spaces/model/spaceCover'
 import { Appear, AppearGroup, AppearItem } from '../shared/motion/Appear'
+import { AnchoredOverlay, TooltipOverlay } from '../shared/motion/AnchoredOverlay.jsx'
 
 export default function GlobalRail({
   spaces = [],
@@ -63,20 +63,13 @@ export default function GlobalRail({
   }
 
   useEffect(() => {
-    if (!menuOpen) return
-    const onDoc = (e) => {
-      if (menuRef.current?.contains(e.target) || addBtnRef.current?.contains(e.target)) return
-      setMenuOpen(false)
-    }
-    const onKey = (e) => { if (e.key === 'Escape') setMenuOpen(false) }
+    if (!menuOpen) return undefined
     const onReposition = () => placeMenu()
-    document.addEventListener('mousedown', onDoc)
-    window.addEventListener('keydown', onKey)
     window.addEventListener('resize', onReposition)
+    window.addEventListener('scroll', onReposition, true)
     return () => {
-      document.removeEventListener('mousedown', onDoc)
-      window.removeEventListener('keydown', onKey)
       window.removeEventListener('resize', onReposition)
+      window.removeEventListener('scroll', onReposition, true)
     }
   }, [menuOpen])
 
@@ -135,7 +128,8 @@ export default function GlobalRail({
             <AppearItem
               key={space.id}
               as={motion.div}
-              className="relative shrink-0 p-1"
+              className="vc-rail-space-slot relative shrink-0 p-1"
+              data-active={active || undefined}
               onMouseEnter={(e) => {
                 const rect = e.currentTarget.getBoundingClientRect()
                 setHoveredId(space.id)
@@ -208,13 +202,17 @@ export default function GlobalRail({
         </AppearItem>
       </AppearGroup>
 
-      {menuOpen && createPortal(
-        <div
-          ref={menuRef}
-          role="menu"
-          className="vc-space-floating fixed z-[80] w-[220px] rounded-2xl border border-white/[0.08] bg-[#12141a] shadow-2xl p-1.5 animate-fade-in"
-          style={{ top: menuPos.top, left: menuPos.left }}
-        >
+      <AnchoredOverlay
+        open={menuOpen}
+        ref={menuRef}
+        anchorRef={addBtnRef}
+        onClose={() => setMenuOpen(false)}
+        placement="right"
+        initialFocus
+        role="menu"
+        className="vc-space-floating fixed w-[220px] rounded-2xl border border-white/[0.08] bg-[#12141a] shadow-2xl p-1.5"
+        style={{ top: menuPos.top, left: menuPos.left }}
+      >
           <p className="px-2.5 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
             Spaces
           </p>
@@ -252,20 +250,17 @@ export default function GlobalRail({
               <span className="block text-[11px] text-muted">Convite ou Spaces públicos</span>
             </span>
           </button>
-        </div>,
-        document.body,
-      )}
+      </AnchoredOverlay>
 
-      {hoveredSpace && typeof document !== 'undefined' && createPortal(
-        <div
-          className="fixed z-[70] vc-rail-tooltip pointer-events-none -translate-y-1/2"
-          style={{ top: hoverPos.top, left: hoverPos.left }}
-        >
+      <TooltipOverlay
+        open={!!hoveredSpace}
+        placement="right"
+        className="fixed vc-rail-tooltip pointer-events-none -translate-y-1/2"
+        style={{ top: hoverPos.top, left: hoverPos.left }}
+      >
           <span className="vc-rail-tooltip__dot" aria-hidden />
-          {hoveredSpace.name}
-        </div>,
-        document.body,
-      )}
+          {hoveredSpace?.name || ''}
+      </TooltipOverlay>
 
       {onOpenAccount && (
         <Appear delay={0.12} y={8} className="shrink-0 mt-auto pb-1 pt-2">

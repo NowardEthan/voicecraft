@@ -368,7 +368,7 @@ export default function LobbySettings({
               onClick={() => iconUploadRef.current?.click()}
               className="text-[11px] text-muted hover:text-ink inline-flex items-center gap-1"
             >
-              <Upload size={11} /> Upload PNG
+              <Upload size={11} /> Enviar PNG
             </button>
             {draft.iconImage && (
               <button
@@ -557,7 +557,7 @@ export default function LobbySettings({
                 onClick={() => avatarUploadRef.current?.click()}
                 className="text-[11px] text-muted hover:text-ink inline-flex items-center gap-1"
               >
-                <Upload size={11} /> Upload PNG
+                <Upload size={11} /> Enviar PNG
               </button>
               {(draft.authorPhoto || draft.authorIconValue || draft.authorIcon) && (
                 <button
@@ -593,7 +593,7 @@ export default function LobbySettings({
         <Section title="Cores">
           <div className="grid grid-cols-2 gap-2">
             <label className="block space-y-1 min-w-0">
-              <span className="text-[10.5px] text-muted">Badge</span>
+              <span className="text-[10.5px] text-muted">Selo</span>
               <input
                 value={draft.badge}
                 onChange={(e) => patch({ badge: e.target.value })}
@@ -601,7 +601,7 @@ export default function LobbySettings({
               />
             </label>
             <label className="block space-y-1">
-              <span className="text-[10.5px] text-muted">Cor do badge</span>
+              <span className="text-[10.5px] text-muted">Cor do selo</span>
               <input
                 type="color"
                 value={draft.badgeColor}
@@ -715,7 +715,7 @@ export default function LobbySettings({
             </div>
             {captionPreview ? (
               <p className="text-[10.5px] text-muted pt-0.5">
-                Preview:{' '}
+                Prévia:{' '}
                 <span
                   className="text-ink/85 announce-html lobby-html"
                   dangerouslySetInnerHTML={{ __html: captionPreview }}
@@ -729,7 +729,7 @@ export default function LobbySettings({
       {draft.enabled && (
         <div className="space-y-1.5">
           <div className="text-[10.5px] font-semibold uppercase tracking-wide text-muted px-0.5">
-            Preview
+            Prévia
           </div>
           <div className="rounded-xl border border-dashed border-white/10 overflow-hidden bg-[#0d0f14] -mx-0.5">
             <LobbyJoinCard
@@ -764,8 +764,11 @@ export default function LobbySettings({
           onClick={handleTestPost}
           className="h-9 px-3 rounded-xl border border-line text-[12px] text-ink disabled:opacity-40"
         >
-          Postar teste
+          Postar teste real
         </button>
+        <p className="basis-full text-[10.5px] text-muted leading-relaxed">
+          Cria e persiste um card real neste canal; ele não é apagado automaticamente.
+        </p>
         <button
           type="button"
           disabled={saving}

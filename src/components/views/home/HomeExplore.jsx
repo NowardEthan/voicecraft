@@ -180,7 +180,7 @@ export default function HomeExplore({
                   type="button"
                   onClick={() => setChipId(c.id)}
                   className={
-                    'shrink-0 h-9 px-3.5 rounded-full text-[12.5px] font-semibold inline-flex items-center gap-1.5 border transition-all ' +
+                    'shrink-0 h-9 px-3.5 rounded-full text-[12.5px] font-semibold inline-flex items-center gap-1.5 border transition-[color,background-color,border-color,box-shadow,opacity,transform,filter] ' +
                     (active
                       ? 'bg-[#3b82f6] border-[#3b82f6] text-white shadow-[0_8px_24px_-8px_rgba(59,130,246,0.7)]'
                       : 'bg-transparent border-white/[0.1] text-muted hover:text-strong hover:border-white/25')
@@ -272,7 +272,7 @@ export default function HomeExplore({
                               setFeaturedIdx(i)
                             }}
                             className={
-                              'w-1.5 h-1.5 rounded-full transition-all ' +
+                              'w-1.5 h-1.5 rounded-full transition-[color,background-color,border-color,box-shadow,opacity,transform,filter] ' +
                               (i === safeFeaturedIdx ? 'bg-white w-4' : 'bg-white/35')
                             }
                           />

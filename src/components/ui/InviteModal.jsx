@@ -170,7 +170,7 @@ export default function InviteModal({
                 type="button"
                 onClick={handleCopyLink}
                 className={[
-                  'px-3.5 py-2.5 rounded-xl font-semibold text-[12.5px] inline-flex items-center gap-1.5 shrink-0 transition-all',
+                  'px-3.5 py-2.5 rounded-xl font-semibold text-[12.5px] inline-flex items-center gap-1.5 shrink-0 transition-[color,background-color,border-color,box-shadow,opacity,transform,filter]',
                   copied === 'link'
                     ? 'bg-positive/15 text-positive border border-positive/30'
                     : 'text-white border border-transparent',

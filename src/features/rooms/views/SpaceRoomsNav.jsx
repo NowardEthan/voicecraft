@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Plus, Pencil, Trash2, ChevronDown, ChevronRight, GripVertical,
-  MoreHorizontal, Move, ArrowDown,
+  MoreHorizontal, Move, ArrowDown, Rows3, Layers3, SearchX, Hash, Volume2,
 } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
+import { MeasuredDisclosure } from '../../../shared/motion/Transitions.jsx'
 import { RoomIconMark, roomAccentColor } from '../components/RoomIconMark'
 import { resolveLabeledNameStyle } from '../model/roomCosmetics'
 import { RoomUnreadPill } from '../../notifications'
@@ -25,6 +26,21 @@ import { flashToast } from '../../../shared/utils/toast'
 import { Appear, AppearGroup, AppearList, AppearItem } from '../../../shared/motion/Appear'
 import { prefetchLiveKitToken, warmLiveKitClient } from './voice/livekitPrefetch'
 import { getSharedSignaling } from '../../../shared/connection/useSignaling'
+import { PersonAvatar } from '../../people'
+import { getSpaceDensity, setSpaceDensity } from '../../spaces/model/spacePreferences'
+
+function readDraftRoomIds(accountUid, spaceId) {
+  if (!accountUid || !spaceId || typeof localStorage === 'undefined') return new Set()
+  try {
+    const parsed = JSON.parse(localStorage.getItem(`voicecraft:l1:${accountUid}`) || '{}')
+    const prefix = `${spaceId}:`
+    return new Set(Object.entries(parsed?.drafts || {})
+      .filter(([key, value]) => key.startsWith(prefix) && String(value || '').trim())
+      .map(([key]) => key.slice(prefix.length)))
+  } catch {
+    return new Set()
+  }
+}
 
 function prefetchVoiceJoin(space, room) {
   if (!space?.id || !room?.id) return
@@ -47,6 +63,8 @@ function prefetchVoiceJoin(space, room) {
 export function SpaceRoomsNav({
   space,
   rooms = [],
+  members = [],
+  accountUid = null,
   filterQuery = '',
   currentRoomId,
   selectedRoomId,
@@ -59,11 +77,32 @@ export function SpaceRoomsNav({
   onDeleteRoom,
   confirmDeleteId,
   setConfirmDeleteId,
+  onClearFilter,
 }) {
   const [groups, setGroups] = useState([])
   const [collapsed, setCollapsed] = useState({})
   const [groupModal, setGroupModal] = useState(null) // { mode: 'create'|'edit', group?: object }
   const [busy, setBusy] = useState(false)
+  const [density, setDensity] = useState(() => getSpaceDensity(space?.id))
+  const [draftRoomIds, setDraftRoomIds] = useState(() => readDraftRoomIds(accountUid, space?.id))
+
+  useEffect(() => {
+    const refresh = () => setDraftRoomIds(readDraftRoomIds(accountUid, space?.id))
+    refresh()
+    window.addEventListener('voicecraft:drafts-changed', refresh)
+    window.addEventListener('storage', refresh)
+    return () => {
+      window.removeEventListener('voicecraft:drafts-changed', refresh)
+      window.removeEventListener('storage', refresh)
+    }
+  }, [accountUid, space?.id])
+
+  useEffect(() => { setDensity(getSpaceDensity(space?.id)) }, [space?.id])
+  const toggleDensity = () => {
+    const next = density === 'compact' ? 'comfortable' : 'compact'
+    setDensity(next)
+    setSpaceDensity(space?.id, next)
+  }
 
   useEffect(() => {
     if (!space?.id) {
@@ -156,27 +195,21 @@ export function SpaceRoomsNav({
 
   return (
     <Appear key={space?.id || 'rooms'} delay={0.08} y={6} className="px-3 pt-2 pb-3">
-      <div className="flex items-center justify-between mb-1.5 px-1 gap-1">
-        <h4 className="text-[10.5px] font-semibold text-muted uppercase tracking-[0.10em]">
-          Salas
-        </h4>
-        {canManage && (
-          <button
-            type="button"
-            onClick={() => setGroupModal({ mode: 'create' })}
-            title="Novo grupo"
-            aria-label="Novo grupo"
-            className="w-6 h-6 rounded-md inline-flex items-center justify-center text-muted hover:text-accent hover:bg-white/[0.06] transition-colors"
-          >
-            <Plus size={14} strokeWidth={2.4} />
+      <div className="vc-rooms-heading">
+        <div><h4>Salas e conversas</h4><span>{rooms.length} {rooms.length === 1 ? 'sala' : 'salas'}</span></div>
+        <div className="vc-rooms-heading__actions">
+          <button type="button" onClick={toggleDensity} title={density === 'compact' ? 'Visual confortável' : 'Visual compacto'} aria-label="Alternar densidade de salas">
+            {density === 'compact' ? <Layers3 size={13} /> : <Rows3 size={13} />}
           </button>
-        )}
+          {canManage && <button type="button" onClick={() => setGroupModal({ mode: 'create' })} title="Novo grupo" aria-label="Novo grupo"><Plus size={13} /></button>}
+          {canManage && <button type="button" onClick={() => onCreateRoom?.()} className="is-primary"><Plus size={13} /> Sala</button>}
+        </div>
       </div>
 
       {rooms.length === 0 && groups.length === 0 ? (
         <p className="text-[11.5px] text-muted px-1 py-1.5 italic">Nenhuma sala ainda.</p>
       ) : sections.length === 0 ? (
-        <p className="text-[11.5px] text-muted px-1 py-2 italic">Nenhuma sala com esse nome.</p>
+        <div className="vc-rooms-empty"><SearchX size={18} /><span>Nenhuma sala encontrada.</span>{onClearFilter && <button type="button" onClick={onClearFilter}>Limpar busca</button>}</div>
       ) : (
         <AppearGroup className="space-y-2.5" stagger={0.05} delayChildren={0.04}>
           {sections.map((section) => {
@@ -200,6 +233,8 @@ export function SpaceRoomsNav({
                       type="button"
                       onClick={() => toggleCollapse(key)}
                       className="flex-1 min-w-0 flex items-center gap-1 py-0.5 text-left"
+                      aria-expanded={!isCollapsed}
+                      aria-controls={`room-group-${key}`}
                     >
                       {isCollapsed
                         ? <ChevronRight size={11} className="text-muted shrink-0" />
@@ -222,7 +257,7 @@ export function SpaceRoomsNav({
                       <div className="flex items-center opacity-0 group-hover/header:opacity-100 focus-within:opacity-100 transition-opacity">
                         <button
                           type="button"
-                          onClick={() => onCreateRoom?.(section.group.id)}
+                          onClick={(e) => { e.stopPropagation(); onCreateRoom?.(section.group.id) }}
                           className="w-5 h-5 rounded flex items-center justify-center text-muted hover:text-accent"
                           aria-label={`Criar sala em ${section.group.name}`}
                           title="Criar sala neste grupo"
@@ -231,7 +266,7 @@ export function SpaceRoomsNav({
                         </button>
                         <button
                           type="button"
-                          onClick={() => setGroupModal({ mode: 'edit', group: section.group })}
+                          onClick={(e) => { e.stopPropagation(); setGroupModal({ mode: 'edit', group: section.group }) }}
                           className="w-5 h-5 rounded flex items-center justify-center text-muted hover:text-strong"
                           aria-label="Editar grupo"
                         >
@@ -239,7 +274,7 @@ export function SpaceRoomsNav({
                         </button>
                         <button
                           type="button"
-                          onClick={() => removeGroup(section.group.id)}
+                          onClick={(e) => { e.stopPropagation(); removeGroup(section.group.id) }}
                           className="w-5 h-5 rounded flex items-center justify-center text-muted hover:text-danger"
                           aria-label="Apagar grupo"
                         >
@@ -250,7 +285,7 @@ export function SpaceRoomsNav({
                   </div>
                 )}
 
-                {!isCollapsed && (
+                <MeasuredDisclosure open={!isCollapsed} id={`room-group-${key}`}>
                   <AppearList
                     className="space-y-1"
                     stagger={0.03}
@@ -275,6 +310,10 @@ export function SpaceRoomsNav({
                         canManage={canManage}
                         isActive={currentRoomId === room.id || selectedRoomId === room.id}
                         hasUnread={!!(space?.id && unreadByRoom[roomKey?.(space.id, room.id)])}
+                        hasDraft={draftRoomIds.has(String(room.id))}
+                        voiceMembers={(room.type === 'voice' || room.purpose === 'voice')
+                          ? members.filter((m) => m.location?.roomId === room.id)
+                          : []}
                         confirming={confirmDeleteId === room.id}
                         onSelect={() => onSelectRoom?.(room)}
                         onPrefetch={() => prefetchVoiceJoin(space, room)}
@@ -307,7 +346,7 @@ export function SpaceRoomsNav({
                       </AppearItem>
                     )}
                   </AppearList>
-                )}
+                </MeasuredDisclosure>
               </AppearItem>
             )
           })}
@@ -334,6 +373,8 @@ function RoomRow({
   canManage,
   isActive,
   hasUnread,
+  hasDraft = false,
+  voiceMembers = [],
   confirming,
   onSelect,
   onPrefetch,
@@ -348,6 +389,7 @@ function RoomRow({
 }) {
   const isOptimistic = room.id === '__optimistic__'
   const accent = roomAccentColor(room)
+  const isVoice = room.type === 'voice' || room.purpose === 'voice'
   const nameStyle = resolveLabeledNameStyle({
     nameStyle: room.nameStyle,
     fontId: room.fontId,
@@ -430,17 +472,41 @@ function RoomRow({
           <GripVertical size={11} className="text-muted/40 shrink-0 -ml-0.5 cursor-grab opacity-0 group-hover/row:opacity-100" />
         )}
         <span
+          className="w-[18px] h-[18px] flex items-center justify-center shrink-0 text-muted"
+          aria-hidden
+        >
+          {isVoice ? <Volume2 size={16} /> : <Hash size={16} />}
+        </span>
+        <span
           className="w-[18px] h-[18px] flex items-center justify-center shrink-0"
           style={{ color: accent }}
           aria-hidden
         >
-          <RoomIconMark room={room} size={16} />
+          {(room.emoji || room.icon) ? <RoomIconMark room={room} size={16} /> : null}
         </span>
         <p className="min-w-0 flex-1 text-[13px] leading-tight truncate font-medium text-strong">
           {room.name}
         </p>
+        {hasDraft && <span className="vc-room-draft" title="Há um rascunho nesta sala">Rascunho</span>}
         {!isActive && <RoomUnreadPill show={hasUnread} />}
       </button>
+
+      {voiceMembers.length > 0 && (
+        <div className="vc-room-presence" aria-label={`${voiceMembers.length} pessoas nesta sala`}>
+          {voiceMembers.slice(0, 3).map((member) => (
+            <span key={member.userId} className="vc-room-presence__person">
+              <PersonAvatar
+                src={member.photoURL}
+                name={member.displayName || 'convidado'}
+                userId={member.userId}
+                size={18}
+              />
+              <span>{member.displayName || 'convidado'}</span>
+            </span>
+          ))}
+          {voiceMembers.length > 3 && <span className="vc-room-presence__more">+{voiceMembers.length - 3}</span>}
+        </div>
+      )}
 
       {!isOptimistic && canManage && (
         <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
@@ -448,12 +514,12 @@ function RoomRow({
             <>
               <button
                 type="button"
-                onClick={onConfirmDelete}
+                onClick={(e) => { e.stopPropagation(); onConfirmDelete?.() }}
                 className="px-1.5 h-6 rounded-md bg-danger/20 text-danger text-[10px] font-semibold"
               >
                 excluir?
               </button>
-              <button type="button" onClick={onCancelDelete} className="text-[10px] text-muted px-1">
+              <button type="button" onClick={(e) => { e.stopPropagation(); onCancelDelete?.() }} className="text-[10px] text-muted px-1">
                 não
               </button>
             </>

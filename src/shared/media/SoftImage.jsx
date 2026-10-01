@@ -17,9 +17,12 @@
  * keeps the bitmap resident between renders.
  */
 import { useEffect, useState } from 'react'
-import { warmImage } from './imageWarm'
+import { warmImage, isImageWarm } from './imageWarm'
 
-const decodedCache = new Set()
+// Single source of truth: the bounded LRU in imageWarm. A separate unbounded
+// Set used to drift out of sync with it — a URL could stay "decoded" here after
+// its bitmap was evicted there, producing the exact flash this module prevents.
+const isDecoded = (src) => isImageWarm(src)
 
 function safeBgUrl(src) {
   return `url("${String(src).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}")`
@@ -31,17 +34,9 @@ function safeBgUrl(src) {
  */
 export async function preloadImage(src) {
   if (!src || typeof src !== 'string') return
-  if (decodedCache.has(src)) return
-  const img = new Image()
-  img.decoding = 'async'
-  img.src = src
-  try {
-    await img.decode()
-    decodedCache.add(src)
-    warmImage(src)
-  } catch {
-    /* ignore — surface the failure as a regular <img> onerror */
-  }
+  if (isDecoded(src)) return
+  // warmImage already loads + decodes and records the result in the LRU.
+  await warmImage(src)
 }
 
 /**
@@ -61,48 +56,26 @@ export function SoftImage({
   alt = '',
 }) {
   const warmable = typeof src === 'string' && src.length > 0
-  const [visibleSrc, setVisibleSrc] = useState(() => {
-    if (warmable && decodedCache.has(src)) return src
-    return warmable ? src : undefined
-  })
+  const [visibleSrc, setVisibleSrc] = useState(() => (warmable ? src : undefined))
 
   useEffect(() => {
     if (!warmable) {
       setVisibleSrc(undefined)
       return undefined
     }
-    // Source unchanged and already decoded → nothing to do.
-    if (visibleSrc === src && decodedCache.has(src)) {
-      warmImage(src)
-      return undefined
-    }
-    if (decodedCache.has(src)) {
-      // Already decoded in a previous render — swap immediately.
+    if (isDecoded(src)) {
+      // Bitmap is resident in the LRU — swap immediately (touches LRU order).
       setVisibleSrc(src)
-      warmImage(src)
       return undefined
     }
 
     let cancelled = false
-    const img = new Image()
-    img.decoding = 'async'
-    img.src = src
-
-    img.decode()
-      .then(() => {
-        if (cancelled) return
-        decodedCache.add(src)
-        warmImage(src)
-        // Only swap after decode finishes — this is what kills the flash.
-        setVisibleSrc(src)
-      })
-      .catch(() => {
-        if (cancelled) return
-        // Surface the failure as a regular <img onerror> fallback by
-        // assigning src directly so the browser can retry / show its
-        // own broken-image indicator.
-        setVisibleSrc(src)
-      })
+    // warmImage loads + decodes once and records the result in the LRU.
+    // Only swap after it settles — this is what kills the flash. On failure
+    // we still assign src so the browser shows its regular <img> fallback.
+    warmImage(src).then(() => {
+      if (!cancelled) setVisibleSrc(src)
+    })
 
     return () => {
       cancelled = true

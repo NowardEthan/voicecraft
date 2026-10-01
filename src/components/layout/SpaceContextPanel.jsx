@@ -18,8 +18,8 @@
 import { useState, useRef, useEffect, forwardRef } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  Settings, LogOut, Trash2, Plus, Mic, Headphones,
-  LayoutGrid, Calendar, UserPlus, PanelLeftClose, Search,
+  Settings, LogOut, Trash2, Mic, Headphones, X,
+  LayoutGrid, Calendar, UserPlus, PanelLeftClose, Search, SlidersHorizontal,
 } from 'lucide-react'
 import SpaceAvatar from '../SpaceAvatar'
 import { PersonAvatar } from '../../features/people'
@@ -57,6 +57,7 @@ export default function SpaceContextPanel({
   onInvite,
   onCollapse,
   onOpenSettings,
+  onOpenExperience,
   optimisticFirstRoom,
   onOpenCommands = null,
 }) {
@@ -163,6 +164,7 @@ export default function SpaceContextPanel({
             onDelete={() => { setMenuOpen(false); onDeleteSpace?.(space.id) }}
             onInvite={() => { setMenuOpen(false); onInvite?.() }}
             onSettings={() => { setMenuOpen(false); setSpaceSettingsOpen(true) }}
+            onOpenExperience={() => { setMenuOpen(false); onOpenExperience?.() }}
           />,
           document.body,
         )
@@ -184,60 +186,58 @@ export default function SpaceContextPanel({
       style={tokens}
     >
       {/* === Space identity banner — static (no Appear: was ghosting + black hole) === */}
-      <div key={`banner-${space.id}`} className="relative shrink-0 border-b border-line">
-        {/* Clip wallpaper only — keep avatar/rings/buttons unclipped */}
-        <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden>
+      <header key={'banner-' + space.id} className="vc-space-sidebar-header relative shrink-0 border-b border-line">
+        <div className="vc-space-sidebar-header__material absolute inset-0 overflow-hidden pointer-events-none" aria-hidden>
           {cover ? (
             <SpaceCoverLayer src={cover} fit={space.coverFit} className="pointer-events-none" />
           ) : (
-            <div
-              className="absolute inset-0"
-              style={{ background: 'var(--space-gradient)' }}
-            />
+            <div className="absolute inset-0" style={{ background: 'var(--space-gradient)' }} />
           )}
-          <div
-            className="absolute inset-0"
-            style={{
-              background: 'linear-gradient(180deg, rgba(255,255,255,0.04) 0%, transparent 35%, rgba(0,0,0,0.20) 100%)',
-            }}
-          />
+          <div className="absolute inset-0 vc-space-sidebar-header__wash" />
         </div>
-        <div className="relative z-[1] px-3 sm:px-4 pt-3.5 pb-3">
-          <div className="flex items-start gap-2.5">
+        <div className="relative z-[1] px-3 pt-3 pb-2.5">
+          <div className="flex items-center gap-2.5">
             <SpaceAvatar
               space={space}
-              size={40}
-              rounded="2xl"
-              className="shadow-md ring-2 ring-panel/80 shrink-0"
+              size={34}
+              rounded="xl"
+              className="shadow-md ring-1 ring-white/15 shrink-0"
             />
-            <div className="flex-1 min-w-0 pt-0.5">
-              <h2 className="text-[14.5px] font-semibold text-strong tracking-tight truncate">
-                {space.name}
-              </h2>
+            <div className="flex-1 min-w-0">
+              <h2 className="text-[14px] font-semibold text-strong tracking-tight truncate">{space.name}</h2>
               {space.description ? (
-                <p className="text-[11.5px] text-ink/65 line-clamp-2 mt-0.5 leading-snug">
-                  {space.description}
-                </p>
+                <p className="text-[10.5px] text-ink/60 truncate mt-0.5">{space.description}</p>
               ) : (canEditSpace || isCreator) ? (
                 <button
                   type="button"
                   onClick={() => setSpaceSettingsOpen(true)}
-                  className="text-[11px] text-accent/80 hover:text-accent mt-0.5 text-left"
+                  className="text-[10.5px] text-accent/80 hover:text-accent mt-0.5 text-left"
                 >
                   + adicionar descrição
                 </button>
               ) : (
-                <p className="text-[11px] text-muted italic mt-0.5">Sem descrição</p>
+                <p className="text-[10.5px] text-muted italic mt-0.5">Sem descrição</p>
               )}
             </div>
-            <div className="relative flex items-center gap-0.5 shrink-0 -mr-0.5" ref={menuRef}>
+            <div className="relative flex items-center gap-0.5 shrink-0" ref={menuRef}>
+              {onInvite && (
+                <button
+                  type="button"
+                  onClick={() => onInvite()}
+                  title="Convidar pro Space"
+                  aria-label="Convidar pro Space"
+                  className="vc-side-invite-compact"
+                >
+                  <UserPlus size={13} strokeWidth={2.1} />
+                </button>
+              )}
               {onCollapse && (
                 <button
                   type="button"
                   onClick={onCollapse}
                   title="Recolher painel"
                   aria-label="Recolher painel"
-                  className="w-8 h-8 rounded-md hover:bg-black/40 flex items-center justify-center text-ink/55 hover:text-strong transition-colors"
+                  className="vc-space-sidebar-header__button"
                 >
                   <PanelLeftClose size={13} />
                 </button>
@@ -247,42 +247,27 @@ export default function SpaceContextPanel({
                 onClick={() => (menuOpen ? setMenuOpen(false) : openMenu())}
                 title="Configurações do Space"
                 aria-label="Configurações do Space"
-                className="w-8 h-8 rounded-md hover:bg-black/40 flex items-center justify-center text-ink/55 hover:text-strong transition-colors"
+                className="vc-space-sidebar-header__button"
               >
                 <Settings size={13} />
               </button>
             </div>
           </div>
-          {onInvite && (
-            <button
-              type="button"
-              onClick={() => onInvite()}
-              className="vc-side-invite mt-3 w-full h-10 rounded-full inline-flex items-center justify-center gap-1.5 text-[13px] font-semibold hover:brightness-110 active:scale-[0.98] transition-all"
-              style={{ backgroundColor: 'var(--space-accent)', color: 'var(--space-on-accent, #fff)' }}
-            >
-              <Plus size={15} strokeWidth={2.4} />
-              Convidar pro Space
-            </button>
-          )}
-          <div className="mt-2.5 relative">
-            <Search
-              size={13}
-              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted pointer-events-none"
-            />
+          <div className="vc-space-sidebar-search mt-2.5 relative">
+            <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />
             <input
               ref={searchRef}
               value={roomQuery}
               onChange={(e) => setRoomQuery(e.target.value)}
-              placeholder="Buscar neste Space…"
-              className="w-full h-9 pl-8 pr-[3.25rem] rounded-xl bg-black/25 border border-white/[0.08] text-[12.5px] text-strong placeholder:text-muted focus:outline-none focus:border-[color-mix(in_srgb,var(--space-accent)_45%,transparent)]"
+              placeholder="Buscar salas…"
+              className="w-full h-8 pl-8 pr-[4.6rem] rounded-lg bg-black/25 border border-white/[0.08] text-[11.5px] text-strong placeholder:text-muted focus:outline-none"
               aria-label="Buscar salas neste Space"
             />
-            <kbd className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none px-1.5 h-5 rounded-md bg-white/[0.06] border border-white/[0.08] text-[9.5px] font-semibold text-muted tabular-nums inline-flex items-center">
-              Ctrl K
-            </kbd>
+            {roomQuery && <button type="button" onClick={() => setRoomQuery('')} className="vc-sidebar-search-clear" aria-label="Limpar busca"><X size={11} /></button>}
+            {!roomQuery && <kbd className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none px-1.5 h-[18px] rounded bg-white/[0.06] border border-white/[0.08] text-[8.5px] font-semibold text-muted tabular-nums inline-flex items-center">Ctrl K</kbd>}
           </div>
         </div>
-      </div>
+      </header>
 
       {/* === Vertical navigation list (per spec) === */}
       <nav className="vc-side-nav shrink-0 px-2 pt-2.5 pb-1.5">
@@ -323,6 +308,8 @@ export default function SpaceContextPanel({
         <SpaceRoomsNav
           space={space}
           rooms={rooms}
+          members={members}
+          accountUid={currentUserId}
           filterQuery={roomQuery}
           currentRoomId={currentRoomId}
           selectedRoomId={selectedRoomId}
@@ -335,6 +322,7 @@ export default function SpaceContextPanel({
           onDeleteRoom={onDeleteRoom}
           confirmDeleteId={confirmDeleteId}
           setConfirmDeleteId={setConfirmDeleteId}
+          onClearFilter={() => setRoomQuery('')}
         />
       </div>
 
@@ -440,7 +428,17 @@ function SelfControls({
 // the parent can detect clicks inside the popover and not close it.
 // ----------------------------------------------------------------------
 const SettingsPopover = forwardRef(function SettingsPopover(
-  { isCreator, canEditSpace = false, position, onClose, onLeave, onDelete, onInvite, onSettings },
+  {
+    isCreator,
+    canEditSpace = false,
+    position,
+    onClose,
+    onLeave,
+    onDelete,
+    onInvite,
+    onSettings,
+    onOpenExperience,
+  },
   ref,
 ) {
   return (
@@ -461,6 +459,9 @@ const SettingsPopover = forwardRef(function SettingsPopover(
           Configurações do Space
         </PopItem>
       )}
+      <PopItem icon={SlidersHorizontal} onClick={() => { onClose(); onOpenExperience?.() }}>
+        Minha experiência
+      </PopItem>
       <PopItem icon={LogOut} onClick={onLeave}>
         Sair do Space
       </PopItem>

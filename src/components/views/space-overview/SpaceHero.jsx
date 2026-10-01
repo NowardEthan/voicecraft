@@ -1,6 +1,6 @@
 import { memo } from 'react'
 import {
-  ArrowRight, Gamepad2, Headphones, MoreHorizontal, UserPlus, Users,
+  ArrowRight, Headphones, Palette, UserPlus, Users,
 } from 'lucide-react'
 import SpaceAvatar from '../../SpaceAvatar'
 import { resolveSpaceCover, bannerGradient, bannerOverlay } from '../../../features/spaces'
@@ -16,13 +16,13 @@ const SpaceHero = memo(function SpaceHero({
   activeRoomLabel,
   onJoinActive,
   onInvite,
-  onMore,
+  onCustomize,
 }) {
   useSpaceFonts(space)
   const base = space.color || '#ff3f6c'
   const cover = resolveSpaceCover(space)
   const visibility = getVisibility(space.id)
-  const tag = visibility === 'private' ? 'Privado' : 'Comunidade'
+  const tag = visibility === 'private' ? 'Space privado' : 'Comunidade aberta'
   const description = (space.description || '').trim()
   const slogan = (space.slogan || space.tagline || '').trim()
   const nameFont = fieldFontStyle(space, 'name')
@@ -30,145 +30,100 @@ const SpaceHero = memo(function SpaceHero({
   const sloganFont = fieldFontStyle(space, 'slogan')
 
   return (
-    <div
-      className="vc-space-hero relative overflow-hidden rounded-[20px] border border-white/[0.07] min-h-[200px] sm:min-h-[220px]"
-      style={{ boxShadow: '0 28px 70px -28px rgba(0,0,0,0.8)' }}
-    >
+    <section className="vc-space-hero relative overflow-hidden min-h-[232px] sm:min-h-[252px]">
       {cover ? (
         <SpaceCoverLayer src={cover} fit={space.coverFit} />
       ) : (
         <div className="absolute inset-0" style={{ background: bannerGradient(base) }} />
       )}
-      {/* Softer left wash so the cover still reads on the right */}
       <div
         className="absolute inset-0"
         style={{
           background: cover
-            ? 'linear-gradient(90deg, rgba(8,9,12,0.88) 0%, rgba(8,9,12,0.55) 38%, rgba(8,9,12,0.18) 68%, transparent 100%)'
+            ? 'linear-gradient(90deg, rgba(5,7,11,.95) 0%, rgba(5,7,11,.72) 42%, rgba(5,7,11,.18) 76%, rgba(5,7,11,.08) 100%)'
             : bannerOverlay(base, false),
         }}
       />
-      {!cover && (
-        <div
-          className="absolute inset-0"
-          style={{ background: bannerOverlay(base, false) }}
-        />
-      )}
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          background: `radial-gradient(55% 80% at 85% 40%, ${base}22, transparent 70%)`,
-        }}
-      />
+      <div className="vc-space-hero__scrim absolute inset-0 pointer-events-none" />
 
-      <div className="relative grid grid-cols-1 lg:grid-cols-[minmax(0,1.15fr)_minmax(180px,0.55fr)] gap-4 px-5 sm:px-7 md:px-8 pt-6 sm:pt-8 pb-5 sm:pb-6">
-        <div className="min-w-0">
-          <div className="flex items-start gap-3.5 sm:gap-4">
-            <SpaceAvatar
-              space={space}
-              size={64}
-              rounded="2xl"
-              className="shadow-[0_14px_32px_-8px_rgba(0,0,0,0.55)] ring-[3px] ring-white/12 shrink-0"
-            />
-            <div className="min-w-0 flex-1 pt-0.5">
-              <p
-                className="text-[10px] font-bold uppercase tracking-[0.24em] text-white/70 truncate"
-                style={nameFont}
-              >
-                {String(space.name || '').replace(/\s+/g, '')}
-              </p>
-              <h1
-                className="text-[26px] sm:text-[32px] font-bold text-white tracking-tight leading-[1.1] break-words mt-1"
-                style={nameFont}
-              >
-                {space.name}
-              </h1>
-              {description ? (
-                <p
-                  className="text-[13px] sm:text-[14px] text-white/75 mt-2 leading-relaxed max-w-xl"
-                  style={descFont}
-                >
-                  {description}
+      <div className="relative min-h-[232px] sm:min-h-[252px] flex flex-col p-5 sm:p-6 lg:p-7">
+        <div className="flex items-center justify-between gap-4">
+          <div className="vc-space-hero__eyebrow inline-flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-positive shadow-[0_0_9px_var(--vc-positive)]" />
+            Início do Space
+            <span aria-hidden>·</span>
+            {tag}
+          </div>
+          {onCustomize && (
+            <button
+              type="button"
+              onClick={onCustomize}
+              aria-label="Personalizar Space"
+              title="Personalizar identidade do Space"
+              className="vc-space-hero__customize"
+            >
+              <Palette size={14} strokeWidth={1.9} />
+              Personalizar
+            </button>
+          )}
+        </div>
+
+        <div className="mt-auto grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(220px,.44fr)] gap-6 items-end">
+          <div className="min-w-0">
+            <div className="flex items-end gap-3.5 sm:gap-4">
+              <SpaceAvatar
+                space={space}
+                size={56}
+                rounded="2xl"
+                className="vc-space-hero__avatar shrink-0"
+              />
+              <div className="min-w-0">
+                <p className="text-[10px] font-bold uppercase tracking-[0.24em] text-white/55 truncate" style={nameFont}>
+                  {String(space.name || '').replace(/\s+/g, '')}
                 </p>
-              ) : null}
+                <h1 className="vc-space-hero__title break-words mt-1" style={nameFont}>
+                  {space.name}
+                </h1>
+              </div>
+            </div>
+            {description && (
+              <p className="vc-space-hero__description mt-3 max-w-2xl" style={descFont}>
+                {description}
+              </p>
+            )}
+            <div className="flex flex-wrap items-center gap-2 mt-4">
+              {onJoinActive && (
+                <button type="button" onClick={onJoinActive} className="vc-space-hero__primary">
+                  <Headphones size={15} strokeWidth={1.9} />
+                  <span className="truncate">{activeRoomLabel}</span>
+                  <ArrowRight size={14} strokeWidth={2.4} />
+                </button>
+              )}
+              {onInvite && (
+                <button type="button" onClick={onInvite} className="vc-space-hero__secondary">
+                  <UserPlus size={14} strokeWidth={1.9} />
+                  Convidar
+                </button>
+              )}
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 mt-5">
-            <button
-              type="button"
-              onClick={onJoinActive}
-              className="
-                inline-flex items-center justify-center gap-2 h-10 pl-4 pr-4 rounded-full
-                text-on-accent text-[13px] font-semibold bg-accent
-                shadow-[0_10px_28px_-8px_var(--space-accent-glow-40)]
-                hover:brightness-110 active:scale-[0.98] transition
-                w-full sm:w-auto
-              "
-            >
-              <Headphones size={15} strokeWidth={1.8} />
-              {activeRoomLabel || 'Entrar na sala ativa'}
-              <ArrowRight size={14} strokeWidth={2.4} />
-            </button>
-            <button
-              type="button"
-              onClick={onInvite}
-              className="
-                inline-flex items-center justify-center gap-2 h-10 px-4 rounded-full
-                text-white text-[13px] font-medium
-                bg-black/35 border border-white/15 backdrop-blur-sm
-                hover:bg-black/50 active:scale-[0.98] transition
-                flex-1 sm:flex-none
-              "
-            >
-              <UserPlus size={14} strokeWidth={1.8} />
-              Convidar
-            </button>
-            {onMore && (
-              <button
-                type="button"
-                onClick={onMore}
-                aria-label="Mais ações"
-                title="Configurações do Space"
-                className="w-10 h-10 rounded-full bg-black/35 border border-white/15 text-white inline-flex items-center justify-center hover:bg-black/50 transition shrink-0"
-              >
-                <MoreHorizontal size={16} strokeWidth={1.8} />
-              </button>
+          <div className="hidden lg:flex flex-col items-end text-right gap-3">
+            {slogan ? (
+              <p className="vc-space-hero__slogan" style={{ ...sloganFont, whiteSpace: 'pre-line' }}>
+                {slogan}
+              </p>
+            ) : (
+              <p className="vc-space-hero__slogan text-white/70">Um lugar para conversar, criar e ficar por perto.</p>
             )}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mt-4 text-[12.5px] text-white/80">
-            <span className="inline-flex items-center gap-1.5">
-              <Users size={13} strokeWidth={1.75} className="opacity-80" />
-              {members.length} {members.length === 1 ? 'membro' : 'membros'}
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" aria-hidden />
-              {onlineCount} online
-            </span>
-            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-white/10 text-[11px] font-semibold">
-              <Gamepad2 size={11} strokeWidth={1.75} />
-              {tag}
+            <span className="inline-flex items-center gap-2 text-[11px] text-white/60">
+              <Users size={12} />
+              {members.length} membros · {onlineCount} online
             </span>
           </div>
         </div>
-
-        {slogan ? (
-        <div className="hidden lg:flex items-center justify-end pr-1">
-          <p
-            className="text-right text-[28px] xl:text-[34px] leading-[1.15] font-semibold text-accent/90 max-w-[220px] select-none"
-            style={{
-              ...sloganFont,
-              textShadow: '0 8px 28px rgba(0,0,0,0.45)',
-              whiteSpace: 'pre-line',
-            }}
-          >
-            {slogan}
-          </p>
-        </div>
-        ) : null}
       </div>
-    </div>
+    </section>
   )
 })
 

@@ -1,151 +1,109 @@
-/**
- * MessageList — scrollable Discord-style feed with grouping, date
- * dividers, unread marker, smart auto-scroll, mentions highlights and a
- * typing indicator footer.
- *
- * Phase 3A — chat Discord-style additions:
- *   - Typing indicator at the footer ("fulano está digitando…")
- *   - mentionsMe / isReply / pinned passed to MessageBubble
- *   - Animated fade-in classes use Tailwind's animate-* (not vc-anim-*)
- *   - 3 quick emoji reactions on the action bar (handled by bubble)
- */
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { ArrowDown, MessageSquare } from 'lucide-react'
+/** Accessible, windowed conversation timeline. */
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowDown, ChevronUp, MessageSquare, SearchX } from 'lucide-react'
 import MessageBubble from './MessageBubble'
 import { colorFromId } from '../../features/spaces'
 import { resolveChatDensity, normalizeChatDensity } from './chatDensity'
-import { getLastRead, setLastRead } from '../../features/notifications/unreadStore'
+import { getLastRead, markRoomRead } from '../../features/notifications/unreadStore'
 import { usePerfProfile } from '../../shared/perf/usePerfProfile'
 
-const STICK_THRESHOLD_PX = 100
+const STICK_THRESHOLD_PX = 32
+const EARLIER_BATCH = 60
 
-/** Scroll a message into the chat scroller (not the window). */
-function scrollScrollerToTarget(scroller, target, { behavior = 'smooth', block = 'center' } = {}) {
-  if (!scroller || !target) return false
-  const sRect = scroller.getBoundingClientRect()
-  const tRect = target.getBoundingClientRect()
-  const offsetWithin = (tRect.top - sRect.top) + scroller.scrollTop
-  let next
-  if (block === 'start') {
-    next = offsetWithin - 12
-  } else if (block === 'end') {
-    next = offsetWithin - scroller.clientHeight + tRect.height + 12
-  } else {
-    next = offsetWithin - (scroller.clientHeight / 2) + (tRect.height / 2)
+export { buildConversationRows, computeMessageWindow } from './chatTimeline.js'
+import {
+  buildConversationRows, computeMessageWindow, hasAttachments, isOwnMessage, messageId,
+} from './chatTimeline.js'
+
+function detectMentionMe(message, currentUserId, currentUserName, members) {
+  if (!message || !currentUserId) return false
+  if (Array.isArray(message.mentions) && message.mentions.length > 0) {
+    return message.mentions.some((mention) => String(mention?.userId || mention) === String(currentUserId))
   }
-  const max = Math.max(0, scroller.scrollHeight - scroller.clientHeight)
-  next = Math.max(0, Math.min(next, max))
-  if (typeof scroller.scrollTo === 'function') {
-    scroller.scrollTo({ top: next, behavior })
-  } else {
-    scroller.scrollTop = next
-  }
-  return true
-}
-
-function isOwnMessage(m, currentUserId, currentUserName) {
-  if (m?.authorId && currentUserId) return m.authorId === currentUserId
-  return m?.direction === 'out' || m?.author === currentUserName
-}
-
-/** Detect if `text` contains an `@<handle>` mention that matches the
- *  current user's handle or displayName. */
-function detectMentionMe(text, currentUserId, currentUserName, members) {
+  const text = message.text
   if (!text) return false
-  const me = members.find((m) => m.userId === currentUserId)
-    || (currentUserName ? { displayName: currentUserName } : null)
-  if (!me) return false
-  const handles = new Set()
-  if (me.handle) handles.add(me.handle.toLowerCase())
-  if (me.displayName) handles.add(me.displayName.toLowerCase())
-  if (currentUserId) handles.add(String(currentUserId).toLowerCase())
-  const re = /@([a-zA-Z0-9_.\-]{1,24})/g
-  let m
-  while ((m = re.exec(text))) {
-    if (handles.has(m[1].toLowerCase())) return true
-  }
-  return false
+  const me = members.find((member) => member.userId === currentUserId) || (currentUserName ? { displayName: currentUserName } : null)
+  const handle = String(me?.handle || '').toLowerCase()
+  if (!handle) return false
+  return new RegExp(`(^|\\s)@${handle.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}(?=\\s|$|[.,!?;:])`, 'i').test(text)
 }
 
-export function resolveChatAuthor(msg, members = [], currentUserId, currentUserName) {
-  if (!msg) return { userId: null, displayName: 'convidado', handle: '', photoURL: '' }
-  const userId = msg.authorId || (isOwnMessage(msg, currentUserId, currentUserName) ? currentUserId : null)
-  const member = userId ? members.find((m) => m.userId === userId) : null
+export function resolveChatAuthor(message, members = [], currentUserId, currentUserName) {
+  if (!message) return { userId: null, displayName: 'convidado', handle: '', photoURL: '' }
+  const userId = message.authorId || (isOwnMessage(message, currentUserId, currentUserName) ? currentUserId : null)
+  const member = userId ? members.find((item) => item.userId === userId) : null
   return {
     userId,
-    displayName: member?.displayName || msg.author || currentUserName || 'convidado',
-    handle: member?.handle || msg.authorHandle || '',
-    photoURL: member?.photoURL || msg.authorPhoto || '',
+    displayName: member?.displayName || message.author || currentUserName || 'convidado',
+    handle: member?.handle || message.authorHandle || '',
+    photoURL: member?.photoURL || message.authorPhoto || '',
     online: !!member?.online,
   }
 }
 
+export function messageMatchesSearch(message, query = '', filters = {}) {
+  if (!message || message.deleted) return false
+  const needle = String(query || '').trim().toLocaleLowerCase('pt-BR')
+  const attachmentNames = Array.isArray(message.attachments) ? message.attachments.map((attachment) => attachment?.name) : []
+  const body = [message.text, message.announce?.title, message.announce?.body, message.attachment?.name, ...attachmentNames]
+    .filter(Boolean).join(' ').toLocaleLowerCase('pt-BR')
+  if (needle && !body.includes(needle)) return false
+  if (filters.authorId) {
+    const authorKeys = new Set([message.authorId, message.author].filter(Boolean).map(String))
+    if (message.direction === 'out' && filters.currentUserId) authorKeys.add(String(filters.currentUserId))
+    if (!authorKeys.has(String(filters.authorId))) return false
+  }
+  if (filters.attachments && !hasAttachments(message)) return false
+  if (filters.pinned && !message.pinned) return false
+  const days = filters.period === 'day' ? 1 : filters.period === 'week' ? 7 : filters.period === 'month' ? 30 : 0
+  if (days && Number(message.ts || 0) < Date.now() - days * 86_400_000) return false
+  return true
+}
+
 function parseRoomKey(roomKey) {
   const raw = String(roomKey || '')
-  const idx = raw.indexOf(':')
-  if (idx < 0) return { spaceId: null, roomId: raw || null }
-  return { spaceId: raw.slice(0, idx), roomId: raw.slice(idx + 1) }
+  const separator = raw.indexOf(':')
+  if (separator < 0) return { spaceId: null, roomId: raw || null }
+  return { spaceId: raw.slice(0, separator), roomId: raw.slice(separator + 1) }
 }
 
-function dayKey(ts) {
-  const d = new Date(ts || 0)
-  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
-}
-
-function formatDayLabel(ts) {
-  const d = new Date(ts || 0)
-  const today = new Date()
-  const yesterday = new Date()
-  yesterday.setDate(today.getDate() - 1)
-  if (dayKey(d.getTime()) === dayKey(today.getTime())) return 'Hoje'
-  if (dayKey(d.getTime()) === dayKey(yesterday.getTime())) return 'Ontem'
-  return d.toLocaleDateString('pt-BR', { day: 'numeric', month: 'long' })
+function hasActiveSearch(query, filters) {
+  return !!(
+    String(query || '').trim()
+    || filters?.authorId
+    || filters?.attachments
+    || filters?.pinned
+    || (filters?.period && filters.period !== 'all')
+  )
 }
 
 export default function MessageList({
-  messages,
-  currentUserName,
-  currentUserId,
-  authorColors,
-  roomKey = null,
-  loading = false,
-  onRetry,
-  onCopy,
-  onCancel,
-  onImageClick,
-  emptyHint = 'Nenhuma mensagem ainda. Mande a primeira.',
-  query = '',
-  onToggleReaction,
-  onReply,
-  onEdit,
-  onDelete,
-  canModerate = false,
-  members = [],
-  density = 'confortavel',
-  pinnedIds = [],
-  onTogglePin,
-  onToggleLike,
-  quickReactions = ['👍', '❤️', '🔥'],
-  typingTracker = null,
-  allRooms = [],
-  onRoomMention,
-  jumpToId = null,
-  jumpTick = 0,
-  canPinAll = false,
-  /** Optional node rendered at the top of the same scroll as messages (rules, etc.). */
-  listHeader = null,
+  messages = [], currentUserName, currentUserId, authorColors, roomKey = null,
+  loading = false, onRetry, onCopy, onCancel, onImageClick,
+  emptyHint = 'Nenhuma mensagem ainda. Mande a primeira.', query = '', searchFilters = null,
+  onToggleReaction, onReply, onEdit, onDelete, canModerate = false, members = [],
+  density = 'confortavel', pinnedIds = [], onTogglePin, onToggleLike,
+  quickReactions = ['👍', '❤️', '🔥'], typingTracker = null, allRooms = [],
+  onRoomMention, jumpToId = null, jumpTick = 0, canPinAll = false,
+  onMarkUnread = null, onReadCursorChange = null, readTick = 0,
+  onOpenThread = null, listHeader = null,
 }) {
   const scrollerRef = useRef(null)
+  const contentRef = useRef(null)
+  const highlightTimerRef = useRef(null)
+  const lastLengthRef = useRef(messages.length)
+  const stickRef = useRef(true)
+  const readMarkerRef = useRef('')
+  const preservePositionRef = useRef(null)
   const [unseen, setUnseen] = useState(0)
   const [stickToBottom, setStickToBottom] = useState(true)
   const [highlightId, setHighlightId] = useState(null)
   const [highlightTick, setHighlightTick] = useState(0)
   const [forceVisibleId, setForceVisibleId] = useState(null)
-  const [jumpSeq, setJumpSeq] = useState(0)
+  const [jumpSequence, setJumpSequence] = useState(0)
+  const [windowStart, setWindowStart] = useState(null)
   const [typingState, setTypingState] = useState({ peers: [] })
-  const highlightTimerRef = useRef(null)
-  const lastLenRef = useRef(messages.length)
-  const [lastReadTs] = useState(() => {
+  const [lastReadTs, setLastReadTs] = useState(() => {
     const { spaceId, roomId } = parseRoomKey(roomKey)
     return getLastRead(currentUserId, spaceId, roomId).at || 0
   })
@@ -153,207 +111,210 @@ export default function MessageList({
   const dens = resolveChatDensity(densityKey)
   const perfProfile = usePerfProfile()
   const messageWindow = Math.max(60, Number(perfProfile?.budgets?.messageWindow) || 200)
+  const hasListHeader = !!listHeader
+  const searchActive = hasActiveSearch(query, searchFilters)
 
-  const handleScroll = useCallback(() => {
-    const el = scrollerRef.current
-    if (!el) return
-    const distance = el.scrollHeight - el.scrollTop - el.clientHeight
-    const stick = distance < STICK_THRESHOLD_PX
-    setStickToBottom(stick)
-    if (stick) setUnseen(0)
+  const updateStick = useCallback((value) => {
+    stickRef.current = value
+    setStickToBottom(value)
   }, [])
 
-  // Only auto-scroll when *new* messages arrive and user is pinned to bottom.
-  // Reactions / likes / pins change the array ref but not length — must NOT scroll.
-  useEffect(() => {
-    const el = scrollerRef.current
-    if (!el) return
-    const prev = lastLenRef.current
-    const incoming = messages.length - prev
-    lastLenRef.current = messages.length
-    if (incoming <= 0) return
+  const isAtBottom = useCallback(() => {
+    const element = scrollerRef.current
+    return !!element && element.scrollHeight - element.scrollTop - element.clientHeight <= STICK_THRESHOLD_PX
+  }, [])
 
-    if (stickToBottom) {
-      requestAnimationFrame(() => {
-        if (!el) return
-        // Header rooms that still fit the viewport: stay at top (rules visible).
-        if (listHeader && el.scrollHeight <= el.clientHeight + 48) {
-          el.scrollTop = 0
-          return
-        }
-        el.scrollTop = el.scrollHeight
-      })
+  const markLatestRead = useCallback(() => {
+    const element = scrollerRef.current
+    const latest = messages[messages.length - 1]
+    if (!latest?.ts || !element || !isAtBottom()) return
+    const id = messageId(latest)
+    const marker = `${Number(latest.ts)}:${id || ''}`
+    if (readMarkerRef.current === marker) return
+    const { spaceId, roomId } = parseRoomKey(roomKey)
+    markRoomRead(currentUserId, spaceId, roomId, { at: latest.ts, id })
+    readMarkerRef.current = marker
+    setLastReadTs((previous) => Math.max(previous, Number(latest.ts) || 0))
+    onReadCursorChange?.()
+  }, [messages, roomKey, currentUserId, isAtBottom, onReadCursorChange])
+
+  const pinToPresent = useCallback(({ markRead = true } = {}) => {
+    const element = scrollerRef.current
+    if (!element) return
+    element.scrollTop = element.scrollHeight
+    updateStick(true)
+    setUnseen(0)
+    if (markRead) requestAnimationFrame(() => requestAnimationFrame(markLatestRead))
+  }, [markLatestRead, updateStick])
+
+  const handleScroll = useCallback(() => {
+    const stick = isAtBottom()
+    updateStick(stick)
+    if (stick) {
       setUnseen(0)
-    } else {
-      setUnseen((n) => n + incoming)
+      markLatestRead()
     }
-  }, [messages.length, stickToBottom, listHeader])
+  }, [isAtBottom, markLatestRead, updateStick])
 
-  // Room change: rules/header channels open at the TOP so the card is visible.
-  // Normal chats stick to the latest message.
-  //
-  // We depend on a *boolean* derived from `listHeader` instead of the prop
-  // itself, because the parent passes a freshly-built JSX element on every
-  // render — its reference changes on every like/edit/reaction and would
-  // otherwise reset the scroll to top, flicking the chat.
-  const hasListHeader = !!listHeader
   useEffect(() => {
-    lastLenRef.current = 0
+    const { spaceId, roomId } = parseRoomKey(roomKey)
+    setLastReadTs(getLastRead(currentUserId, spaceId, roomId).at || 0)
+    readMarkerRef.current = ''
+  }, [roomKey, currentUserId, readTick])
+
+  useEffect(() => {
+    const previousLength = lastLengthRef.current
+    const incoming = messages.length - previousLength
+    lastLengthRef.current = messages.length
+    if (incoming <= 0) return
+    if (stickRef.current && windowStart == null && !forceVisibleId) {
+      requestAnimationFrame(() => {
+        const element = scrollerRef.current
+        if (!element) return
+        if (hasListHeader && element.scrollHeight <= element.clientHeight + 48) element.scrollTop = 0
+        else pinToPresent()
+      })
+    } else {
+      setUnseen((count) => count + incoming)
+    }
+  }, [messages.length, hasListHeader, pinToPresent, windowStart, forceVisibleId])
+
+  useEffect(() => {
+    lastLengthRef.current = 0
     setUnseen(0)
     setHighlightId(null)
     setForceVisibleId(null)
-    setStickToBottom(!hasListHeader)
-    const id = requestAnimationFrame(() => {
-      const el = scrollerRef.current
-      if (!el) return
-      el.scrollTop = hasListHeader ? 0 : el.scrollHeight
-      lastLenRef.current = messages.length
+    setWindowStart(null)
+    updateStick(!hasListHeader)
+    const frame = requestAnimationFrame(() => {
+      const element = scrollerRef.current
+      if (!element) return
+      element.scrollTop = hasListHeader ? 0 : element.scrollHeight
+      lastLengthRef.current = messages.length
+      if (!hasListHeader) markLatestRead()
     })
-    return () => cancelAnimationFrame(id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- seed on room switch only
+    return () => cancelAnimationFrame(frame)
+    // Seed scroll only when the room/header mode changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomKey, hasListHeader])
 
-  // After messages hydrate in a normal chat, pin to bottom once.
   useEffect(() => {
-    if (listHeader || !stickToBottom) return
-    const el = scrollerRef.current
-    if (!el) return
-    requestAnimationFrame(() => {
-      if (el) el.scrollTop = el.scrollHeight
-      lastLenRef.current = messages.length
+    if (hasListHeader || !stickRef.current || windowStart != null || forceVisibleId) return
+    requestAnimationFrame(() => requestAnimationFrame(() => pinToPresent()))
+  }, [messages.length, hasListHeader, roomKey, pinToPresent, windowStart, forceVisibleId])
+
+  useEffect(() => {
+    const content = contentRef.current
+    if (!content || typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(() => {
+      if (!stickRef.current || windowStart != null || forceVisibleId) return
+      requestAnimationFrame(() => pinToPresent())
     })
-  }, [messages.length, listHeader, stickToBottom, roomKey])
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [pinToPresent, windowStart, forceVisibleId])
 
-  useEffect(() => {
-    if (!stickToBottom || !messages.length) return
-    const latest = messages[messages.length - 1]
-    if (!latest?.ts) return
-    const { spaceId, roomId } = parseRoomKey(roomKey)
-    setLastRead(currentUserId, spaceId, roomId, { at: latest.ts, id: latest.id || null })
-  }, [messages, stickToBottom, roomKey, currentUserId])
-
-  const jumpToMessage = useCallback((id) => {
-    if (!id) return
-    // Expand the message window first so the target is mounted.
-    setForceVisibleId(String(id))
-    setJumpSeq((n) => n + 1)
-    setStickToBottom(false)
-  }, [])
-
-  useEffect(() => {
-    if (!jumpToId) return
-    jumpToMessage(jumpToId)
-  }, [jumpToId, jumpTick, jumpToMessage])
-
-  useEffect(() => () => {
-    if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current)
-  }, [])
-
-  const scrollToBottom = useCallback(() => {
-    const el = scrollerRef.current
-    if (!el) return
-    el.scrollTop = el.scrollHeight
-    setUnseen(0)
-    setStickToBottom(true)
-  }, [])
-
-  /* Typing indicator subscription */
   useEffect(() => {
     if (!typingTracker) return undefined
     return typingTracker.subscribe(setTypingState)
   }, [typingTracker])
 
+  useEffect(() => () => {
+    if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current)
+  }, [])
+
+  const jumpToMessage = useCallback((id) => {
+    if (!id) return
+    setWindowStart(null)
+    setForceVisibleId(String(id))
+    setJumpSequence((sequence) => sequence + 1)
+    updateStick(false)
+  }, [updateStick])
+
+  useEffect(() => {
+    if (jumpToId) jumpToMessage(jumpToId)
+  }, [jumpToId, jumpTick, jumpToMessage])
+
   const messagesById = useMemo(() => {
-    const m = new Map()
+    const index = new Map()
     for (const message of messages) {
-      if (message?.id) m.set(message.id, message)
-      if (message?.firestoreId) m.set(message.firestoreId, message)
+      if (message?.id) index.set(message.id, message)
+      if (message?.firestoreId) index.set(message.firestoreId, message)
     }
-    return m
+    return index
   }, [messages])
 
-  const filteredMessages = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    let list = messages
-    if (q) {
-      list = messages.filter(m => {
-        if (m.kind === 'sys' || m.kind === 'announce' || m.announce
-          || m.kind === 'lobby_event' || m.kind === 'lobby_welcome'
-          || m.lobbyEvent) {
-          return true
-        }
-        return String(m.text || m.announce?.title || m.announce?.body || '').toLowerCase().includes(q)
-      })
-    }
-    // Cap DOM size by hardware tier — keep newest messages unless jump/reply parent is older.
-    if (list.length <= messageWindow) return list
-    let start = list.length - messageWindow
-    const ensureVisible = (id) => {
-      if (!id) return
-      const idx = list.findIndex((m) => m?.id === id || m?.firestoreId === id)
-      if (idx >= 0 && idx < start) start = Math.max(0, idx - 12)
-    }
-    ensureVisible(jumpToId)
-    ensureVisible(forceVisibleId)
-    // Expand window so reply parents stay mounted (quote jump + context).
-    for (let pass = 0; pass < 2; pass++) {
-      const from = start
-      for (let i = from; i < list.length; i++) {
-        ensureVisible(list[i]?.replyToId)
-      }
-    }
-    return list.slice(start)
-  }, [messages, query, messageWindow, jumpToId, forceVisibleId])
+  const filteredAll = useMemo(() => (
+    searchActive
+      ? messages.filter((message) => messageMatchesSearch(message, query, { ...(searchFilters || {}), currentUserId }))
+      : messages
+  ), [messages, query, searchFilters, currentUserId, searchActive])
 
-  // Jump once per click (jumpSeq). Do NOT depend on filteredMessages — that
-  // array churns on every chat update and was cancelling the scroll mid-flight.
+  const windowed = useMemo(() => computeMessageWindow(filteredAll, messageWindow, {
+    anchorId: forceVisibleId,
+    start: windowStart,
+  }), [filteredAll, messageWindow, forceVisibleId, windowStart])
+
   useEffect(() => {
-    if (!forceVisibleId || !jumpSeq) return undefined
-    let cancelled = false
-    let tries = 0
-    let done = false
-
-    const tryJump = () => {
-      if (cancelled || done) return
+    const preserved = preservePositionRef.current
+    if (!preserved) return
+    preservePositionRef.current = null
+    requestAnimationFrame(() => {
       const scroller = scrollerRef.current
       if (!scroller) return
-      const id = String(forceVisibleId)
-      const target = scroller.querySelector(`[data-msg-id="${CSS.escape(id)}"]`)
-        || scroller.querySelector(`[data-msg-fs="${CSS.escape(id)}"]`)
+      const selector = `[data-msg-id="${CSS.escape(String(preserved.id))}"], [data-msg-fs="${CSS.escape(String(preserved.id))}"]`
+      const target = scroller.querySelector(selector)
+      if (target) scroller.scrollTop += target.getBoundingClientRect().top - preserved.top
+    })
+  }, [windowed.start])
+
+  useEffect(() => {
+    if (!forceVisibleId || !jumpSequence) return undefined
+    let cancelled = false
+    let attempts = 0
+    const seek = () => {
+      if (cancelled) return
+      const scroller = scrollerRef.current
+      if (!scroller) return
+      const id = CSS.escape(String(forceVisibleId))
+      const target = scroller.querySelector(`[data-msg-id="${id}"]`) || scroller.querySelector(`[data-msg-fs="${id}"]`)
       if (!target) {
-        if (tries++ < 24) requestAnimationFrame(tryJump)
+        if (attempts++ < 20) requestAnimationFrame(seek)
         return
       }
-      done = true
-      setStickToBottom(false)
-
-      // Position relative to the chat scroller (not window / scrollIntoView).
-      const sRect = scroller.getBoundingClientRect()
-      const tRect = target.getBoundingClientRect()
-      const offsetWithin = (tRect.top - sRect.top) + scroller.scrollTop
-      const max = Math.max(0, scroller.scrollHeight - scroller.clientHeight)
-      const next = Math.max(
-        0,
-        Math.min(
-          offsetWithin - (scroller.clientHeight / 2) + (tRect.height / 2),
-          max,
-        ),
-      )
-      // Direct assignment is reliable in Electron nested overflow shells.
-      scroller.scrollTop = next
-
-      setHighlightId(id)
-      setHighlightTick((n) => n + 1)
+      const scrollerRect = scroller.getBoundingClientRect()
+      const targetRect = target.getBoundingClientRect()
+      const offset = targetRect.top - scrollerRect.top + scroller.scrollTop
+      scroller.scrollTop = Math.max(0, Math.min(offset - scroller.clientHeight / 2 + targetRect.height / 2, scroller.scrollHeight - scroller.clientHeight))
+      setHighlightId(String(forceVisibleId))
+      setHighlightTick((tick) => tick + 1)
       if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current)
-      highlightTimerRef.current = window.setTimeout(() => setHighlightId(null), 2400)
+      highlightTimerRef.current = window.setTimeout(() => setHighlightId(null), 2200)
     }
-
-    const raf = requestAnimationFrame(tryJump)
+    const frame = requestAnimationFrame(seek)
     return () => {
       cancelled = true
-      cancelAnimationFrame(raf)
+      cancelAnimationFrame(frame)
     }
-  }, [forceVisibleId, jumpSeq])
+  }, [forceVisibleId, jumpSequence])
+
+  const revealEarlier = useCallback(() => {
+    if (windowed.start <= 0) return
+    const scroller = scrollerRef.current
+    const first = windowed.items[0]
+    const id = messageId(first)
+    const target = id && scroller?.querySelector(`[data-msg-id="${CSS.escape(String(id))}"], [data-msg-fs="${CSS.escape(String(id))}"]`)
+    if (id && target) preservePositionRef.current = { id, top: target.getBoundingClientRect().top }
+    setForceVisibleId(null)
+    setWindowStart(Math.max(0, windowed.start - Math.min(EARLIER_BATCH, messageWindow)))
+    updateStick(false)
+  }, [windowed, messageWindow, updateStick])
+
+  const returnToPresent = useCallback(() => {
+    setForceVisibleId(null)
+    setWindowStart(null)
+    requestAnimationFrame(() => requestAnimationFrame(() => pinToPresent()))
+  }, [pinToPresent])
 
   const resolveReplyTarget = useCallback((replyToId) => {
     if (!replyToId) return null
@@ -361,333 +322,189 @@ export default function MessageList({
   }, [messagesById])
 
   const pinnedSet = useMemo(() => {
-    const fromProp = new Set(pinnedIds || [])
-    for (const m of messages || []) {
-      if (m?.pinned && m.id) fromProp.add(m.id)
-    }
-    return fromProp
+    const set = new Set(pinnedIds || [])
+    for (const message of messages) if (message?.pinned && messageId(message)) set.add(messageId(message))
+    return set
   }, [pinnedIds, messages])
 
-  /* Room-mention resolver (CONTRATO_FASE2). Builds a slug index once per
-   * rooms prop change so the markdown renderer can produce a
-   * clickable pill only when `#geral` actually maps to a room.       */
   const roomIndex = useMemo(() => {
-    const idx = new Map()
-    const list = Array.isArray(allRooms) ? allRooms : []
-    for (const r of list) {
-      if (!r || !r.id || !r.name) continue
-      const slugBase = String(r.name).toLowerCase().replace(/[\s_]+/g, '-')
-      const idLower = String(r.id).toLowerCase()
-      const candidates = new Set([slugBase, idLower])
-      for (const k of candidates) {
-        if (k && !idx.has(k)) idx.set(k, r)
-      }
+    const index = new Map()
+    for (const room of Array.isArray(allRooms) ? allRooms : []) {
+      if (!room?.id || !room?.name) continue
+      const keys = [String(room.name).toLowerCase().replace(/[\s_]+/g, '-'), String(room.id).toLowerCase()]
+      for (const key of keys) if (key && !index.has(key)) index.set(key, room)
     }
-    return idx
+    return index
   }, [allRooms])
-  const resolveRoom = useCallback((slug) => {
-    if (!slug || !roomIndex.size) return null
-    return roomIndex.get(String(slug).toLowerCase()) || null
-  }, [roomIndex])
+  const resolveRoom = useCallback((slug) => roomIndex.get(String(slug || '').toLowerCase()) || null, [roomIndex])
 
-  const rows = useMemo(() => {
-    const groups = []
-    for (let i = 0; i < filteredMessages.length; i++) {
-      const m = filteredMessages[i]
-      if (m.kind === 'sys' || m.kind === 'announce' || m.announce
-        || m.kind === 'lobby_event' || m.kind === 'lobby_welcome'
-        || m.lobbyEvent) {
-        const asAnnounce = m.kind === 'announce' || m.announce
-          || (m.kind === 'sys' && String(m.text || '').length > 60)
-        const kind = m.kind === 'lobby_welcome'
-          ? 'lobby_welcome'
-          : (m.kind === 'lobby_event' || m.lobbyEvent)
-            ? 'lobby_event'
-            : asAnnounce ? 'announce' : 'sys'
-        groups.push({
-          kind,
-          message: m,
-          key: m.id,
-        })
-        continue
-      }
-      const isMine = isOwnMessage(m, currentUserId, currentUserName)
-      const prev = filteredMessages[i - 1]
-      const hasAtt = !!(m.attachment || (Array.isArray(m.attachments) && m.attachments.length))
-      const prevHasAtt = !!(prev?.attachment || (Array.isArray(prev?.attachments) && prev.attachments.length))
-      const sameAsPrev = prev
-        && prev.kind === 'msg'
-        && !hasAtt
-        && !prevHasAtt
-        && !m.replyToId
-        && isOwnMessage(prev, currentUserId, currentUserName) === isMine
-        && ((isMine ? m.author : prev.author) || 'peer') === ((isMine ? prev.author : m.author) || 'peer')
-        && (m.ts - prev.ts) < dens.groupBreakMs
-      const authorKey = isMine ? '__me__' : (m.authorId || m.author || 'peer')
-      if (sameAsPrev && groups.length > 0 && groups[groups.length - 1].kind === 'msg') {
-        groups[groups.length - 1].items.push(m)
-      } else {
-        groups.push({
-          kind: 'msg',
-          isMine,
-          authorKey,
-          color: authorColors?.get(authorKey) || colorFromId(authorKey),
-          items: [m],
-          key: m.id,
-        })
-      }
-    }
-
-    const isCardKind = (kind) => (
-      kind === 'sys' || kind === 'announce'
-      || kind === 'lobby_event' || kind === 'lobby_welcome'
-    )
-
-    const out = []
-    let lastDay = null
-    let lastContentKind = null
-    let unreadInserted = false
-    for (const g of groups) {
-      const first = isCardKind(g.kind) ? g.message : g.items[0]
-      const ts = first?.ts || 0
-      const day = dayKey(ts)
-      if (day !== lastDay) {
-        // Avoid a hard "two panes" cut under rules/announcements/lobby cards.
-        const hideDivider = (listHeader && lastDay === null)
-          || isCardKind(g.kind)
-          || isCardKind(lastContentKind)
-        if (!hideDivider) {
-          out.push({ kind: 'day', key: `day-${day}`, label: formatDayLabel(ts) })
-        }
-        lastDay = day
-      }
-      if (!unreadInserted && lastReadTs > 0 && ts > lastReadTs) {
-        out.push({ kind: 'unread', key: 'unread' })
-        unreadInserted = true
-      }
-      out.push(g)
-      lastContentKind = g.kind
-    }
-    return out
-  }, [filteredMessages, currentUserName, currentUserId, authorColors, lastReadTs, dens.groupBreakMs, listHeader])
+  const rows = useMemo(() => buildConversationRows(windowed.items, {
+    currentUserId,
+    currentUserName,
+    lastReadTs,
+    groupBreakMs: dens.groupBreakMs,
+    hideInitialDay: hasListHeader && windowed.start === 0,
+  }).map((row) => row.kind === 'msg' ? {
+    ...row,
+    color: authorColors?.get(row.authorKey) || colorFromId(row.authorKey),
+  } : row), [windowed.items, windowed.start, currentUserId, currentUserName, lastReadTs, dens.groupBreakMs, hasListHeader, authorColors])
 
   const typingText = useMemo(() => {
     const peers = typingState?.peers || []
-    if (peers.length === 0) return ''
     if (peers.length === 1) return `${peers[0]} está digitando`
     if (peers.length === 2) return `${peers[0]} e ${peers[1]} estão digitando`
-    return 'várias pessoas estão digitando'
+    return peers.length > 2 ? 'Várias pessoas estão digitando' : ''
   }, [typingState])
 
-/* Split the typing-text into `<strong>name</strong> <em>rest…</em>` so
- * the label itself feels premium (bold who + italic action). Falls back
- * to plain text for the "várias pessoas" case.                       */
-function renderTypingLabel(text) {
-  if (!text) return null
-  const m = /^(.+?)\s+(está digitando|estão digitando)$/.exec(text)
-  if (m) {
-    return (
-      <span>
-        <strong>{m[1]}</strong>{' '}
-        <em style={{ fontStyle: 'italic', opacity: 0.85 }}>{m[2]}</em>
-      </span>
-    )
-  }
-  return <span>{text}</span>
-}
+  const showReturnButton = unseen > 0 || forceVisibleId || windowStart != null || !stickToBottom
 
   return (
-    <div
-      className="absolute inset-0 overflow-hidden"
-      data-chat-density={densityKey}
-      style={dens.vars}
-    >
+    <div className="vc-conversation-timeline" data-motion-layout="static" data-chat-density={densityKey} style={dens.vars}>
       <div
         ref={scrollerRef}
+        role="log"
+        aria-label="Histórico da conversa"
+        aria-live="polite"
+        aria-busy={loading}
+        aria-relevant="additions text"
         onScroll={handleScroll}
-        className={'h-full overflow-y-auto overscroll-contain ' + dens.listPy}
+        className={`vc-conversation-log ${dens.listPy}`}
       >
-        {listHeader}
-        {loading ? (
-          <SkeletonStack />
-        ) : filteredMessages.length === 0 ? (
-          <EmptyHint
-            text={query.trim() ? `sem resultados pra "${query}"` : emptyHint}
-            compact={!!listHeader}
-          />
-        ) : (
-          rows.map(g => {
-            if (g.kind === 'day') {
-              return <DayDivider key={g.key} label={g.label} className={dens.dividerPy} />
-            }
-            if (g.kind === 'unread') {
-              return <UnreadDivider key={g.key} className={dens.dividerPy} />
-            }
-            if (g.kind === 'sys' || g.kind === 'announce'
-              || g.kind === 'lobby_event' || g.kind === 'lobby_welcome') {
-              return (
-                <div key={g.key} className={dens.group}>
-                  <MessageBubble
-                    msg={g.message}
-                    isMine={false}
-                    showHeader={false}
-                    density={densityKey}
-                    resolveRoom={resolveRoom}
-                    currentUserId={currentUserId}
-                    onToggleLike={g.kind === 'announce' ? onToggleLike : null}
-                    onToggleReaction={g.kind === 'announce' ? onToggleReaction : null}
-                    quickReactions={quickReactions}
-                  />
+        <div ref={contentRef} className="vc-conversation-log__content" data-motion-policy="static-window">
+          {listHeader}
+          {loading ? (
+            <SkeletonStack />
+          ) : filteredAll.length === 0 ? (
+            <EmptyHint text={searchActive ? 'Nenhuma mensagem encontrada. Ajuste a busca ou os filtros para ver outros resultados.' : emptyHint} compact={hasListHeader} filtered={searchActive} />
+          ) : (
+            <>
+              {windowed.start > 0 && (
+                <div className="vc-conversation-earlier">
+                  <button type="button" onClick={revealEarlier}>
+                    <ChevronUp size={16} aria-hidden />
+                    Mostrar mensagens anteriores
+                    <span>{windowed.start} disponíveis</span>
+                  </button>
                 </div>
-              )
-            }
-            return (
-              <div key={g.key} className={`${dens.group} ${dens.row}`}>
-                {g.items.map((m, idx) => (
-                  <MessageBubble
-                    key={m.id}
-                    msg={m}
-                    isMine={g.isMine}
-                    showHeader={idx === 0}
-                    isLast={idx === g.items.length - 1}
-                    density={densityKey}
-                    onRetry={onRetry}
-                    onCopy={onCopy}
-                    onCancel={onCancel}
-                    onImageClick={onImageClick}
-                    onReply={onReply}
-                    onToggleReaction={onToggleReaction}
-                    onEdit={onEdit}
-                    onDelete={onDelete}
-                    canModerate={canModerate}
-                    author={resolveChatAuthor(m, members, currentUserId, currentUserName)}
-                    /* Author color: prefer the one already derived for the
-                     * group (stable for the whole chain), fallback to a
-                     * per-message id-derived hue.                          */
-                    authorColor={g.color || colorFromId(m.authorId || m.author || (g.isMine ? '__me__' : 'peer'))}
-                    replyTo={m.replyToId ? resolveReplyTarget(m.replyToId) : null}
-                    replyAuthor={m.replyToId ? resolveChatAuthor(messagesById.get(m.replyToId), members, currentUserId, currentUserName) : null}
-                    highlighted={
-                      highlightId != null
-                      && (highlightId === m.id || highlightId === m.firestoreId)
-                    }
-                    highlightTick={highlightTick}
-                    onJumpToReply={jumpToMessage}
-                    currentUserId={currentUserId}
-                    currentUserName={currentUserName}
-                    roomKey={roomKey}
-                    mentionsMe={
-                      !isOwnMessage(m, currentUserId, currentUserName) &&
-                      detectMentionMe(m.text, currentUserId, currentUserName, members)
-                    }
-                    isReply={!!m.replyToId}
-                    pinned={pinnedSet.has(m.id) || !!m.pinned}
-                    canPin={canPinAll || isOwnMessage(m, currentUserId, currentUserName)}
-                    onTogglePin={onTogglePin}
-                    onToggleLike={onToggleLike}
-                    quickReactions={quickReactions}
-                    resolveRoom={resolveRoom}
-                    onRoomMention={onRoomMention}
-                  />
-                ))}
-              </div>
-            )
-          })
-        )}
-        {typingText && (
-          <div className="vc-typing-wrap flex items-center gap-2 px-5 sm:px-8 py-1.5">
-            <div
-              data-typing-indicator
-              aria-live="polite"
-              className="vc-typing"
-            >
-              {renderTypingLabel(typingText)}
-              <span className="vc-typing-dots" aria-hidden>
-                <span className="vc-typing-dot" />
-                <span className="vc-typing-dot" />
-                <span className="vc-typing-dot" />
-              </span>
-            </div>
-          </div>
-        )}
+              )}
+              {rows.map((row) => {
+                if (row.kind === 'day') return <DayDivider key={row.key} label={row.label} ts={row.ts} className={dens.dividerPy} />
+                if (row.kind === 'unread') return <UnreadDivider key={row.key} className={dens.dividerPy} />
+                if (row.kind !== 'msg') {
+                  return (
+                    <div key={row.key} className={`vc-conversation-special ${dens.group}`}>
+                      <MessageBubble
+                        msg={row.message} isMine={false} showHeader={false} density={densityKey}
+                        resolveRoom={resolveRoom} currentUserId={currentUserId}
+                        onToggleLike={row.kind === 'announce' ? onToggleLike : null}
+                        onToggleReaction={row.kind === 'announce' ? onToggleReaction : null}
+                        quickReactions={quickReactions}
+                      />
+                    </div>
+                  )
+                }
+                return (
+                  <div key={row.key} className={`vc-conversation-group ${dens.group} ${dens.row}`}>
+                    {row.items.map((message, index) => {
+                      const id = messageId(message)
+                      const replyTarget = message.replyToId ? resolveReplyTarget(message.replyToId) : null
+                      return (
+                        <MessageBubble
+                          key={id || `${row.key}-${index}`}
+                          msg={message}
+                          isMine={row.isMine}
+                          showHeader={index === 0}
+                          isLast={index === row.items.length - 1}
+                          density={densityKey}
+                          onRetry={onRetry}
+                          onCopy={onCopy}
+                          onCancel={onCancel}
+                          onImageClick={onImageClick}
+                          onReply={onReply}
+                          onToggleReaction={onToggleReaction}
+                          onEdit={onEdit}
+                          onDelete={onDelete}
+                          canModerate={canModerate}
+                          author={resolveChatAuthor(message, members, currentUserId, currentUserName)}
+                          authorColor={row.color || colorFromId(message.authorId || message.author || (row.isMine ? '__me__' : 'peer'))}
+                          replyTo={replyTarget}
+                          replyAuthor={message.replyToId ? resolveChatAuthor(messagesById.get(message.replyToId), members, currentUserId, currentUserName) : null}
+                          highlighted={highlightId != null && (highlightId === message.id || highlightId === message.firestoreId)}
+                          highlightTick={highlightTick}
+                          onJumpToReply={jumpToMessage}
+                          currentUserId={currentUserId}
+                          currentUserName={currentUserName}
+                          roomKey={roomKey}
+                          mentionsMe={!row.isMine && detectMentionMe(message, currentUserId, currentUserName, members)}
+                          isReply={!!message.replyToId}
+                          pinned={pinnedSet.has(id) || !!message.pinned}
+                          canPin={canPinAll || row.isMine}
+                          onTogglePin={onTogglePin}
+                          onToggleLike={onToggleLike}
+                          quickReactions={quickReactions}
+                          resolveRoom={resolveRoom}
+                          onRoomMention={onRoomMention}
+                          onMarkUnread={onMarkUnread}
+                          onOpenThread={onOpenThread}
+                          searchQuery={query}
+                        />
+                      )
+                    })}
+                  </div>
+                )
+              })}
+            </>
+          )}
+          {typingText && <div className="vc-conversation-typing" role="status"><span>{typingText}</span><i aria-hidden><b /><b /><b /></i></div>}
+        </div>
       </div>
 
-      {unseen > 0 && (
-        <button
-          onClick={scrollToBottom}
-          className="
-            absolute right-3 sm:right-5 bottom-3 z-10 inline-flex items-center gap-1.5
-            px-3 py-1.5 rounded-pill text-[11px] font-semibold text-white
-            vc-jump-bottom
-            active:scale-95
-            animate-fade-in-up
-          "
-          style={{ animationDuration: '180ms' }}
-          aria-label="Pular para as mensagens mais recentes"
-        >
-          <ArrowDown size={11} strokeWidth={2.5} className="vc-jump-icon" />
-          {unseen} {unseen === 1 ? 'mensagem nova' : 'mensagens novas'}
+      {showReturnButton && (
+        <button type="button" onClick={returnToPresent} className="vc-conversation-return" aria-label="Voltar às mensagens mais recentes">
+          <ArrowDown size={16} aria-hidden />
+          <span>{unseen > 0 ? `${unseen} ${unseen === 1 ? 'mensagem nova' : 'mensagens novas'}` : 'Voltar ao presente'}</span>
         </button>
       )}
     </div>
   )
 }
 
-function DayDivider({ label, className = 'px-4 sm:px-6 py-3' }) {
+function DayDivider({ label, ts, className = '' }) {
   return (
-    <div
-      role="separator"
-      aria-hidden
-      className={'vc-day-divider ' + className}
-    >
-      <span className="vc-day-divider__label">{label}</span>
-      <span className="vc-day-divider__dot" />
+    <div role="separator" aria-label={`Mensagens de ${label}`} className={`vc-conversation-day ${className}`}>
+      <time dateTime={new Date(ts).toISOString()}>{label}</time>
     </div>
   )
 }
 
-function UnreadDivider({ className = 'px-4 sm:px-6 py-2' }) {
+function UnreadDivider({ className = '' }) {
   return (
-    <div
-      role="separator"
-      className={'vc-day-divider unread-divider ' + className}
-      style={{ paddingTop: 10, paddingBottom: 10 }}
-    >
-      <span className="vc-day-divider__label" style={{ textTransform: 'uppercase' }}>Novas mensagens</span>
-      <span className="vc-day-divider__dot" />
+    <div role="separator" aria-label="Início das mensagens não lidas" className={`vc-conversation-unread ${className}`}>
+      <span>Não lidas</span>
     </div>
   )
 }
 
 function SkeletonStack() {
   return (
-    <div className="space-y-5 px-4 sm:px-6 pt-2">
-      {[1, 2, 3].map(i => (
-        <div key={i} className="flex gap-3 items-start">
-          <div className="w-10 h-10 rounded-full bg-surface2/40 shrink-0" />
-          <div className="flex-1 space-y-2 max-w-md">
-            <div className="h-2.5 w-28 rounded bg-surface2/40" />
-            <div className="h-3 w-full rounded bg-surface2/40" />
-            <div className="h-3 w-3/4 rounded bg-surface2/40" />
-          </div>
+    <div className="vc-conversation-skeleton" role="status" aria-label="Carregando mensagens">
+      {[0, 1, 2, 3].map((item) => (
+        <div key={item} aria-hidden>
+          <span className="vc-conversation-skeleton__avatar" />
+          <span className="vc-conversation-skeleton__copy"><i /><i /><i /></span>
         </div>
       ))}
     </div>
   )
 }
 
-function EmptyHint({ text, compact = false }) {
-  // Never use h-full here — it doubles scrollHeight under listHeader (rules)
-  // and auto-scroll-to-bottom hides the card above.
+function EmptyHint({ text, compact, filtered }) {
+  const Icon = filtered ? SearchX : MessageSquare
   return (
-    <div
-      className={
-        (compact ? 'py-8' : 'min-h-[min(52vh,360px)] py-12') +
-        ' flex flex-col items-center justify-center text-center px-6'
-      }
-    >
-      <MessageSquare size={28} className="text-line mb-3" />
-      <p className="text-[12.5px] text-muted leading-relaxed">{text}</p>
+    <div className={`vc-conversation-empty ${compact ? 'is-compact' : ''}`}>
+      <span className="vc-conversation-empty__icon"><Icon size={22} aria-hidden /></span>
+      <strong>{filtered ? 'Nada por aqui' : 'A conversa começa aqui'}</strong>
+      <p>{text}</p>
     </div>
   )
 }

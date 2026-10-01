@@ -2,13 +2,14 @@
  * PeoplePanel — right-side member list matching the Pessoas mockup:
  * Convidar CTA, tabs Pessoas/Detalhes, live call widget, online/offline.
  */
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   UserPlus, Users, X, Search, Crown, Headphones, MoreHorizontal,
   Laptop, Clock, Gamepad2, MessageCircle, BookOpen, Music, Radio,
-  ChevronLeft, Phone, PhoneOff,
+  ChevronLeft, Phone, PhoneOff, Rows3, Layers3, XCircle,
 } from 'lucide-react'
 import { PersonAvatar } from '../../features/people'
+import SpaceAvatar from '../SpaceAvatar'
 import { UserTagChips } from '../../features/people/components/UserTagChips'
 import {
   memberPresenceKind,
@@ -18,7 +19,7 @@ import { PURPOSE_BY_KEY } from '../../features/rooms'
 import { resolveCardTheme } from '../../features/account/model/profileCardThemes'
 import { CardThemeFx } from '../../features/account/components/CardThemeFx'
 import { Appear, AppearList, AppearItem } from '../../shared/motion/Appear'
-import { onColorHex } from '../../features/spaces'
+import { TabIndicator, TabPanelSwap } from '../../shared/motion/Transitions.jsx'
 
 const PURPOSE_ICON = {
   voice: Radio,
@@ -147,23 +148,52 @@ export default function PeoplePanel({
   const [collapsed, setCollapsed] = useState(false)
   const [query, setQuery] = useState('')
   const [tab, setTab] = useState('people') // people | details
+  const [memberFilter, setMemberFilter] = useState('all')
+  const [density, setDensity] = useState('compact')
   const searchRef = useRef(null)
 
+  // O painel agora persiste entre Spaces (presenceKey estável): zera o
+  // contexto de busca/aba para não vazar filtros de um Space para outro.
+  useEffect(() => {
+    setQuery('')
+    setMemberFilter('all')
+    setTab('people')
+  }, [space?.id])
+
+  useEffect(() => {
+    if (!space?.id || typeof window === 'undefined') return
+    try { setDensity(window.localStorage.getItem(`voicecraft:people-density:${space.id}`) || 'compact') }
+    catch { setDensity('compact') }
+  }, [space?.id])
+
+  const toggleDensity = () => {
+    const next = density === 'compact' ? 'comfortable' : 'compact'
+    setDensity(next)
+    try { window.localStorage.setItem(`voicecraft:people-density:${space?.id || 'default'}`, next) } catch {}
+  }
+
   const accent = space?.color || 'var(--space-accent)'
-  const onAccent = typeof accent === 'string' && accent.startsWith('#')
-    ? onColorHex(accent)
-    : 'var(--space-on-accent, #fff)'
   const memberCount = members.length
+  const memberCounts = useMemo(() => ({
+    all: members.length,
+    online: members.filter((m) => memberPresenceKind(m) !== 'offline').length,
+    room: members.filter((m) => !!m.location?.roomId).length,
+    liveRooms: new Set(members.map((m) => m.location?.roomId).filter(Boolean)).size,
+  }), [members])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return members
     return members.filter((m) => {
-      const name = String(m.displayName || '').toLowerCase()
-      const handle = String(m.handle || '').toLowerCase()
-      return name.includes(q) || handle.includes(q)
+      const matchesText = !q
+        || String(m.displayName || '').toLowerCase().includes(q)
+        || String(m.handle || '').toLowerCase().includes(q)
+      const kind = memberPresenceKind(m)
+      const matchesFilter = memberFilter === 'all'
+        || (memberFilter === 'online' && kind !== 'offline')
+        || (memberFilter === 'room' && !!m.location?.roomId)
+      return matchesText && matchesFilter
     })
-  }, [members, query])
+  }, [members, query, memberFilter])
 
   const sections = useMemo(() => {
     const inRoom = []
@@ -209,87 +239,83 @@ export default function PeoplePanel({
 
   return (
     <aside
-      className="vc-people-panel w-full h-full bg-[#0B0E11] border-l border-white/[0.06] flex flex-col overflow-hidden"
+      className={`vc-people-panel vc-people-panel--${density} w-full h-full bg-[#0B0E11] border-l border-white/[0.06] flex flex-col overflow-hidden`}
       aria-label="Pessoas"
     >
-      {/* Top invite — solid Space accent (no gradient) */}
-      <Appear key={`people-invite-${space?.id || 'x'}`} delay={0.02} y={6} className="shrink-0 px-3 pt-3 pb-2">
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onInvite}
-            className="vc-people-invite-cta flex-1 h-10 rounded-full inline-flex items-center justify-center gap-2 text-[13px] font-semibold transition-[filter,transform,box-shadow] duration-150 hover:brightness-110 active:scale-[0.98]"
-            style={{
-              background: accent,
-              color: onAccent,
-              boxShadow: `0 8px 22px -10px color-mix(in srgb, ${typeof accent === 'string' ? accent : 'var(--space-accent)'} 55%, transparent)`,
-            }}
-          >
-            <UserPlus size={15} strokeWidth={2.2} />
-            Convidar
-          </button>
-          {onClose && (
+      <header className="vc-people-header shrink-0">
+        <div className="flex items-center gap-2 px-3 pt-3 pb-2.5">
+          <span className="vc-people-header__icon"><Users size={14} /></span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] font-semibold text-strong leading-tight">Pessoas</p>
+            <p className="text-[10px] text-muted mt-0.5">{memberCount} no Space</p>
+          </div>
+          {onInvite && (
             <button
               type="button"
-              onClick={onClose}
-              title="Fechar painel"
-              aria-label="Fechar painel de pessoas"
-              className="w-9 h-9 rounded-full flex items-center justify-center text-muted hover:text-strong hover:bg-white/[0.06] transition-colors shrink-0"
+              onClick={onInvite}
+              className="vc-people-invite-compact"
+              style={{ color: accent }}
+              title="Convidar"
+              aria-label="Convidar pessoas"
             >
-              <X size={14} />
+              <UserPlus size={14} strokeWidth={2.2} />
+            </button>
+          )}
+          {onClose && (
+            <button type="button" onClick={onClose} title="Fechar painel" aria-label="Fechar painel de pessoas" className="vc-people-header__button">
+              <X size={13} />
             </button>
           )}
         </div>
-      </Appear>
+        <div className="vc-people-tabs px-3 flex items-center gap-4">
+          {[
+            { id: 'people', label: 'Pessoas' },
+            { id: 'details', label: 'Detalhes' },
+          ].map((t) => {
+            const active = tab === t.id
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTab(t.id)}
+                className={'relative h-8 text-[11.5px] font-semibold transition-colors ' + (active ? 'text-strong' : 'text-muted hover:text-ink')}
+              >
+                {t.label}
+                {active && <TabIndicator layoutId="people-tab-indicator" className="vc-people-tabs__active" style={{ background: 'var(--space-accent)' }} />}
+              </button>
+            )
+          })}
+        </div>
+      </header>
 
-      {/* Tabs */}
-      <div className="shrink-0 px-3.5 flex items-center gap-5 border-b border-white/[0.06]">
-        {[
-          { id: 'people', label: 'Pessoas' },
-          { id: 'details', label: 'Detalhes' },
-        ].map((t) => {
-          const active = tab === t.id
-          return (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setTab(t.id)}
-              className={
-                'relative h-10 text-[13px] font-semibold transition-colors ' +
-                (active ? 'text-strong' : 'text-muted hover:text-ink')
-              }
-            >
-              {t.label}
-              {active && (
-                <span
-                  className="absolute left-0 right-0 -bottom-px h-[2px] rounded-full"
-                  style={{ background: 'var(--space-accent)' }}
-                  aria-hidden
-                />
-              )}
-            </button>
-          )
-        })}
-      </div>
-
+      <TabPanelSwap activeKey={tab} className="flex-1 min-h-0 flex flex-col" role="tabpanel">
       {tab === 'details' ? (
-        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-4 space-y-3">
-          <p className="text-[13px] font-semibold text-strong">{space?.name || 'Space'}</p>
-          {space?.description ? (
-            <p className="text-[12px] text-muted leading-relaxed">{space.description}</p>
-          ) : (
-            <p className="text-[12px] text-muted italic">Sem descrição ainda.</p>
-          )}
-          <p className="text-[11px] text-muted">
-            {memberCount} {memberCount === 1 ? 'membro' : 'membros'}
-          </p>
+        <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
+          <section className="vc-people-details-identity" style={{ '--details-accent': accent }}>
+            <SpaceAvatar space={space} size={48} rounded="xl" className="shrink-0 ring-1 ring-white/15" />
+            <div className="min-w-0">
+              <p className="text-[14px] font-semibold text-strong truncate">{space?.name || 'Space'}</p>
+              <p className="text-[10.5px] text-muted mt-0.5">Identidade da comunidade</p>
+            </div>
+          </section>
+          <div className="vc-people-details-metrics">
+            <DetailMetric value={memberCount} label="membros" />
+            <DetailMetric value={memberCounts.online} label="online" />
+            <DetailMetric value={(space?.rooms || []).length} label="salas" />
+            <DetailMetric value={memberCounts.liveRooms} label="ao vivo" />
+          </div>
+          <section className="vc-people-details-copy">
+            <h3>Sobre este Space</h3>
+            <p>{space?.description || 'Este Space ainda não tem uma descrição.'}</p>
+          </section>
+          {onInvite && <button type="button" onClick={onInvite} className="vc-people-details-invite"><UserPlus size={14} /> Convidar pessoas</button>}
         </div>
       ) : (
         <>
           {/* Live call widget */}
           {voiceRoom && (
             <Appear delay={0.04} y={6} className="shrink-0 px-3 pt-3">
-              <div className="vc-live-call-card rounded-2xl border border-white/[0.08] bg-white/[0.035] p-3 space-y-2.5">
+              <div className="vc-live-call-card rounded-xl border border-white/[0.08] bg-white/[0.035] p-3 space-y-2.5">
                 <div className="flex items-start gap-2.5 min-w-0">
                   <span
                     className="shrink-0 flex items-center justify-center mt-0.5"
@@ -374,8 +400,19 @@ export default function PeoplePanel({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Buscar pessoas..."
-                className="w-full h-9 pl-9 pr-3 rounded-xl bg-white/[0.04] border border-white/[0.06] text-[12.5px] text-strong placeholder:text-muted focus:outline-none focus:border-[color-mix(in_srgb,var(--space-accent)_40%,transparent)]"
+                className="w-full h-9 pl-9 pr-9 rounded-lg bg-white/[0.04] border border-white/[0.06] text-[12.5px] text-strong placeholder:text-muted focus:outline-none focus:border-[color-mix(in_srgb,var(--space-accent)_40%,transparent)]"
               />
+              {query && <button type="button" onClick={() => setQuery('')} className="vc-field-clear" aria-label="Limpar busca" title="Limpar busca"><X size={12} /></button>}
+            </div>
+            <div className="vc-people-filterbar" aria-label="Filtrar pessoas">
+              {[
+                { id: 'all', label: 'Todos', count: memberCounts.all },
+                { id: 'online', label: 'Online', count: memberCounts.online },
+                { id: 'room', label: 'Em sala', count: memberCounts.room },
+              ].map((item) => <button key={item.id} type="button" aria-pressed={memberFilter === item.id} onClick={() => setMemberFilter(item.id)}>{item.label}<span>{item.count}</span></button>)}
+              <button type="button" onClick={toggleDensity} className="vc-density-toggle" title={density === 'compact' ? 'Usar visual confortável' : 'Usar visual compacto'} aria-label="Alternar densidade">
+                {density === 'compact' ? <Layers3 size={13} /> : <Rows3 size={13} />}
+              </button>
             </div>
           </Appear>
 
@@ -389,9 +426,7 @@ export default function PeoplePanel({
               </Appear>
             ) : filtered.length === 0 ? (
               <Appear key={`none-${space?.id}`} delay={0.08} y={6}>
-                <p className="text-[12px] text-muted text-center px-4 py-6">
-                  Ninguém com esse nome.
-                </p>
+                <div className="vc-filter-empty"><XCircle size={19} /><p>Ninguém corresponde a esta busca ou filtro.</p><button type="button" onClick={() => { setQuery(''); setMemberFilter('all') }}>Limpar filtros</button></div>
               </Appear>
             ) : (
               <div key={`list-${space?.id || 'people'}`}>
@@ -430,6 +465,7 @@ export default function PeoplePanel({
           </div>
         </>
       )}
+      </TabPanelSwap>
 
       {/* Footer */}
       <div className="shrink-0 px-3 py-2.5 border-t border-white/[0.06] flex items-center justify-between gap-2">
@@ -453,6 +489,10 @@ export default function PeoplePanel({
   )
 }
 
+function DetailMetric({ value, label }) {
+  return <div><strong>{value}</strong><span>{label}</span></div>
+}
+
 function PersonRow({ member, space, isSelf, isCreator, accent, onOpenProfile }) {
   const status = memberStatus(member, space)
   const name = member.displayName || 'convidado'
@@ -471,7 +511,7 @@ function PersonRow({ member, space, isSelf, isCreator, accent, onOpenProfile }) 
       <button
         type="button"
         onClick={() => onOpenProfile?.(member)}
-        className="vc-people-row group relative w-full flex items-center gap-2.5 px-2.5 py-2.5 rounded-xl overflow-hidden transition-colors text-left hover:brightness-110 h-[86px]"
+        className="vc-people-row group relative w-full flex items-center gap-2 px-2 py-1.5 rounded-lg overflow-hidden transition-colors text-left"
         style={styled ? {
           border: `1.5px solid ${theme.popoverBorder}`,
           boxShadow: themed ? `0 0 18px -6px ${theme.popoverGlow}, inset 0 0 24px -12px ${theme.popoverGlow}` : undefined,
@@ -515,7 +555,7 @@ function PersonRow({ member, space, isSelf, isCreator, accent, onOpenProfile }) 
               src={member.photoURL}
               name={name}
               userId={member.userId}
-              size={34}
+              size={32}
               className="ring-2 ring-[#0B0E11]"
             />
           </span>
@@ -526,7 +566,7 @@ function PersonRow({ member, space, isSelf, isCreator, accent, onOpenProfile }) 
           />
         </div>
 
-        <div className="relative min-w-0 flex-1 z-[1] flex flex-col justify-center gap-1.5 overflow-x-hidden overflow-y-visible">
+        <div className="relative min-w-0 flex-1 z-[1] flex flex-col justify-center gap-0.5 overflow-hidden">
           <p className="text-[13px] font-semibold text-strong leading-none truncate flex items-center gap-1 min-h-[14px]">
             <span className="truncate">{name}</span>
             {isSelf && (

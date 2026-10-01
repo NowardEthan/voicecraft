@@ -13,7 +13,7 @@ const RecentConversations = memo(function RecentConversations({
   const online = onlineMembers(members)
 
   return (
-    <section className="vc-space-card rounded-[18px] border border-white/[0.07] bg-[#14161c]/90 overflow-hidden h-full flex flex-col">
+    <section className="vc-space-card vc-space-module vc-space-module--conversations rounded-[18px] border border-white/[0.07] bg-[#14161c]/90 overflow-hidden h-full flex flex-col">
       <div className="flex items-center justify-between gap-3 px-4 sm:px-5 pt-4 pb-3">
         <div className="flex items-center gap-2 min-w-0">
           <MessageCircle size={15} className="text-accent shrink-0" strokeWidth={1.75} />

@@ -1,17 +1,6 @@
-/**
- * ConversationSearch — message filter bar (DESIGN_SYSTEM §D).
- *
- * Opens via the magnifying-glass button in the room header. While open,
- * the MessageList filters messages whose text contains the query (case-
- * insensitive). The bar shows how many matches we found and lets the
- * user close it.
- *
- * Implementation note: we don't actually move a focus pointer between
- * matches — we just filter the list. That's intentional. Real "next
- * match" navigation is out of scope for the v1 polish pass.
- */
-import { useEffect, useRef, useState } from 'react'
-import { Search, X } from 'lucide-react'
+﻿/** Search workspace for the currently loaded conversation. */
+import { useEffect, useRef } from 'react'
+import { ChevronDown, ChevronUp, Paperclip, Pin, Search, X } from 'lucide-react'
 
 export default function ConversationSearch({
   open,
@@ -19,52 +8,64 @@ export default function ConversationSearch({
   onQueryChange,
   onClose,
   matchCount = 0,
+  activeIndex = -1,
+  onNext,
+  onPrevious,
+  filters = {},
+  onFiltersChange,
+  authors = [],
+  restoreFocusRef = null,
 }) {
   const inputRef = useRef(null)
+  const wasOpenRef = useRef(false)
 
   useEffect(() => {
     if (open) {
-      // Focus on open.
-      const t = setTimeout(() => inputRef.current?.focus(), 0)
-      return () => clearTimeout(t)
+      wasOpenRef.current = true
+      const frame = requestAnimationFrame(() => inputRef.current?.focus())
+      return () => cancelAnimationFrame(frame)
     }
-  }, [open])
+    if (wasOpenRef.current) {
+      wasOpenRef.current = false
+      restoreFocusRef?.current?.focus()
+    }
+    return undefined
+  }, [open, restoreFocusRef])
 
   if (!open) return null
+  const patch = (next) => onFiltersChange?.({ ...filters, ...next })
 
   return (
-    <div
-      className="
-        w-full max-w-md flex items-center gap-2
-        px-3 py-1.5 rounded-input
-        bg-surface1 border border-line
-        text-[12.5px]
-      "
-    >
-      <Search size={13} className="text-muted shrink-0" />
-      <input
-        ref={inputRef}
-        value={query}
-        onChange={(e) => onQueryChange(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Escape') onClose() }}
-        placeholder="buscar na conversa…"
-        className="flex-1 bg-transparent text-strong placeholder:text-muted focus:outline-none text-[12.5px]"
-        aria-label="Buscar na conversa"
-      />
-      {query && (
-        <span className="text-[10.5px] text-muted tabular-nums shrink-0">
-          {matchCount} {matchCount === 1 ? 'resultado' : 'resultados'}
-        </span>
-      )}
-      <button
-        type="button"
-        onClick={onClose}
-        className="w-6 h-6 rounded flex items-center justify-center text-muted hover:text-strong hover:bg-surface2 transition-colors"
-        title="Fechar busca"
-        aria-label="Fechar busca"
-      >
-        <X size={11} />
-      </button>
+    <div className="vc-conversation-search" role="search" aria-label="Buscar nesta conversa">
+      <div className="vc-search-query">
+        <Search size={16} aria-hidden />
+        <input
+          ref={inputRef}
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') { event.preventDefault(); onClose?.() }
+            if (event.key === 'Enter') { event.preventDefault(); event.shiftKey ? onPrevious?.() : onNext?.() }
+          }}
+          placeholder="Buscar nesta conversa…"
+          aria-label="Texto da busca"
+        />
+        <span className="vc-search-counter" aria-live="polite">{matchCount ? `${activeIndex >= 0 ? activeIndex + 1 : 0}/${matchCount}` : '0 resultados'}</span>
+        <button type="button" onClick={onPrevious} disabled={!matchCount} aria-label="Resultado anterior" title="Resultado anterior"><ChevronUp size={16} /></button>
+        <button type="button" onClick={onNext} disabled={!matchCount} aria-label="Próximo resultado" title="Próximo resultado"><ChevronDown size={16} /></button>
+        <button type="button" onClick={onClose} aria-label="Fechar busca" title="Fechar busca"><X size={16} /></button>
+      </div>
+      <div className="vc-search-filters" aria-label="Filtros da busca">
+        <select value={filters.authorId || ''} onChange={(event) => patch({ authorId: event.target.value })} aria-label="Filtrar por autor">
+          <option value="">Todos os autores</option>
+          {authors.map((author) => <option key={author.id} value={author.id}>{author.label}</option>)}
+        </select>
+        <select value={filters.period || 'all'} onChange={(event) => patch({ period: event.target.value })} aria-label="Filtrar por período">
+          <option value="all">Qualquer período</option><option value="day">Últimas 24 horas</option><option value="week">Últimos 7 dias</option><option value="month">Últimos 30 dias</option>
+        </select>
+        <button type="button" className={filters.attachments ? 'is-active' : ''} aria-pressed={!!filters.attachments} onClick={() => patch({ attachments: !filters.attachments })}><Paperclip size={14} /> Anexos</button>
+        <button type="button" className={filters.pinned ? 'is-active' : ''} aria-pressed={!!filters.pinned} onClick={() => patch({ pinned: !filters.pinned })}><Pin size={14} /> Fixadas</button>
+      </div>
     </div>
   )
 }

@@ -14,6 +14,8 @@ import { Plus, Trash2, ChevronDown } from 'lucide-react'
 import EmptyState from '../../shared/ui/EmptyState'
 import { groupByPurpose, PURPOSE_BY_KEY } from '../../features/rooms'
 import { prefetchRoomMessages } from '../../shared/cache/chatPrefetch'
+import { MeasuredDisclosure } from '../../shared/motion/Transitions.jsx'
+import { AppearItem, AppearList } from '../../shared/motion/Appear.jsx'
 
 export default function RoomList({
   space,
@@ -69,7 +71,7 @@ export default function RoomList({
           action={{ label: 'Criar primeira sala', onClick: () => setCreatingFor('conversation') }}
           accent
         />
-        {creatingFor && (
+        <MeasuredDisclosure open={!!creatingFor}>
           <InlineCreate
             purposeKey={creatingFor}
             value={newName}
@@ -77,7 +79,7 @@ export default function RoomList({
             onCommit={commitCreate}
             onCancel={cancelCreate}
           />
-        )}
+        </MeasuredDisclosure>
       </div>
     )
   }
@@ -93,6 +95,7 @@ export default function RoomList({
               onClick={() => toggle(purpose.key)}
               className="w-full flex items-center gap-1.5 px-2 py-1.5 group"
               aria-expanded={!isCollapsed}
+              aria-controls={`purpose-rooms-${purpose.key}`}
             >
               <ChevronDown
                 size={10}
@@ -107,14 +110,14 @@ export default function RoomList({
               </span>
               <span className="text-[10px] text-muted ml-1">{rooms.length}</span>
             </button>
-            {!isCollapsed && (
-              <div className="space-y-0.5">
+            <MeasuredDisclosure open={!isCollapsed} id={`purpose-rooms-${purpose.key}`}>
+              <AppearList className="space-y-0.5">
                 {rooms.map(room => {
                   const isActive = currentRoomId === room.id
                   const isSelected = selectedRoomId === room.id
                   return (
+                    <AppearItem key={room.id}>
                     <RoomRow
-                      key={room.id}
                       room={room}
                       spaceId={space.id}
                       isActive={isActive}
@@ -126,6 +129,7 @@ export default function RoomList({
                       onDelete={() => askDelete(room.id)}
                       onCancelDelete={() => setConfirmDelete(null)}
                     />
+                    </AppearItem>
                   )
                 })}
                 {creatingFor === purpose.key && (
@@ -137,8 +141,8 @@ export default function RoomList({
                     onCancel={cancelCreate}
                   />
                 )}
-              </div>
-            )}
+              </AppearList>
+            </MeasuredDisclosure>
           </section>
         )
       })}
@@ -158,7 +162,7 @@ export default function RoomList({
             criar sala
           </button>
         )}
-        {creatingFor && (
+        <MeasuredDisclosure open={!!creatingFor}>
           <InlineCreate
             purposeKey={creatingFor}
             value={newName}
@@ -166,7 +170,7 @@ export default function RoomList({
             onCommit={commitCreate}
             onCancel={cancelCreate}
           />
-        )}
+        </MeasuredDisclosure>
       </div>
     </div>
   )
@@ -215,7 +219,7 @@ function RoomRow({ room, spaceId, isActive, isSelected, purpose, canDelete, conf
       {canDelete && !confirmingDelete && (
         <button
           onClick={(e) => { e.stopPropagation(); onDelete() }}
-          className="opacity-0 group-hover:opacity-100 w-5 h-5 rounded flex items-center justify-center text-muted hover:text-danger hover:bg-danger/15 transition-all"
+          className="opacity-0 group-hover:opacity-100 w-5 h-5 rounded flex items-center justify-center text-muted hover:text-danger hover:bg-danger/15 transition-[color,background-color,border-color,box-shadow,opacity,transform,filter]"
           title="Apagar sala"
           aria-label="Apagar sala"
         >

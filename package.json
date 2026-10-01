@@ -16,7 +16,10 @@
     "audio:build": "audio-service\\build.bat",
     "audio:validate": "node scripts/validate-audio-helper.mjs",
     "test:audio": "node scripts/tests/test_audio_discord_ipc.mjs",
-    "test:updater": "node --test scripts/tests/test_updater_install_flow.mjs"
+    "test:updater": "node --test scripts/tests/test_updater_install_flow.mjs",
+    "test:chat": "node --experimental-loader=./scripts/tests/chat-loader.mjs --test scripts/tests/chat-timeline.test.mjs scripts/tests/chat-composer.test.mjs scripts/tests/chat-outbox.test.mjs scripts/tests/chat-rules.test.mjs scripts/tests/chat-chan.test.mjs scripts/tests/chat-special-cards.test.mjs scripts/tests/chat-feature-cards-foundation.test.mjs",
+    "test:motion": "node --test scripts/tests/motion-policy.test.mjs scripts/tests/motion-overlay.test.mjs scripts/tests/motion-transitions.test.mjs scripts/tests/motion-dynamic-content.test.mjs scripts/tests/motion-validation.test.mjs",
+    "test:firestore-rules": "firebase emulators:exec --only firestore \"node --test scripts/tests/firestore-special-cards.rules.test.mjs\""
   },
   "keywords": [
     "webrtc",
@@ -43,9 +46,11 @@
     "lucide-react": "^1.41.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "ws": "^8.21.3"
+    "ws": "^8.21.3",
+    "xss": "1.0.15"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "5.0.2",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
     "@vitejs/plugin-react": "^4.2.0",
@@ -58,8 +63,7 @@
     "postcss": "^8.4.32",
     "tailwindcss": "^3.4.0",
     "vite": "^5.0.0",
-    "vite-plugin-electron": "^1.1.2",
-    "vite-plugin-electron-renderer": "^1.0.0"
+    "vite-plugin-electron": "0.29.0"
   },
   "build": {
     "appId": "com.voicecraft.app",

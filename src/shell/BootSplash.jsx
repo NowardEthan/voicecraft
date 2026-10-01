@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { BrandAppIcon } from '../shared/ui/BrandMark'
 import { BOOT_PHASE_COPY } from '../shared/media/bootBootstrap'
+import { useMotionPolicy } from '../shared/motion/MotionPolicyProvider'
 
 const PHASE_ORDER = ['link', 'ready']
 
@@ -25,11 +26,13 @@ export default function BootSplash({ phase = 'warm' }) {
   const label = STATUS_COPY[phase] || STATUS_COPY.warm
   const progress = phaseProgress(phase)
   const [tick, setTick] = useState(0)
+  const { allowContinuous } = useMotionPolicy()
 
   useEffect(() => {
+    if (!allowContinuous) return undefined
     const t = setInterval(() => setTick((n) => n + 1), 1800)
     return () => clearInterval(t)
-  }, [])
+  }, [allowContinuous])
 
   const whisper = useMemo(() => {
     const asides = [
@@ -75,13 +78,14 @@ export default function BootSplash({ phase = 'warm' }) {
             style={{
               background: 'radial-gradient(circle, rgba(87,190,255,0.22) 0%, transparent 70%)',
             }}
-            animate={{ scale: [1, 1.06, 1], opacity: [0.55, 0.8, 0.55] }}
+            animate={allowContinuous ? { scale: [1, 1.06, 1], opacity: [0.55, 0.8, 0.55] } : undefined}
             transition={{ duration: 2.4, ease: 'easeInOut', repeat: Infinity }}
           />
           <BrandAppIcon
             size={84}
             decorative
             className="vc-brand-loader__icon relative shadow-[0_22px_56px_-16px_rgba(10,102,255,0.55)]"
+            data-motion-intent="continuous"
           />
         </div>
 
@@ -143,9 +147,9 @@ export default function BootSplash({ phase = 'warm' }) {
             />
           </div>
           <div className="mt-3 flex items-center justify-center gap-1.5" aria-hidden>
-            <span className="vc-boot-dot" />
-            <span className="vc-boot-dot" style={{ animationDelay: '0.15s' }} />
-            <span className="vc-boot-dot" style={{ animationDelay: '0.3s' }} />
+            <span data-motion-intent="continuous" className="vc-boot-dot" />
+            <span data-motion-intent="continuous" className="vc-boot-dot" style={{ animationDelay: '0.15s' }} />
+            <span data-motion-intent="continuous" className="vc-boot-dot" style={{ animationDelay: '0.3s' }} />
           </div>
         </div>
       </motion.div>

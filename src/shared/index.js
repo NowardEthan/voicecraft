@@ -7,11 +7,22 @@ export {
   EASE_SPRING_SNAPPY,
   DUR,
 } from './motion/presets'
+export {
+  MOTION_INTENTS, MOTION_DURATION, MOTION_EASING, MOTION_SPRING,
+  MOTION_TRANSITION, MOTION_VARIANTS,
+} from './motion/tokens'
+export { MotionPolicyProvider, useMotionPolicy, useMotionIntent } from './motion/MotionPolicyProvider'
+export { resolveMotionPolicy, shouldAnimateIntent } from './motion/policy'
 
 export { ModalShell } from './motion/ModalShell'
+export { AnchoredOverlay, TooltipOverlay } from './motion/AnchoredOverlay'
+export { OVERLAY_LAYERS, overlayLayerVar } from './motion/layers'
+export { resolveOverlayMotion } from './motion/overlayPolicy'
+export { ViewTransition, DrawerPresence, TabIndicator, TabPanelSwap, PersistentTabPanel, MeasuredDisclosure } from './motion/Transitions'
+export { resolveViewTransition, resolveDrawerTransition, resolveTabTransition, resolveDisclosureTransition } from './motion/transitionPolicy'
 export {
   FadeScale, Fade, SlideUp, SlideRight, SlideLeft, Pop,
-  MotionButton, MotionCard, AnimatePresence, motion,
+  IntentMotion, MotionButton, MotionCard, AnimatePresence, motion,
 } from './motion/Motion'
 export {
   Appear,

@@ -300,8 +300,8 @@ export default function AppTab({ draft, setDraft }) {
           {updateStatus.status === 'downloading' && (
             <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
               <div
-                className="h-full bg-accent transition-[width] duration-300"
-                style={{ width: `${Math.max(0, Math.min(100, updateStatus.percent || 0))}%` }}
+                className="h-full w-full origin-left bg-accent transition-transform duration-300"
+                style={{ transform: `scaleX(${Math.max(0, Math.min(100, updateStatus.percent || 0)) / 100})` }}
               />
             </div>
           )}

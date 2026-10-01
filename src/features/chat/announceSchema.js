@@ -2,6 +2,7 @@
  * Rich chat announcement payload helpers.
  */
 
+import filterXSS from 'xss'
 import { DEFAULT_COVER_FIT, normalizeCoverFit } from '../spaces/model/spaceCover'
 
 export const ANNOUNCE_ACCENTS = [
@@ -23,7 +24,7 @@ export const ANNOUNCE_AUTHOR_MODES = [
   { id: 'me', label: 'Eu' },
   { id: 'member', label: 'Membro' },
   { id: 'system', label: 'Sistema' },
-  { id: 'custom', label: 'Custom' },
+  { id: 'custom', label: 'Personalizado' },
 ]
 
 /** Compact banner strip — fixed height so chat width doesn't inflate the cover. */
@@ -138,15 +139,39 @@ export function isAnnounceMessage(msg) {
   return msg?.kind === 'announce' || !!msg?.announce
 }
 
-/** Very small HTML allowlist for announce rich text. */
+const ANNOUNCE_HTML_FILTER = new filterXSS.FilterXSS({
+  // Positive allowlist: only markup emitted by AnnounceRichText and template chips.
+  whiteList: {
+    b: [], strong: [], i: [], em: [], u: [], br: [],
+    div: ['style'], p: ['style'], blockquote: ['style'],
+    font: ['face', 'size', 'color'],
+    span: ['style', 'class', 'data-ph', 'contenteditable'],
+  },
+  css: {
+    whiteList: {
+      color: true,
+      'font-family': true,
+      'font-size': true,
+      'text-align': true,
+      'margin-left': true,
+    },
+  },
+  stripIgnoreTag: true,
+  stripIgnoreTagBody: ['script', 'style', 'iframe', 'object', 'embed', 'svg', 'math', 'template', 'form'],
+  onTagAttr(tag, name, value) {
+    if (tag !== 'span') return undefined
+    if (name === 'class') return value === 'lobby-ph' ? 'class="lobby-ph"' : ''
+    if (name === 'data-ph') {
+      return ['user', 'space', 'count'].includes(value) ? `data-ph="${value}"` : ''
+    }
+    if (name === 'contenteditable') return value === 'false' ? 'contenteditable="false"' : ''
+    return undefined
+  },
+})
+
+/** Structural positive allowlist for editor-produced rich text. */
 export function sanitizeAnnounceHtml(html) {
-  let out = String(html || '')
-  out = out.replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
-  out = out.replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, '')
-  out = out.replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
-  out = out.replace(/javascript:/gi, '')
-  out = out.replace(/<\/?(?:iframe|object|embed|link|meta|form|input|button)[^>]*>/gi, '')
-  return out.slice(0, 50_000)
+  return ANNOUNCE_HTML_FILTER.process(String(html || '').slice(0, 100_000)).slice(0, 50_000)
 }
 
 export function htmlToPlainText(html) {

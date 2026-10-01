@@ -63,7 +63,7 @@ function Stepper({ step }) {
               <span
                 aria-current={active ? 'step' : undefined}
                 className={
-                  'w-7 h-7 rounded-full flex items-center justify-center text-[12px] font-bold transition-all ' +
+                  'w-7 h-7 rounded-full flex items-center justify-center text-[12px] font-bold transition-[color,background-color,border-color,box-shadow,opacity,transform,filter] ' +
                   (active
                     ? 'bg-accent text-on-accent shadow-[0_0_0_3px_var(--space-accent-soft),0_0_16px_-2px_var(--space-accent-glow-24)]'
                     : done
@@ -772,7 +772,7 @@ function Footer({
           type="button"
           onClick={goNext}
           disabled={!canNext1}
-          className="inline-flex items-center justify-center gap-2 w-[280px] h-[50px] rounded-[12px] bg-gradient-to-r from-accent to-accent text-on-accent text-[14px] font-semibold hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.98] shadow-[0_8px_24px_-8px_var(--space-accent-glow-24),0_0_0_1px_rgba(255,255,255,0.10)_inset]"
+          className="inline-flex items-center justify-center gap-2 w-[280px] h-[50px] rounded-[12px] bg-gradient-to-r from-accent to-accent text-on-accent text-[14px] font-semibold hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed transition-[color,background-color,border-color,box-shadow,opacity,transform,filter] active:scale-[0.98] shadow-[0_8px_24px_-8px_var(--space-accent-glow-24),0_0_0_1px_rgba(255,255,255,0.10)_inset]"
         >
           {reviewingFrom ? 'Voltar à revisão' : 'Continuar'}
           {reviewingFrom
@@ -786,7 +786,7 @@ function Footer({
           disabled={creating}
           aria-busy={creating || undefined}
           aria-live="polite"
-          className="inline-flex items-center justify-center gap-2 w-[280px] h-[50px] rounded-[12px] bg-gradient-to-r from-accent to-accent text-on-accent text-[14px] font-semibold hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.98] shadow-[0_8px_24px_-8px_var(--space-accent-glow-24),0_0_0_1px_rgba(255,255,255,0.10)_inset]"
+          className="inline-flex items-center justify-center gap-2 w-[280px] h-[50px] rounded-[12px] bg-gradient-to-r from-accent to-accent text-on-accent text-[14px] font-semibold hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed transition-[color,background-color,border-color,box-shadow,opacity,transform,filter] active:scale-[0.98] shadow-[0_8px_24px_-8px_var(--space-accent-glow-24),0_0_0_1px_rgba(255,255,255,0.10)_inset]"
         >
           {creating ? (
             <>

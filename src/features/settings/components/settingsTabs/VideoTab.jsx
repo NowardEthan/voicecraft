@@ -12,7 +12,7 @@ function ChoiceRow({ label, options, value, onChange }) {
               key={String(key)}
               type="button"
               onClick={() => onChange(key)}
-              className={`min-w-[4.5rem] px-3 py-2 rounded-xl text-[12.5px] font-medium transition-all ${
+              className={`min-w-[4.5rem] px-3 py-2 rounded-xl text-[12.5px] font-medium transition-[color,background-color,border-color,box-shadow,opacity,transform,filter] ${
                 on
                   ? 'bg-accent/15 text-accent ring-1 ring-accent/35'
                   : 'bg-[#12141a] text-ink border border-white/[0.08] hover:border-white/[0.14]'

@@ -4,8 +4,8 @@
  * Renders a portal so it's never clipped by the dock's overflow rules.
  */
 import { useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { Headphones, Check, AlertTriangle } from 'lucide-react'
+import { AnchoredOverlay } from '../../../../../shared/motion/AnchoredOverlay.jsx'
 
 export function InputDeviceMenu({ devices, activeId, onPick }) {
   const [open, setOpen] = useState(false)
@@ -13,21 +13,6 @@ export function InputDeviceMenu({ devices, activeId, onPick }) {
   const btnRef = useRef(null)
   const popRef = useRef(null)
 
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e) => {
-      if (popRef.current?.contains(e.target)) return
-      if (btnRef.current?.contains(e.target)) return
-      setOpen(false)
-    }
-    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
 
   const place = () => {
     const r = btnRef.current?.getBoundingClientRect()
@@ -69,16 +54,20 @@ export function InputDeviceMenu({ devices, activeId, onPick }) {
 
   const noDevices = devices.length === 0
 
-  const node = open ? (
-    <div
+  const node = (
+    <AnchoredOverlay
+      open={open}
       ref={popRef}
+      anchorRef={btnRef}
+      onClose={() => setOpen(false)}
+      placement="top"
       role="menu"
       aria-label="Selecionar microfone"
       className="
-        fixed z-50 min-w-[240px] max-w-[min(360px,calc(100vw-24px))]
+        fixed min-w-[240px] max-w-[min(360px,calc(100vw-24px))]
         rounded-card bg-surface1 border border-line
         shadow-2xl p-1.5 overflow-y-auto
-        animate-fade-in
+
       "
       style={{ bottom: pos.bottom, left: pos.left, maxHeight: pos.maxHeight }}
     >
@@ -112,8 +101,8 @@ export function InputDeviceMenu({ devices, activeId, onPick }) {
           </button>
         )
       })}
-    </div>
-  ) : null
+    </AnchoredOverlay>
+  )
 
   return (
     <>
@@ -135,7 +124,7 @@ export function InputDeviceMenu({ devices, activeId, onPick }) {
           <path d="M2 4l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
-      {typeof document !== 'undefined' && createPortal(node, document.body)}
+      {node}
     </>
   )
 }

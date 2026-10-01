@@ -20,7 +20,7 @@ const EventSpotlightBar = memo(function EventSpotlightBar({
     || members[0]
 
   return (
-    <div className="vc-space-card vc-space-spotlight rounded-[14px] border border-white/[0.07] bg-[#14161c]/95 px-3.5 sm:px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3">
+    <div className="vc-space-card vc-space-spotlight vc-space-module--spotlight rounded-[14px] border border-white/[0.07] bg-[#14161c]/95 px-3.5 sm:px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3">
       <div className="flex items-start gap-3 min-w-0 flex-1">
         <div className="relative shrink-0">
           <PersonAvatar

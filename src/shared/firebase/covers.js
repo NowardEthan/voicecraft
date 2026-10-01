@@ -1,5 +1,5 @@
 import { deleteObject, getDownloadURL, ref, uploadBytes } from 'firebase/storage'
-import { storage } from './app'
+import { auth, storage } from './app'
 
 function dataUrlToBlob(dataUrl) {
   const [meta, b64] = String(dataUrl).split(',')
@@ -64,7 +64,10 @@ export async function uploadAnnounceAsset(spaceId, roomId, dataUrl, kind = 'asse
   // Use chat/ path — already allowed by deployed storage.rules (announce-assets may not be).
   const path = `voicecraft/chat/${spaceId}/${roomId}/announce-${safeKind}-${Date.now()}.jpg`
   const fileRef = ref(storage, path)
-  await uploadBytes(fileRef, blob, { contentType: blob.type || 'image/jpeg' })
+  await uploadBytes(fileRef, blob, {
+    contentType: blob.type || 'image/jpeg',
+    customMetadata: { uploaderId: auth.currentUser?.uid || '' },
+  })
   return getDownloadURL(fileRef)
 }
 

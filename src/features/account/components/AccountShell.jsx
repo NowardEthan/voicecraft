@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { resetPassword } from '../../auth'
 import { BrandLoader } from '../../../shared/ui/BrandMark'
 import { AccountSidebar } from './AccountSidebar'
+import { TabPanelSwap } from '../../../shared/motion/Transitions.jsx'
 import { ProfileHome } from '../views/ProfileHome'
 import { ProfileEdit } from '../views/ProfileEdit'
 import {
@@ -92,6 +93,7 @@ export function AccountShell({
         onSignOut={onSignOut}
       />
       <div className="flex-1 min-w-0 min-h-0 overflow-y-auto overscroll-contain">
+        <TabPanelSwap activeKey={loading ? 'loading' : page} className="min-h-full">
         {loading ? (
           <BrandLoader size={48} fill showLabel={false} />
         ) : page === 'edit' ? (
@@ -119,6 +121,7 @@ export function AccountShell({
             onEditCover={() => onChangePage('look')}
           />
         )}
+        </TabPanelSwap>
       </div>
     </div>
   )

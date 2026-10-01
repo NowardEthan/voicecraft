@@ -1,3 +1,7 @@
+import { useEffect, useRef, useState } from 'react'
+import { useMotionPolicy } from '../../../shared/motion/MotionPolicyProvider.jsx'
+import { resolveCardThemeFxBudget } from '../../../shared/motion/dynamicPolicy.js'
+
 /**
  * Theme FX — particle/detail-first overlays (same approach as Sakura).
  * Soft static base only; each theme = unique particles that fade in/out inside the card.
@@ -5,14 +9,35 @@
 export function CardThemeFx({ themeId = 'default', variant = 'card', className = '' }) {
   const id = themeId || 'default'
   const compact = variant === 'nameplate' || variant === 'thumb'
-  const n = compact
-    ? { p: 7, shoot: 1, mote: 5, ember: 8, bit: 4, glint: 4 }
-    : { p: 16, shoot: 3, mote: 14, ember: 16, bit: 10, glint: 8 }
+  const policy = useMotionPolicy()
+  const rootRef = useRef(null)
+  const [inViewport, setInViewport] = useState(true)
+  const n = resolveCardThemeFxBudget({
+    perfTier: policy.perfTier,
+    compact,
+    allowDecorative: policy.allowDecorative,
+  })
+
+  useEffect(() => {
+    const node = rootRef.current
+    if (!node || typeof IntersectionObserver === 'undefined') return undefined
+    const observer = new IntersectionObserver(
+      ([entry]) => setInViewport(entry.isIntersecting),
+      { rootMargin: '120px' },
+    )
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
+
+  if (!n) return null
 
   return (
     <div
+      ref={rootRef}
       className={`vc-card-fx vc-card-fx--${id} vc-card-fx--${variant} pointer-events-none absolute inset-0 overflow-hidden ${className}`}
       aria-hidden
+      data-motion-intent="continuous"
+      data-motion-paused={!inViewport || !policy.allowContinuous ? 'true' : undefined}
     >
       <div className="vc-card-fx__base" />
       {id === 'default' && <ClassicFx n={n} />}
