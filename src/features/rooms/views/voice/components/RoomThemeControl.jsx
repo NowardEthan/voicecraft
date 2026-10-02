@@ -85,7 +85,7 @@ export function RoomThemeControl({ roomId, currentCover, onCoverChange, anchorRe
       role="dialog"
       aria-label="Tema da sala"
       className="
-        fixed z-50 w-[280px] rounded-card bg-surface1 border border-line
+        fixed vc-layer-popover w-[280px] rounded-card bg-surface1 border border-line
         shadow-2xl p-3
         animate-fade-in-up
       "

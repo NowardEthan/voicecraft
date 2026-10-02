@@ -90,7 +90,7 @@ export function EmojiInsertButton({
       {open && pos && typeof document !== 'undefined' && createPortal(
         <div
           ref={panelRef}
-          className="fixed z-[120] vc-emoji-panel-portal"
+          className="fixed vc-layer-popover vc-emoji-panel-portal"
           style={{ top: pos.top, left: pos.left }}
           role="dialog"
           aria-label="Seletor de emoji"

@@ -583,7 +583,7 @@ export default function AppShell({ account }) {
       />
 
       <div className="relative flex-1 min-w-0 min-h-0 flex">
-      <div className={`flex flex-1 min-w-0 min-h-0 ${showAccount ? 'invisible pointer-events-none absolute inset-0' : ''}`}>
+      <div className={`flex flex-1 min-w-0 min-h-0 ${showAccount ? 'hidden pointer-events-none absolute inset-0' : ''}`}>
 
       {/* Panel 2: Space contextual panel ? docked on wide screens,
           overlay drawer when the window (or phone) is too narrow. */}

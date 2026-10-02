@@ -46,7 +46,7 @@ export default function BootSplash({ phase = 'warm' }) {
 
   return (
     <motion.div
-      className="absolute inset-0 z-[80] flex flex-col items-center justify-center overflow-hidden"
+      className="absolute inset-0 z-[200] flex flex-col items-center justify-center overflow-hidden"
       style={{ backgroundColor: '#071225' }}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}

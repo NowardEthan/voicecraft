@@ -236,7 +236,7 @@ function CustomColorPopover({ value, anchorRef, onPreview, onApply, onCancel }) 
       ref={panelRef}
       role="dialog"
       aria-label="Cor personalizada"
-      className="fixed z-[80] w-[268px] rounded-2xl border border-white/[0.10] bg-[#1a1c22]/95 backdrop-blur-xl shadow-[0_20px_50px_-16px_rgba(0,0,0,0.7)] p-3"
+      className="fixed vc-layer-popover w-[268px] rounded-2xl border border-white/[0.10] bg-[#1a1c22]/95 backdrop-blur-xl shadow-[0_20px_50px_-16px_rgba(0,0,0,0.7)] p-3"
       style={{ top: pos.top, left: pos.left, ...spaceTokens({ color: draft }) }}
     >
       <div className="flex gap-2.5">
